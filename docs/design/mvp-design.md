@@ -637,8 +637,25 @@ authentication. On the maintainer's macOS host all three are keychain items — 
 keyring store — measured 2026-09-06 `[V]`, so on macOS the question is keychain access rather than file
 permissions; OpenAI's own docs require the file store before any headless use of `auth.json` (section
 19.1). Whether a `launchd` user agent or a `systemd` user unit reaches that state on a locked screen or
-without a login session is still a measured question (SPIKE-4 D9, open), and `doctor --scheduler` probes
-exactly the environment the unit will run in before 06:00 ever comes.
+without a login session is SPIKE-4 D9's question, and `doctor --scheduler` probes exactly the environment
+the unit will run in before 06:00 ever comes.
+
+*Measured 2026-09-06 (SPIKE-4 D9, macOS 26.5):* a `launchd` **user agent** in the `gui/<uid>` domain
+(`launchctl managername` = `Aqua`), started by `StartInterval` while the screen was **locked**, reached
+everything on three consecutive fires `[V]`: both keychain items, `claude auth status` and a `claude -p`
+call, `codex login status` and a `codex exec --json` call, and `gh auth status`. The unit needs to carry
+only `PATH` — launchd's default is `/usr/bin:/bin:/usr/sbin:/sbin`, with no Homebrew directory — or
+absolute argv, which is what `schedule install` renders; there is no TTY and no security session, and
+both CLIs coped. Not measured: a `LaunchDaemon` with nobody logged in (the login keychain is expected
+to be locked there; the preparation is auto-login or, for `codex`, the file credential store) and a
+`systemd --user` timer on Linux (no host available; linger is the known requirement for a logged-out
+user). Both are documented as per-platform preparation steps, not assumed either way.
+
+`doctor --scheduler` runs, in the environment the unit would get, exactly the probe's steps: resolve
+`claude`, `codex`, `gh` and `node` on the unit's `PATH`; check `HOME` and `CODEX_HOME`; read each keychain
+item under a deadline (a locked keychain parks `security` on an unlock dialog no scheduler can answer);
+`claude auth status --json`; `codex login status`; `gh auth status`; and, on request, one trivial call per
+runtime. A `timeout` on the keychain step, not a `no`, is what a locked keychain looks like.
 
 ### 7.6 Portability
 
@@ -1441,7 +1458,7 @@ Not in the MVP, and each for a stated reason:
 | **SPIKE-2** | Codex Cloud as an `observed` backend: R1 task creation, R4 the result reaching GitHub without a click, R5 a JSON artifact, R7 bounded completion, R3 or R8 an ownable trigger | **NO-GO 2026-09-06** `[V]`: R1 PASS; R4 FAIL (the diff stays inside the task, the UI's "Create PR" click is the only exit); R8 FAIL (a `GITHUB_TOKEN`-authored mention is refused). `observed` removed. Codex as a provider is not NO-GO: it returns through `codex exec` on the host (SPIKE-4) |
 | **SPIKE-2b** | Does a seeded `auth.json` survive refresh-token rotation on ephemeral runners? | **Superseded** by ADR-002: no credential is moved to a runner Loopmill does not own. Not run |
 | **SPIKE-3** | A non-resident, event-sourced `step` on real GitHub: CAS, duplicates, concurrency, an interrupted job, chaining | **PASSED 2026-09-06** (21/21 local, 44 hosted runs) `[V]`. v0.6 reading: the transition, journal and concurrency properties carry over to the SQLite store; the git-branch store and Actions chaining are the reserved backend's mechanism |
-| **SPIKE-4** | The Codex CLI subscription backend on the host, and the scheduler context: `codex exec` non-interactively under a ChatGPT login with `OPENAI_API_KEY`/`CODEX_API_KEY` unset — structured output, terminal state, usage from `turn.completed`, interrupt and timeout behaviour, the quota signal, changes in a git worktree, normalisation into the common contract; plus whether `claude -p` and `codex exec` authenticate when started by `launchd` (locked screen, no session) and by a `systemd` user unit; plus the SPIKE-1 harness run locally on macOS | **D0-D8 and D10 run 2026-09-06** (codex 0.153.4, claude 2.1.263, macOS): D1, D2, D3, D4 and D7 PASS → `codex` is **verified**; D4 refuted the documentary thread-cumulative claim (usage is per process, section 14.2); D5 measured SIGINT exit 1 and SIGTERM exit 0 with no terminal event; D6 found no structured quota field; D10 reproduced SPIKE-1's C1-C4, C6 and C7 locally. **D9 (scheduler context) still open**: the macOS probes are ready to run, no Linux host is available. Neither outcome stops the MVP |
+| **SPIKE-4** | The Codex CLI subscription backend on the host, and the scheduler context: `codex exec` non-interactively under a ChatGPT login with `OPENAI_API_KEY`/`CODEX_API_KEY` unset — structured output, terminal state, usage from `turn.completed`, interrupt and timeout behaviour, the quota signal, changes in a git worktree, normalisation into the common contract; plus whether `claude -p` and `codex exec` authenticate when started by `launchd` (locked screen, no session) and by a `systemd` user unit; plus the SPIKE-1 harness run locally on macOS | **D0-D8 and D10 run 2026-09-06** (codex 0.153.4, claude 2.1.263, macOS): D1, D2, D3, D4 and D7 PASS → `codex` is **verified**; D4 refuted the documentary thread-cumulative claim (usage is per process, section 14.2); D5 measured SIGINT exit 1 and SIGTERM exit 0 with no terminal event; D6 found no structured quota field; D10 reproduced SPIKE-1's C1-C4, C6 and C7 locally. **D9**: a `launchd` user agent on a locked screen reached every login on three fires (macOS, 2026-09-06); the no-session daemon case and Linux are unmeasured and documented as preparation steps (section 7.5). Neither outcome stops the MVP |
 
 **STOP conditions.** If one of these is true, the MVP does not ship as designed:
 
@@ -1449,8 +1466,9 @@ Not in the MVP, and each for a stated reason:
   authentication. *Evaluation 2026-09-06, updated after SPIKE-4:* **not triggered** — the Claude Code contract
   is measured on a hosted runner (SPIKE-1) and reproduced on the maintainer's own macOS host (SPIKE-4
   D10: C1-C4, C6 and C7 PASS on 2.1.263), and `codex exec` runs there too under its own ChatGPT login
-  (SPIKE-4 D1-D7). Not yet shown is the scheduler-started case (D9), which decides preparation steps
-  and `doctor` checks, not this condition.
+  (SPIKE-4 D1-D7). The scheduler-started case is shown for the MVP's own platform too: a `launchd`
+  user agent on a locked screen ran both CLIs under their own logins (D9). The no-session and Linux
+  cases decide preparation steps and `doctor` checks, not this condition.
 * **(c)** Vendor terms, once read verbatim from primary sources, forbid the single-user unattended use
   Loopmill relies on. *Evaluation 2026-09-06 (R11 completed the same day):* **not triggered on the text
   read.** Anthropic's rows were already `[V]`; OpenAI's Terms of Use (effective 2026-01-01), Usage
@@ -1535,10 +1553,10 @@ Loopmill's own design rules, and nothing is carried across as code without its o
 
 ## 24. Open questions
 
-1. **The scheduler context.** Can a `launchd` user agent reach `claude`'s login keychain on a locked
-   screen, or with no user session at all? Does a `systemd` user unit see `CODEX_HOME` and `gh`'s
-   credential store? SPIKE-4 measures both; if either fails, the answer is a documented per-platform
-   preparation step and a `doctor --scheduler` check, not a Loopmill daemon.
+1. **The scheduler context — half answered 2026-09-06.** A `launchd` user agent on a locked screen
+   reaches `claude`'s and `codex`'s keychain items and `gh` (SPIKE-4 D9, section 7.5). Still open: a
+   Mac with no user logged in, and a `systemd` user unit on Linux. If either fails, the answer is a
+   documented per-platform preparation step and a `doctor --scheduler` check, not a Loopmill daemon.
 2. **Two entrypoints on one repository.** The lock row settles `run` versus `run`; `resume --due` versus a
    scheduled `run` of the same loop is settled the same way, but the cadence of `resume --due` (every 15
    minutes is the documented default) is a guess until the seven-night soak.

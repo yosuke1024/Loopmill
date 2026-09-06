@@ -780,11 +780,14 @@ tests against the hand-written fixtures, and an end-to-end run against a stand-i
 | D6 quota probe | INFO | no limit phrase anywhere; the event types seen across the whole run are exactly `thread.started`, `turn.started`, `item.completed`, `turn.completed` (`usage`), `turn.failed` (`error`) and `error` (`message`); no key names a limit, a window or a reset |
 | D7 worktree edit | PASS | exit 0, 13 s; `git status --porcelain` in the worktree is exactly `?? SPIKE4.md` and the scratch main checkout is clean; the file was written by a shell command (`agent_message` ×2, `command_execution` ×2, no `file_change` item, no approval event); content `spike-4 wrote this.` — the model added a full stop, which the first pass graded FAIL on an exact match; the re-run grades the worktree contract and records `content_exact=no` |
 | D8 normalisation | PASS | nine records: D1, D2, D4a, D4b and D7 `derived` and complete (16,817 / 16,900 / 17,881 / 19,721 / 34,445); D3b and the three D5 cases `unavailable`; invariants I2 and I8 hold and I5 was re-scoped (below). The recorded fixtures are committed as `docs/spec/usage-fixtures/codex-recorded-*.json` |
-| D9 scheduler context | **not yet run** | macOS procedure ready in `spikes/spike-4-codex-cli/d9/README.md`; no Linux host is available |
+| D9 scheduler context, macOS `launchd` user agent, screen locked | **PASS** | Run by the maintainer 2026-09-06 13:41-13:46 UTC: the agent (`gui/501`, `launchctl managername` = `Aqua`, `StartInterval` 120 s) fired three times with `screenLockState: locked`; every fire: keychain items `Claude Code-credentials` and `Codex Auth` found, S1 `claude auth status` `loggedIn: true`, S2 `claude -p` `LOOPMILL-OK` with `terminal_reason: completed`, S3 `codex login status` logged in, S4 `codex exec --json` `turn.completed`, S5 `gh auth status` logged in. Interactive baseline identical except `screen: unlocked`, `tty: yes`. The unit carried its own `PATH` (launchd's default is `/usr/bin:/bin:/usr/sbin:/sbin`, no Homebrew) and no `SECURITYSESSIONID` |
+| D9, macOS `LaunchDaemon` with no login session; Linux `systemd --user` | **not run** | the daemon case needs `sudo` and a full log-out (procedure in `d9/README.md`); no Linux host is available |
 | D10 SPIKE-1 locally | PASS | claude 2.1.263 on macOS, account default `claude-opus-5[1m]`: C1 (`loggedIn: true`, `authMethod: "claude.ai"`), C2, C3, C4 (7 lines, including a `rate_limit_event` and the operator's own hook events), C6-sigint (exit 0, `error_during_execution`, `aborted_streaming`, a result with `modelUsage: {}`), C6-sigterm (exit 143, no result), C6-timeoutint (124 through the shim, `aborted_streaming`), C7 (no hang, 5.1 s, no `setsid` on macOS). The hosted-runner contract holds on the host |
 
 **Verdict.** D1-D4 and D7 PASS: the `codex` runtime is **verified** on the operator's host under
-`subscription-login` (design §20.1). D9 does not gate the runtime and stays open.
+`subscription-login` (design §20.1). D9's primary case — a `launchd` user agent on a locked screen —
+passed on macOS; the no-session daemon case and Linux remain unmeasured and are documented as such in
+design §7.5.
 
 ### Findings that change the design
 
@@ -806,8 +809,13 @@ tests against the hand-written fixtures, and an end-to-end run against a stand-i
   the backend's `invalid_request_error` JSON inside `message`, exit 1. `codex exec resume`'s narrower
   flag set and the absence of any quota-shaped key in the exec JSONL (D6) are recorded in design §6.3
   and §14.2.
-- **On macOS every login a scheduled process needs is a keychain item** (`claude`, `codex` with the
-  keyring store, `gh`). D9 decides what that means for `launchd`; design §7.5 records the fact now.
+- **A `launchd` user agent on a locked screen reaches every login.** On macOS all three logins are
+  keychain items (`claude`, `codex` with the keyring store, `gh`), and a user agent in the GUI session
+  read them with the screen locked, three fires out of three. What the unit must carry is `PATH` (or
+  absolute argv) and nothing else; there is no TTY and no security session. The unmeasured cases — a
+  daemon with nobody logged in, and Linux — are the ones where the keychain or the user manager is
+  expected to be absent, so design §7.5 documents them as preparation steps rather than assuming
+  either way. `doctor --scheduler`'s check list is the probe's steps S1-S5 verbatim.
 
 Harness lessons found before any real run, all recorded in `spikes/spike-4-codex-cli/README.md`: a
 background job started by a non-interactive bash inherits an ignored SIGINT (measured on macOS bash
@@ -827,7 +835,7 @@ in 0.144.6), so D4b runs from the scratch repository's own directory; macOS `dat
 | G3 | SPIKE-2b: seeded `auth.json` survives ephemeral runners | **superseded** — not run | ADR-002: no credential is ever moved to a runner Loopmill does not own, so the question no longer arises |
 | G4 | SPIKE-3: non-resident, event-sourced `step` on real GitHub | **green — reinterpreted** | 21/21 local, 44 hosted runs (§5); the transition/journal/concurrency properties carry over to the SQLite store (ADR-002 Appendix B); the git-branch store and `GITHUB_TOKEN` chaining measured here are the reserved `github-actions` backend's mechanism, not the MVP's own |
 | G5 | STOP (c): vendor terms read verbatim from primary sources | **green** — R11 done 2026-09-06 | OpenAI's Terms of Use, Usage Policies, the Codex CI/CD-auth page and the Scheduled-tasks page are quoted verbatim with access times in design §19.1; STOP (c) is evaluated in design §22: not triggered on the text, interpretive residual recorded |
-| G6 | SPIKE-4: `codex exec` on the host, and the scheduler context | **green for the runtime** — D1-D4 and D7 PASS 2026-09-06 (codex 0.153.4), D10 PASS (claude 2.1.263 on macOS); **D9 open** (macOS probes ready, no Linux host) | §6 |
+| G6 | SPIKE-4: `codex exec` on the host, and the scheduler context | **green** — D1-D4 and D7 PASS 2026-09-06 (codex 0.153.4), D10 PASS (claude 2.1.263 on macOS), D9 PASS for a `launchd` user agent on a locked screen (3/3 fires); the no-session daemon case and Linux stay unmeasured | §6 |
 
 **STOP conditions (v0.6, ADR-002 D10):** **(a)** no supported AI CLI can execute unattended on a
 user-managed host under subscription authentication — **not triggered**, confirmed on the maintainer's
@@ -838,10 +846,11 @@ hosted runners, and does not survive execution moving to a user-managed host; **
 verbatim, forbid the single-user unattended use Loopmill relies on — **not triggered on the text read**
 (R11, 2026-09-06; design §19.1 and §22 carry the quotes and the interpretive residual).
 
-1. **Run SPIKE-4 D9** (`spikes/spike-4-codex-cli/d9/README.md`): the `launchd` user agent with the
-   screen locked and the `launchd` daemon with no login session on the maintainer's Mac, and — when a
-   Linux host exists — the `systemd --user` half. D0-D8 and D10 ran on 2026-09-06 (§6); D9 decides the
-   per-platform notes in design §7.5 and the `doctor --scheduler` check list, not the STOP condition.
+1. **SPIKE-4 is closed for the MVP's own platform** (§6): D0-D8, D10 and the locked-screen `launchd`
+   case of D9 all ran on 2026-09-06. Still unmeasured, and documented as preparation steps in design
+   §7.5 rather than assumed: a `LaunchDaemon` with no login session (`d9/install-macos-daemon.sh`,
+   needs `sudo` and a log-out) and `systemd --user` on Linux (no host). Run them when the situation
+   arises; neither gates m0.
 2. **R11 terms reading — done 2026-09-06.** OpenAI's Terms of Use, Usage Policies, the Codex CI/CD-auth
    page and the Scheduled-tasks page were read in a browser on the maintainer's machine (the policy pages
    answer HTTP 403 to non-browser clients); the quotes, URLs and access times are in design §19.1, and

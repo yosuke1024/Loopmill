@@ -129,14 +129,14 @@ whether the fire happened at all under scenario B.
 
 | Context | claude auth | claude -p | codex login | codex exec | gh | keychain | notes |
 |---|---|---|---|---|---|---|---|
-| `interactive-baseline` (macOS) | | | | | | | |
-| `launchd-agent`, screen unlocked (first fire) | | | | | | | |
-| `launchd-agent`, screen locked (second fire) | | | | | | | |
-| `launchd-daemon` (no GUI session) | | | | | | | |
-| `interactive-baseline` (Linux) | | | | | | n/a | |
-| `systemd-timer`, scenario A (stayed logged in) | | | | | | n/a | |
-| `systemd-timer`, scenario B (logged out, no linger) | | | | | | n/a | did the timer fire at all? |
-| `systemd-timer`, scenario B (logged out, with linger) | | | | | | n/a | |
+| `interactive-baseline` (macOS 26.5, 2026-09-06 13:37 UTC) | ok | ok | ok | ok | ok | yes / yes | `manager=Aqua`, `screen=unlocked`, `tty=yes` |
+| `launchd-agent`, screen locked (2026-09-06 13:41, 13:44, 13:46 UTC — three fires) | ok | ok | ok | ok | ok | yes / yes | `manager=Aqua`, `screen=locked`, `tty=no`, `SECURITYSESSIONID` unset; the plist's `PATH` was `/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin` (launchd's own default has no Homebrew directory); claude 2.1.263, codex 0.153.4 |
+| `launchd-agent`, screen unlocked | — | — | — | — | — | — | the screen was locked before the first fire, so this row was never produced; the interactive baseline stands in for it |
+| `launchd-daemon` (no GUI session) | not run | not run | not run | not run | not run | not run | needs `sudo` and a full log-out; expected to fail on the keychain |
+| `interactive-baseline` (Linux) | not run | | | | | n/a | no Linux host |
+| `systemd-timer`, scenario A (stayed logged in) | not run | | | | | n/a | |
+| `systemd-timer`, scenario B (logged out, no linger) | not run | | | | | n/a | did the timer fire at all? |
+| `systemd-timer`, scenario B (logged out, with linger) | not run | | | | | n/a | |
 
 ## Cost
 

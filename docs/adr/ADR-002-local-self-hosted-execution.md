@@ -237,7 +237,9 @@ keys" — is retired: it was a statement about hosted runners.
 - No "it just runs" managed-cloud experience, and no progress on infrastructure Loopmill does not
   control.
 - The OS scheduler's environment, session and keychain constraints are real and per-platform
-  (SPIKE-4). A `launchd` job that cannot reach the login keychain cannot authenticate `claude`.
+  (SPIKE-4). A `launchd` job that cannot reach the login keychain cannot authenticate `claude`; a
+  user agent in a logged-in session can, even with the screen locked (measured 2026-09-06), while a
+  daemon with nobody logged in is expected not to.
 - The single-host security boundary is weaker than v0.5's two-job split; D8 states what is enforced.
 - SPIKE-3's measured store and transport are shelved for the MVP; the 44 hosted runs remain the record
   for the reserved backend.
@@ -247,7 +249,7 @@ keys" — is retired: it was a statement about hosted runners.
 | # | Risk | If it lands | Retired by |
 | --- | --- | --- | --- |
 | R1 | `codex exec` does not run non-interactively under a ChatGPT login with machine-readable results, usage and a terminal signal | Codex stays `PLANNED / EXPERIMENTAL`; the MVP ships Claude-only behind the same abstraction | **SPIKE-4 — retired 2026-09-06**: D1-D4 and D7 PASS on codex 0.153.4 under a ChatGPT login (design §22) |
-| R2 | A scheduler-started process cannot reach the CLI's login state (macOS keychain when the screen is locked or no user session; `CODEX_HOME` not found under a `systemd` unit) | Unattended scheduled runs fail at authentication on that platform until the environment is prepared; `doctor` must detect it before 06:00 | **SPIKE-4 D9** — open: the macOS probes are ready, no Linux host is available; plus a `doctor` check |
+| R2 | A scheduler-started process cannot reach the CLI's login state (macOS keychain when the screen is locked or no user session; `CODEX_HOME` not found under a `systemd` unit) | Unattended scheduled runs fail at authentication on that platform until the environment is prepared; `doctor` must detect it before 06:00 | **SPIKE-4 D9 — retired for the MVP's own platform 2026-09-06**: a `launchd` user agent on a locked screen reached every login (design §7.5); the no-session daemon case and Linux stay documented as preparation steps; plus a `doctor --scheduler` check |
 | R3 | `claude -p` behaves differently on the user's host than on the hosted runner | Contract tests catch it | **retired 2026-09-06**: SPIKE-1's C1-C4, C6 and C7 reproduced on the maintainer's macOS host with claude 2.1.263 (SPIKE-4 D10) |
 | R4 | Two entrypoints race on one repository (scheduler plus a manual `run`, or `resume --due` plus `run`) | A double Run or a torn journal | the `locks` row (D6), acceptance criteria A10/A11 |
 | R5 | Vendor terms forbid unattended single-user use | STOP (c) | R11, done 2026-09-06: the primary texts were read verbatim and do not forbid it; the interpretive residual is recorded in design §19.1 and §22 |
