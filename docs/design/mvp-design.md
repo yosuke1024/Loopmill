@@ -440,7 +440,7 @@ interface BackendCapabilities {
   retryable:          boolean;    // may sit in, or be the target of, a Retry Edge body
   cancellable:        boolean;
   isolation:          'ephemeral' | 'worktree' | 'shared';
-  credentialLocation: 'job-secret'| 'vendor-side' | 'user-machine';
+  credentialLocation: 'job-secret'| 'vendor-side' | 'user-machine' | 'none';
 }
 ```
 
