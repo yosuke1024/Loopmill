@@ -32,10 +32,10 @@ finding.
 
 | ID | Question | Status | Gate it retires | Owner |
 |---|---|---|---|---|
-| SPIKE-1 | Does `claude -p` run headless on a GitHub-hosted runner authenticated only with `CLAUDE_CODE_OAUTH_TOKEN`, with usable usage JSON and structured output? | Ready — harness built, not yet run | STOP (a); decides whether `github-actions` keeps Claude Code as its primary runtime (decision sheet §4, §11) | Maintainer (needs a `claude setup-token` from their own subscription, stored as a repository secret) |
+| SPIKE-1 | Does `claude -p` run headless on a GitHub-hosted runner authenticated only with `CLAUDE_CODE_OAUTH_TOKEN`, with usable usage JSON and structured output? | **Measured — PASS** (hosted run 34024962852, 2026-09-06, claude-code 2.1.263: C1-C4 and C7 PASS); C6 SIGTERM measured on a C6-only re-run (34026065026): exit 143, no result | STOP (a) **not triggered**; `github-actions` keeps Claude Code as its primary runtime (decision sheet §4, §11) | Maintainer (needs a `claude setup-token` from their own subscription, stored as a repository secret) |
 | SPIKE-2 | Can Loopmill drive a Codex node on OpenAI's cloud under a ChatGPT subscription, get a machine-readable result onto GitHub, and re-trigger it, without an API key? | Documentary research done; R0-R11 user run plan not yet executed | Decides the `observed` backend (decision sheet §4, §11); feeds STOP (b) | Maintainer (needs a real ChatGPT Plus/Pro account and manual web-UI steps) |
 | SPIKE-2b | Does a seeded Codex ChatGPT `auth.json` survive refresh-token rotation on an ephemeral GitHub-hosted runner? | Documentary groundwork done (status table item 4d); not yet run | Decides whether `codex` on `github-actions` can leave EXPERIMENTAL status (decision sheet §11) | Maintainer (needs a real ChatGPT login to seed `auth.json` once) |
-| SPIKE-3 | Can `loopmill step` be a non-resident, event-sourced process that stays correct under duplicate, concurrent, and interrupted delivery, chained purely by GitHub Actions? | Measured — 20/20 local tests, 22 hosted workflow runs | Confirms/adjusts decision sheet §6 (control-plane algorithm, exit codes) and §8 (state persistence); does not change positioning | Automated — a simulated backend, no vendor credentials required |
+| SPIKE-3 | Can `loopmill step` be a non-resident, event-sourced process that stays correct under duplicate, concurrent, and interrupted delivery, chained purely by GitHub Actions? | Measured — 21/21 local tests, 44 hosted workflow runs in two batches (chains and duplicates; then a forced CAS storm, envelope sizes, the concurrency group's pending-run behaviour, an interrupted job and an `always-fail` chain) | Confirms/adjusts decision sheet §6 (control-plane algorithm, exit codes) and §8 (state persistence); does not change positioning. One mechanism change: no per-run concurrency group for `step` (design §7.5) | Automated — a simulated backend, no vendor credentials required |
 
 Status legend: **ready** = harness exists, nothing has been executed against a real
 account yet; **documentary done** = everything answerable by reading source/binary
@@ -70,15 +70,19 @@ contract. This is the harness for the `github-actions` execution backend's
    credential with no revoke command short of rotating the Claude account session.
 4. Nothing else — the workflow installs Node 22 and the CLI itself.
 
-**This is the one prerequisite the harness cannot supply itself: the workflow
-exists and is ready, but it has not been run because the secret has not yet been
-provisioned.**
+**This is the one prerequisite the harness cannot supply itself.** The first hosted
+run (2026-09-06, 09:14 UTC) went out with the token stored under the wrong secret
+name and measured nothing but the unauthenticated failure shape; the secret was
+renamed and the run repeated twenty minutes later.
 
 ### How to run
 
 ```bash
 gh workflow run spike-1-claude-subscription.yml --ref <branch> \
   -f model=sonnet -f scrub_test=true
+
+# re-measure one check only (every other check is reported as SKIPPED)
+gh workflow run spike-1-claude-subscription.yml --ref <branch> -f only=C6
 
 gh run watch
 gh run download <run-id> -n spike-1-results -D ./spike-1-out
@@ -125,27 +129,70 @@ necessarily a reason to abandon the approach.
 
 ### Results
 
-**Not yet run.**
+Hosted runs on 2026-09-06, GitHub-hosted `ubuntu-24.04`, Node v22.23.2, claude-code **2.1.263**,
+account default model (`claude-sonnet-5` in `system/init`). Three runs in all: an unauthenticated
+one, the full authenticated one, and a C6-only re-measurement after the harness had been fixed twice
+(the plan-mode prompt was declined in 2 s; with tools available the model finished in 2.5 s).
+
+**Run 1 (34024103818, 09:14 UTC) — unauthenticated by mistake.** The token had been stored under the
+wrong secret name, so `CLAUDE_CODE_OAUTH_TOKEN` was empty. C1 reported `loggedIn: false`,
+`authMethod: "none"`; every `-p` check ended `subtype: "success"`, `is_error: true`,
+`result: "Not logged in · Please run /login"`, exit 1, zeroed usage, `modelUsage: {}`. Not a design
+result, but three harness lessons came out of it and were fixed before run 2: `subtype` is not a
+success signal; C6 must check that the signal reached a live process; a bare `limit` grep matches
+`subagent_stats` field names.
+
+**Run 2 (34024962852, 09:33 UTC) — authenticated.**
 
 | Check | Status | Notes |
 |---|---|---|
-| C1 auth | not yet run | |
-| C2 plain JSON | not yet run | |
-| C3 structured output | not yet run | |
-| C4 stream-json | not yet run | |
-| C5a exit code (tool use, max-turns 1) | not yet run | |
-| C5b exit code (invalid model) | not yet run | |
-| C6 SIGINT | not yet run | |
-| C6 SIGTERM | not yet run | |
-| C6 timeout -s INT | not yet run | |
-| C7 no-TTY hang probe | not yet run | |
-| C8-bad (API key precedence) | not yet run | |
-| C8-good (OAuth-only confirmed) | not yet run | |
-| C9 quota probe | not yet run | |
-| C10 environment | not yet run | |
+| C1 auth | PASS | exit 0, `loggedIn: true`, `authMethod: "oauth_token"`, `apiProvider: "firstParty"`; `system/init` reports `apiKeySource: "none"` |
+| C2 plain JSON | PASS | exit 0, `subtype: "success"`, `is_error: false`, `terminal_reason: "completed"`, result `LOOPMILL-OK`; `usage` 2 / 11,012 / 18,534 / 12 (fresh / cache write / cache read / output); `modelUsage` has **two** entries — the main model and a ~900-token helper call on `claude-haiku-4-5-20251001` — so its sum (30,476) exceeds `result.usage` (29,560); `total_cost_usd` present |
+| C3 structured output | PASS | exit 0; `structured_output` `{verdict: "pass", reason: …}` conforms to the schema; delivered through a tool call (`stop_reason: "tool_use"`, `num_turns: 2`); `thinking_tokens: 182` broken out in `usage.output_tokens_details` |
+| C4 stream-json | PASS | 9 lines: `system/init`, **`rate_limit_event`**, 4× `system/thinking_tokens`, 2× `assistant` sharing one `message.id` with placeholder `output_tokens: 2`, `result/success`; the final `result` has the same shape as C2 |
+| C5a exit code (tool use, max-turns 1) | INFO | exit **1**, `subtype: "error_max_turns"`, `is_error: true`, `terminal_reason: "max_turns"`, `errors: ["Reached maximum number of turns (1)"]`; `usage` and `modelUsage` reported in full |
+| C5b exit code (invalid model) | PASS | exit 1, stderr `[claude-code:unrecognized_model] {"model": …, "query_source": "sdk"}`, no silent substitution |
+| C6 SIGINT | PASS | reproduced identically on runs 2 and 34026065026; the signal reached a live process 7.7 s into streaming: exit **0**, `subtype: "error_during_execution"`, `is_error: true`, `terminal_reason: "aborted_streaming"`, `result: null`; `usage` all zero, `modelUsage` holds only the completed helper call (912 in / 16 out) — the interrupted response's tokens are absent from every field |
+| C6 SIGTERM | PASS | run 2's signal reached an already exited process (the model declined the plan-mode prompt in 2.4 s, `terminal_reason: "completed"`); re-measured on run 34026065026 with a tool-free long prompt (`--tools ""`): the signal reached a live process 8.4 s in — exit **143**, nothing on stdout, no `result`, no usage. The documented behaviour holds, and `claude-killed.json`'s hand-written shape is confirmed |
+| C6 timeout -s INT | INFO | `timeout` exit 124; the child's result is the SIGINT shape above (`aborted_streaming`) |
+| C7 no-TTY hang probe | PASS | `setsid` + stdin from `/dev/null`: exit 0 in 5.7 s, no hang — anthropics/claude-code#9026 does not reproduce on 2.1.263 |
+| C8-bad (API key precedence) | PASS | with an invalid `ANTHROPIC_API_KEY` exported beside the OAuth token: exit 1, `subtype: "success"`, `is_error: true`, `terminal_reason: "api_error"`, `api_error_status: 401`, `result: "Failed to authenticate. API Error: 401 API key is invalid."` after 188 s of retries — the key wins and the OAuth token is never consulted |
+| C8-good (OAuth-only confirmed) | PASS | exit 0, `is_error: false`, straight after C8-bad |
+| C9 quota probe | INFO | no limit hit; run 1's "maybe" was the bare-`limit` grep matching `subagent_stats.refused.depth_limit` — harness tightened |
+| C10 environment | INFO | Node v22.23.2, claude 2.1.263, Linux 6.17 (azure) x86_64, `tty_stdin: "no"`, `CLAUDE_CONFIG_DIR` unset, `HOME=/home/runner` |
 
-**Overall:** not yet run — blocked on the maintainer provisioning
-`CLAUDE_CODE_OAUTH_TOKEN` as a repository secret.
+**Overall: PASS** — C1, C2, C3, C4 and C7 PASS on a throwaway GitHub-hosted runner with nothing but
+`CLAUDE_CODE_OAUTH_TOKEN`. STOP condition (a) is **not triggered**; `github-actions` keeps
+`claude-code` as its primary runtime (decision sheet §4, §11). Raw artifacts: `spike-1-results` on each
+run (30-day retention). The recorded result objects behind C2, C5a and C6-SIGINT are committed as
+`docs/spec/usage-fixtures/claude-recorded-*.json`; no token, account or quota figure is committed.
+
+### Findings that change the design
+
+- **`subtype` is not a success signal.** `subtype: "success"` coexists with `is_error: true` and exit 1
+  on an authentication failure. `is_error` and the result's `terminal_reason` (`completed`, `max_turns`,
+  `api_error`, `aborted_streaming` observed) are the discriminators — `docs/spec/state-machine.md` §7.2,
+  `docs/spec/usage-normalization.md` §2.1.
+- **`modelUsage` is always present and is the basis in practice.** A one-turn run already has two
+  entries (the main model plus a helper call on a smaller model); an unauthenticated run has `{}`.
+  `result.usage` alone undercounts every healthy run — design §14.2, `usage-normalization.md` §2.1.
+- **Thinking tokens are broken out** (`thinkingTokens` per model, `output_tokens_details.thinking_tokens`),
+  so `reasoningTokens` is no longer `null` for claude-code — `usage-normalization.md` §2.1.
+- **SIGINT keeps the result but not the interrupted response's tokens.** Exit 0, `aborted_streaming`,
+  usage of the completed calls only. Recorded as `reported` with `complete: false` and unmeasured for
+  coverage — the first MVP case of a partial `reported` record (`usage-normalization.md` §2.1 and §4.1;
+  the `CANCELLED` row of `state-machine.md` §7.2).
+- **A structured quota signal exists headlessly.** `stream-json` emits a `rate_limit_event` with
+  per-window (`five_hour`, `seven_day`) utilization and `resetsAt`, `isUsingOverage`, and a `status`
+  (`allowed_warning` observed past the CLI's 0.75 threshold). It is now a reported source for
+  `quotaResetsAt` (`state-machine.md` §7.3-7.4); the refusal shape is still unobserved.
+- **`error_max_turns` exits 1 with full usage** — a cut-off attempt is `FAILED(max_turns)` with a
+  measured record, never `unavailable` (`claude-recorded-max-turns.json`).
+- **API-key precedence holds** (C8): the environment deny-list in design §13.2 is load-bearing — an
+  inherited `ANTHROPIC_API_KEY` silently replaces the subscription login and, when invalid, burns three
+  minutes of retries before failing.
+- **No no-TTY hang** on 2.1.263, so `invocation: on-demand` stands and acceptance criterion A14 needs no
+  PTY clause for claude-code at this version.
 
 ---
 
@@ -432,23 +479,97 @@ start until 08:16:54 (38 s), attributable to the per-run concurrency group and
 runner allocation. **Hop latency is therefore variable**, not the sub-second
 figure a single isolated hop might suggest.
 
-**Harness defects found on the hosted runner:**
+**Harness defects found on the hosted runner (both fixed the same day):**
 
-- The "prove snapshot" step emits `##[error]Invalid format 'unknown'` when writing
-  its output — cosmetic, `continue-on-error` already covers it.
+- The "prove snapshot" step emitted `##[error]Invalid format 'unknown'`: the
+  rebuild's stderr was redirected into the same file as its JSON, so `jq` printed
+  the value and then failed, and a second, `=`-less line reached `GITHUB_OUTPUT`.
+  stderr now goes to its own file.
 - A schedule name passed as `exhaust` was not a recognised simulated schedule and
-  silently fell back to the default, so the retry-edge-exhaustion path was
-  exercised only in the local test suite, not on GitHub.
+  silently fell back to the default. An unknown schedule in a `run-started`
+  envelope is now rejected as invalid (`UNKNOWN_SCHEDULE`, exit 30) and covered
+  by a local test (21/21).
 
-**Totals:** 22 workflow runs, all successful; 3 runs touched the state branch;
-about 21 commits.
+**Totals, first batch:** 22 workflow runs, all successful; 3 runs touched the
+state branch; about 21 commits.
+
+### Hosted measurements, second batch (2026-09-06, 22 runs)
+
+Same repository and workflow, branch version with two spike-only inputs added
+for fault injection: `fault` (`after-stage` | `after-commit`, forwarded as
+`LOOPMILL_CRASH_POINT`) and `hold_ms` (a sleep between reading the state branch
+and pushing, forwarded as `LOOPMILL_HOLD_MS`). A "parked" run `gha-park-1` was
+started with `step_no=12` so the chain cap stopped it with `observe` in flight;
+the measurements below deliver events to that run. Passing a different `run_id`
+input for events of the same run bypasses the per-run concurrency group on
+purpose.
+
+**Forced CAS storm.** Six `usage-reported` events for `gha-park-1`, distinct
+concurrency groups, `hold_ms=4000`, dispatched within 0.2 s of each other:
+
+| Job (run id) | Push attempts | CAS rejections | Step body |
+|---|---:|---:|---:|
+| 34025083443 | 1 | 0 | 5,490 ms |
+| 34025083439 | 2 | 1 | 5,811 ms |
+| 34025083432 | 3 | 2 | 7,208 ms |
+| 34025083420 | 3 | 2 | 8,408 ms |
+| 34025083509 | 4 | 3 | 10,189 ms |
+| 34025083440 | 4 | 3 | 10,219 ms |
+
+Eleven `--force-with-lease` rejections in total, worst case 3 retries (default
+budget 5); the six commits landed 09:35:40-09:35:49 UTC, about two seconds apart;
+all six events applied, none lost, `snapshot == fold(events)` over 8 records.
+Each retry re-fetches, re-plans and re-pushes, so retries cost roughly one step
+body each.
+
+**Envelope size through `workflow_dispatch`.** A 32,768-byte envelope (the design's
+size rule) was accepted and applied (33,045-byte record on the branch); a
+65,400-byte envelope was accepted and applied too (65,678-byte record); a
+66,000-byte envelope was refused by the API with HTTP 422 `inputs are too large`
+and no run was created — the 65,535-character ceiling documented for the inputs
+payload holds, and the rule's 32 KiB leaves the escaping headroom it was designed
+to leave.
+
+**One pending run per concurrency group.** Three `usage-reported` events
+dispatched into the *same* group (`run_id=gha-park-1`) 1.4 s apart, `hold_ms=3000`:
+
+| Dispatch | Run | Outcome |
+|---|---|---|
+| 09:39:13.4 | 34025257340 | success, `evt_pend_1` applied |
+| 09:39:14.8 | 34025258112 | **cancelled by GitHub at 09:39:18, never started** |
+| 09:39:16.1 | 34025258867 | success (started 09:39:32, after the first finished), `evt_pend_3` applied |
+
+`evt_pend_2` was never applied — with `cancel-in-progress: false` GitHub keeps one
+pending run per group and cancels the older pending run when another arrives. The
+group is a serialisation aid, not a queue; an event that lands while another is
+already pending is lost unless the producer redelivers. This is the mechanism
+change recorded in design §7.5.
+
+**Interrupted job (kill after the local commit, before the push).** The `observe`
+completion for `gha-park-1` was delivered with `fault=after-commit`: the job
+failed with the fault-injection exit (97) after committing locally; the run's
+last commit on the branch was unchanged (`eccaf6c`, `lastSeq` 12) and no
+`ignored`/half-written state appeared. Redelivering the byte-identical envelope
+without the fault applied it with exactly one new commit (`fa36648`), `lastSeq`
+14, `snapshot == fold(events)` over 14 records — at-least-once redelivery
+converges.
+
+**`always-fail` chain (retry-edge exhaustion on GitHub).** Run `gha-34025296142`:
+8 steps, 8 commits, 09:40:04 → 09:41:44 UTC (100 s end to end, hops of 12-14 s,
+step bodies 1,201-1,925 ms), path observe → implement →
+review fail → retry edge → implement → review fail → retry edge → implement →
+review fail → `MAX_ITERATIONS_EXCEEDED` (prototype exit 11, cycle 3, two
+retry-edge traversals — the prototype's own counting rule). The chain stopped
+itself; nothing was dispatched past the terminal step.
+
+**Totals, second batch:** 22 workflow runs — 20 successful, 1 deliberately failed
+(fault injection), 1 cancelled by the concurrency group; 20 commits on the state
+branch; local suite 21/21.
 
 **Not measured on GitHub:** `repository_dispatch` (it only ever runs the
 default-branch workflow, so exercising it needs the chain itself on `main`),
-forced CAS conflicts (the interleaved-chains run above happened not to collide),
-an interrupted job (kill mid-push), state-branch growth over weeks of real use,
-and deploy-key/ruleset privilege separation between the control-plane and agent
-jobs.
+state-branch growth over weeks of real use, and deploy-key/ruleset privilege
+separation between the control-plane and agent jobs.
 
 ### Findings that change the design
 
@@ -474,6 +595,19 @@ jobs.
   queueing delay confirms `concurrency: cancel-in-progress: false` genuinely
   serializes a run's steps at the cost of latency — a real product-level tradeoff
   for any loop with a tight budget, not just an implementation detail.
+- **The concurrency group drops events.** One pending run per group; the next
+  arrival cancels it. `step` must not rely on the group for delivery: the design
+  now runs `step` without a per-run group and leans on CAS plus at-least-once
+  redelivery (design §7.5, ADR-001).
+- **CAS converges under a real storm.** Six concurrent writers over HTTPS to
+  GitHub needed at most 3 retries and lost nothing; retries scale with the number
+  of simultaneous writers, as the local `N(N-1)/2` measurement predicted.
+- **The interrupted-job property holds on GitHub.** A job killed after its local
+  commit leaves the remote untouched and the same envelope, redelivered, converges
+  with one commit — the redelivery contract the design assumes (§7.4, A11).
+- **The 65,535-character `workflow_dispatch` ceiling is real** and the 32 KiB
+  envelope rule sits comfortably under it (65,400 bytes passed, 66,000 were
+  refused before any run was created).
 
 ### How to reproduce
 
@@ -515,25 +649,35 @@ node spikes/spike-3-control-plane/step.mjs rebuild-snapshot \
 
 ---
 
-## 6. Next steps, in order
+## 6. Gate status and next steps
 
-1. **Provision `CLAUDE_CODE_OAUTH_TOKEN`** (maintainer runs `claude setup-token`
-   locally and adds it as a repository secret), then dispatch SPIKE-1 for real and
-   fill in its results table above.
-2. **Execute the SPIKE-2 R0-R11 user run plan** against a real ChatGPT Plus/Pro
-   account and a throwaway repo, evaluate the GO/NO-GO/Degraded-GO rule honestly,
-   and separately run SPIKE-2b (seeded `auth.json` survival) to settle whether
-   `codex` on `github-actions` can leave EXPERIMENTAL status.
-3. **Fix the SPIKE-3 harness defects** found on the hosted runs (the "prove
-   snapshot" output-format error; the unrecognised `exhaust` schedule name) and
-   exercise the still-unmeasured items — `repository_dispatch` chaining on the
-   default branch, a forced CAS conflict against GitHub over HTTPS, an
-   interrupted job killed mid-push, and deploy-key/ruleset privilege separation
-   between the control-plane and agent jobs.
-4. **Address the snapshot O(n²) growth defect** in the state-store design (§8)
-   before it is built into the real `loopmill step` implementation, not after.
-5. **Re-evaluate STOP conditions (a), (b), and (c)** against the SPIKE-1 and
-   SPIKE-2 results once both have real runs, and update the decision sheet's
-   section 13 and section 11 scope if any of them is honestly met.
-6. Only once the above close, proceed to the m0 "spikes and contract freeze"
+| Gate | Question | Status (2026-09-06) | Evidence |
+|---|---|---|---|
+| G1 | SPIKE-1: `claude-code` headless on a hosted runner with subscription OAuth only | **green** | run 34024962852, C1-C4 and C7 PASS (§3) |
+| G2 | SPIKE-2: Codex Cloud as an `observed` backend, GO = R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8) | **open** — user runs R0-R11 not yet executed | documentary research only (§4) |
+| G3 | SPIKE-2b: seeded `auth.json` survives ephemeral runners | **open** — not run | — |
+| G4 | SPIKE-3: non-resident, event-sourced `step` on real GitHub | **green** | 21/21 local, 44 hosted runs (§5); `repository_dispatch` deferred to the default branch |
+| G5 | STOP (c): vendor terms read verbatim from primary sources | **open** — R11 not done | design §19 rows still `[L]` for OpenAI |
+
+STOP conditions: **(a) not triggered** (G1); **(b) undecided** until G2, with the
+Claude-only cross-role fallback already written down in design §22; **(c)
+undecided** until R11.
+
+1. **Execute the SPIKE-2 R0-R11 user run plan** against a real ChatGPT Plus/Pro
+   account and a throwaway repo (recommended order R0 → R1 → R4 → R7 → R5 → R8 →
+   R3 → R2 → R6 → R9 → R10, R11 any time), evaluate GO/NO-GO/Degraded-GO honestly,
+   and separately run SPIKE-2b to settle whether `codex` on `github-actions` can
+   leave EXPERIMENTAL status.
+2. **SPIKE-1 follow-ups:** re-run the harness at every claude-code
+   version bump and diff the result shape against `claude-recorded-*.json`; record
+   the `rate_limit_event` refusal shape the first time a run actually hits a
+   limit (C9).
+3. **SPIKE-3 follow-ups:** `repository_dispatch` chaining once the control-plane
+   workflow lives on the default branch; deploy-key/ruleset privilege separation
+   between the control-plane and agent jobs; the snapshot O(n²) growth defect
+   (§8 of the design) before the real `loopmill step` is built on this shape.
+4. **Re-evaluate STOP conditions (b) and (c)** in writing once SPIKE-2 and R11
+   have results, and update the decision sheet's section 13 and section 11 scope
+   if either is honestly met.
+5. Only once the above close, proceed to the m0 "spikes and contract freeze"
    milestone as scoped in decision sheet §11.

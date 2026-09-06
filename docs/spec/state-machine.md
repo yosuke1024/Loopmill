@@ -982,21 +982,37 @@ rather than a scattering of `includes()` calls.
 |---|---|---|
 | 1 | `LOST` | `deadlineMissed` — produced only by the sweep, never by a runtime. |
 | 2 | `TIMEOUT` | `timeoutFired`, or `error.code ∈ {node_timeout, observe_deadline, human_timeout}`. |
-| 3 | `CANCELLED` | `cancelRequested` is true **and** the process ended, or the backend reports a job cancel (claude-code: SIGINT with a recorded result; codex: `TurnStatus::Interrupted`). Never inferred from a signal alone. |
+| 3 | `CANCELLED` | `cancelRequested` is true **and** the process ended, or the backend reports a job cancel (claude-code: SIGINT ends with exit 0 and a `result` carrying `subtype: error_during_execution`, `is_error: true`, `terminal_reason: aborted_streaming` `[V]` 2.1.263; codex: `TurnStatus::Interrupted`). Never inferred from a signal alone. |
 | 4 | `QUOTA` | a positive match on the runtime's quota table **and** no match on its retryable look-alike table (7.3). |
-| 5 | `SUCCESS` | exit 0 **and** a well-formed terminal result (`claude-code`: a `result` message with `is_error: false`; `codex`: a `turn.completed`) **and**, when the node declares `structuredOutput`, the parsed output validates. |
+| 5 | `SUCCESS` | exit 0 **and** a well-formed terminal result (`claude-code`: a `result` message with `is_error: false` — never `subtype` alone, since an authentication failure ends `subtype: success`, `is_error: true`, `terminal_reason: api_error`, exit 1 `[V]`; `codex`: a `turn.completed`) **and**, when the node declares `structuredOutput`, the parsed output validates. |
 | 6 | `FAILED` | everything else. |
 
 **The ambiguity rule (decision sheet §5, normative).** Anything that does not positively match rows 1–5
 is `FAILED`. Concretely `FAILED` swallows: a non-zero exit with no recognised message; exit 0 with a
 missing or malformed result; `error_max_turns`, `error_max_budget_usd`,
 `error_max_structured_output_retries`; a structured output that violates its schema; `SIGTERM`/exit 143
-with no recorded result; an unknown signal. **Ambiguity is never a wait** — a run parked forever behind
+with no recorded result (measured on 2.1.263: nothing on stdout at all `[V]`); an unknown signal. **Ambiguity is never a wait** — a run parked forever behind
 a misclassified ordinary failure is worse than a red job.
 
 ### 7.3 The quota patterns
 
 Both tables are verified CLI facts, carried here as the classifier's data.
+
+**claude-code — structured signal (2.1.263 `[V]`).** With `--output-format stream-json` the CLI emits
+one `rate_limit_event` line right after `system/init`:
+
+```json
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":<epoch s>,
+ "rateLimitType":"seven_day","utilization":<0..1>,"isUsingOverage":false,"surpassedThreshold":0.75,
+ "unifiedWindows":{"five_hour":{"utilization":<0..1>,"resetsAt":<epoch s>},
+                   "seven_day":{"utilization":<0..1>,"resetsAt":<epoch s>}}}}
+```
+
+Observed on the hosted runner with `status: allowed_warning` once the seven-day window had passed the
+0.75 threshold; the shape at an actual refusal is not observed `[U]`. When the event is present it is
+the reported source for `quotaResetsAt` (7.4) and for the `isUsingOverage` flag that `doctor` reports.
+It does not replace the classifier: the text patterns below remain the evidence that a failure *was* a
+quota refusal, and the event's `status` vocabulary beyond `allowed`/`allowed_warning` is unknown.
 
 **claude-code — positive.** The result text matches
 `/You've hit your (session|weekly|Opus|Sonnet|Fable|usage credit) limit/`, optionally followed by a
@@ -1022,7 +1038,9 @@ substring is all `codex exec` gives; the app-server path is the structured upgra
 Decision sheet §5 is strict: `WAITING_FOR_QUOTA` is entered **only** when `classifyFailure` returns
 `QUOTA` *with `quotaResetsAt` recorded*. Resolution order:
 
-1. **Reported** — parsed from the `· resets at <time>` suffix (claude-code), or read from
+1. **Reported** — parsed from the `· resets at <time>` suffix (claude-code), read from the `stream-json`
+   `rate_limit_event.rate_limit_info.unifiedWindows.<window>.resetsAt` (claude-code 2.1.263, epoch
+   seconds `[V]`), or read from
    `RateLimitWindow.resetsAt` (codex app-server, epoch seconds). `quotaSource: 'reported'`.
 2. **Derived (Decision (not in sheet) D-05)** — when the limit *name* matched but no reset time is
    present, derive it from the runtime's documented window measured from the failure instant:

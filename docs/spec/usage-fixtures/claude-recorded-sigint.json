@@ -1,0 +1,204 @@
+{
+  "fixtureId": "claude-recorded-sigint",
+  "title": "claude-code recorded: SIGINT mid-stream, reported-but-incomplete usage (SPIKE-1 C6-sigint)",
+  "handWritten": false,
+  "recording": {
+    "harness": "spikes/spike-1-claude-subscription (check C6-sigint)",
+    "workflowRunId": "34024962852",
+    "date": "2026-09-06",
+    "runner": "GitHub-hosted ubuntu-24.04",
+    "runtimeVersion": "2.1.263",
+    "nodeVersion": "v22.23.2",
+    "authMode": "subscription-oauth",
+    "redaction": "token-shaped strings redacted by the harness; nothing else altered"
+  },
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "github-actions",
+    "runtime": "claude-code",
+    "authMode": "subscription-oauth",
+    "runId": "run_01SPIKE1C6SIGINTRECORDED0",
+    "cycleIndex": 1,
+    "nodeId": "implement",
+    "attempt": 1,
+    "note": "Real recording, not hand-written: claude -p \"Count slowly from 1 to 200, one number per line, thinking carefully between numbers.\" --output-format json --max-turns 20 --permission-mode plan --permission-prompts none, started in the background and sent SIGINT after 8s while the model was still streaming. Informative node outcome: CANCELLED — unlike claude-killed.json's SIGTERM/SIGKILL (which leaves the turn unfinished with no result at all, exit 143), this SIGINT was caught by the CLI, which still wrote a result object and exited 0. result.subtype=\"error_during_execution\", is_error=true, terminal_reason=\"aborted_streaming\". This is the case §2.1 describes as Loopmill's own cancellation mechanism (\"Loopmill cancels a claude-code attempt with SIGINT, which ends the turn and still writes the result\"), now exercised with a real recording plus the new R6 completeness rule: the record is provenance=\"reported\" (modelUsage is present and non-zero) but complete=false, because the interrupted claude-sonnet-5 response's tokens are absent from every usage field (result.usage is entirely zeroed, and modelUsage carries only a completed claude-haiku-4-5-20251001 helper call). See expected.attempts[0].usage.provenanceNote for the arithmetic and expected.display.note for the §3.3 rendering ambiguity this fixture surfaces."
+  },
+  "input": {
+    "invocation": "claude -p \"Count slowly from 1 to 200, one number per line, thinking carefully between numbers.\" --output-format json --max-turns 20 --permission-mode plan --permission-prompts none",
+    "exitCode": 0,
+    "signal": "SIGINT",
+    "note": "--output-format json (not stream-json) was used, so there is no stream of intermediate lines to record or ignore; only the terminal JSON object below was captured. Process was launched in the background and sent SIGINT ~8s after start while the model was still streaming its response; the CLI still exited 0 and still wrote the terminal result object below, rather than being torn down with no result (contrast claude-killed.json, a SIGTERM/SIGKILL case with exit 143 and no result at all).",
+    "ignoredStreamLines": [],
+    "terminalEvent": {
+      "duration_api_ms": 763,
+      "stop_reason": null,
+      "session_id": "75d28e9f-cada-4720-a229-b06c04bd1181",
+      "total_cost_usd": 0.000992,
+      "usage": {
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 912,
+          "outputTokens": 16,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.000992,
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "permission_denials": [],
+      "terminal_reason": "aborted_streaming",
+      "fast_mode_state": "off",
+      "fast_mode_disabled_reason": "sdk_opt_in_required",
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": true,
+      "num_turns": 2,
+      "subtype": "error_during_execution",
+      "errors": [
+        "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"
+      ],
+      "type": "result",
+      "duration_ms": 7700,
+      "uuid": "7bb4a2f6-a5cc-459f-82e2-57c9dea5b459",
+      "queued_turn_count": 0
+    }
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE1C6SIGINTRECORDED0",
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "claude-code",
+          "model": null,
+          "freshInputTokens": 912,
+          "cacheWriteTokens": 0,
+          "cacheReadTokens": 0,
+          "outputTokens": 16,
+          "reasoningTokens": 0,
+          "totalInputTokens": 912,
+          "totalTokens": 928,
+          "provenance": "reported",
+          "provenanceNote": "basis=modelUsage (§2.1 precedence 1: present and non-empty), but this attempt's modelUsage carries only 1 model entry — claude-haiku-4-5-20251001 (inputTokens=912, cacheCreationInputTokens=0, cacheReadInputTokens=0, outputTokens=16, thinkingTokens=0) — because the claude-sonnet-5 response that was mid-stream when SIGINT landed never completed and never got a modelUsage entry at all. Sum (single element, so sum = that element): freshInputTokens=912, cacheWriteTokens=0, cacheReadTokens=0, outputTokens=16 → totalInputTokens=912+0+0=912, totalTokens=912+16=928. reasoningTokens: the one modelUsage entry carries thinkingTokens=0, so reasoningTokens=0 (broken out and zero, distinct from null, R3). terminal_reason=\"aborted_streaming\" → complete=false (R6, new): result.usage is entirely zeroed (input_tokens=0, cache_creation_input_tokens=0, cache_read_input_tokens=0, output_tokens=0) and modelUsage has no entry for the interrupted sonnet-5 response, so that response's real token consumption is absent from every usage field on this record — 928 is a lower bound of the attempt, not the whole attempt. This is not the §2.1 zeroed-crash rule (that rule fires when totalInputTokens===0 for a would-be reported record; here totalInputTokens=912≠0, so the record stays reported rather than becoming unavailable). model is null: the configured model (claude-sonnet-5 per system/init) never completed a call, so the only perModel entry is the helper model and no single model can be named for the attempt.",
+          "source": {
+            "runtimeVersion": "2.1.263",
+            "eventKind": "result"
+          },
+          "complete": false,
+          "usageBasis": "modelUsage",
+          "sessionRef": {
+            "kind": "claude-session",
+            "id": "75d28e9f-cada-4720-a229-b06c04bd1181"
+          },
+          "usageAtAttemptStart": null,
+          "listPriceEquivalentUsd": 0.000992,
+          "perModel": [
+            {
+              "model": "claude-haiku-4-5-20251001",
+              "freshInputTokens": 912,
+              "cacheWriteTokens": 0,
+              "cacheReadTokens": 0,
+              "outputTokens": 16,
+              "reasoningTokens": 0,
+              "totalInputTokens": 912,
+              "totalTokens": 928,
+              "listPriceEquivalentUsd": 0.000992,
+              "costBasis": "list"
+            }
+          ]
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": 912,
+      "totalTokens": 928,
+      "provenance": "reported",
+      "measured": false
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 0,
+      "coverage": 0,
+      "unmeasured": [
+        {
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1,
+          "runtime": "claude-code",
+          "reason": "terminal_reason aborted_streaming after SIGINT; usage incomplete"
+        }
+      ]
+    },
+    "mustNotEqual": {
+      "storedAsZero": 0,
+      "completeIfTerminalReasonIgnored": true
+    },
+    "display": {
+      "measuredTokens": "928+",
+      "usageCoverage": "0/1 (0%)",
+      "note": "Section 3.3: a 0/1 scope whose only record is reported with complete: false renders that record's figure as a lower bound with the marker, not the generic 0+ reserved for scopes with no reported figure."
+    }
+  },
+  "assertsInvariants": [
+    "I1",
+    "I2",
+    "I3",
+    "I6",
+    "I7",
+    "I8",
+    "I9",
+    "I12"
+  ]
+}

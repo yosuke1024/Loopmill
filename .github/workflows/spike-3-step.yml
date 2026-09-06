@@ -6,7 +6,7 @@
 #
 # ---------------------------------------------------------------------------
 # Trigger notes (verified as far as the sandbox allowed - see
-# spikes/spike-3-control-plane/README.md, "Open items for the GitHub run")
+# docs/spikes/README.md, §5 (hosted-run results))
 #
 # 1. `repository_dispatch` ALWAYS runs the workflow file from the repository's
 #    DEFAULT branch and gives no way to select a ref. A chain living on a feature
@@ -23,9 +23,11 @@
 #    `workflow_dispatch` and `repository_dispatch` (changed 2022-09-08). That is
 #    exactly why this chain uses workflow_dispatch and not, say, a push trigger:
 #    a push to the state branch made with GITHUB_TOKEN would NOT re-trigger.
-#    docs.github.com was unreachable from the build sandbox, so this claim is
-#    carried from the GitHub Docs "GITHUB_TOKEN" page and the 2022-09-08
-#    changelog entry via search results only - the real run must confirm it.
+#    docs.github.com was unreachable from the build sandbox, so this claim was
+#    originally carried from the GitHub Docs "GITHUB_TOKEN" page and the
+#    2022-09-08 changelog entry via search results only. It is now confirmed
+#    directly by the hosted runs of 2026-09-06: a step dispatched the next step
+#    with GITHUB_TOKEN and the new run actually executed.
 # ---------------------------------------------------------------------------
 
 name: SPIKE-3 loopmill step

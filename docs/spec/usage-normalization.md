@@ -97,6 +97,8 @@ interface UsageRecord extends Usage {
     cacheWriteTokens: number;
     cacheReadTokens: number;
     outputTokens: number;
+    /** Same rule as the parent's reasoningTokens: reference only, never summed. */
+    reasoningTokens: number | null;
     totalInputTokens: number;
     totalTokens: number;
     listPriceEquivalentUsd: number | null;
@@ -119,7 +121,7 @@ history.
 | `cacheWriteTokens` | Input written to the cache by this attempt. | as above | negative |
 | `cacheReadTokens` | Input served from the cache. | as above | negative |
 | `outputTokens` | All generated tokens, reasoning/thinking included. | as above | negative |
-| `reasoningTokens` | Informational subset of `outputTokens`. `null` means "the runtime does not break it out" (claude-code) and is distinct from `0` ("broken out, and it was zero"). | runtime does not report it, or provenance is `unavailable` | added to any total |
+| `reasoningTokens` | Informational subset of `outputTokens`. `null` means "the runtime does not break it out" (claude-code before 2.1.263) and is distinct from `0` ("broken out, and it was zero"). | runtime does not report it, or provenance is `unavailable` | added to any total |
 | `totalInputTokens` | `fresh + write + read`. | `provenance: "unavailable"` | stored from a vendor field |
 | `totalTokens` | `totalInputTokens + outputTokens`. | as above | stored from a vendor field |
 | `provenance` | `reported` = the runtime stated these numbers for this attempt. `derived` = Loopmill computed them from runtime numbers by a documented rule (a subtraction, a subset split, or a sum over the runtime's own breakdown). `estimated` = a Loopmill model, not a measurement. `unavailable` = no source existed. | never | absent |
@@ -213,13 +215,21 @@ covers the whole tree including subagents. The two MUST NOT both contribute to o
 the classic double count. In `claude-with-subagents.json` the difference is 111,100 tokens (14.5%
 undercount if `result.usage` were used; 85% overcount if both were summed).
 
+Measured on 2026-09-06 (claude-code 2.1.263 on a GitHub-hosted runner, `claude-recorded-*.json`):
+`modelUsage` is present on **every** result — as an empty object `{}` when no API call completed (an
+unauthenticated run, an invalid API key) — and, even with no subagents, it routinely carries a second
+entry for a short helper call on a smaller model (`claude-haiku-4-5-20251001`, about 900 input tokens)
+next to the main model. `{}` counts as absent for rule 1. In practice the basis is therefore
+`modelUsage` in every healthy run, and `result.usage` alone undercounts by the helper call
+(`claude-recorded-success.json`: 29,560 against 30,476).
+
 | Canonical field | From `result.usage` | From `result.modelUsage` (summed over models) |
 |---|---|---|
 | `freshInputTokens` | `input_tokens` | `Σ inputTokens` |
 | `cacheWriteTokens` | `cache_creation_input_tokens` | `Σ cacheCreationInputTokens` |
 | `cacheReadTokens` | `cache_read_input_tokens` | `Σ cacheReadInputTokens` |
 | `outputTokens` | `output_tokens` | `Σ outputTokens` |
-| `reasoningTokens` | `null` — thinking is billed as output and is not broken out | `null` |
+| `reasoningTokens` | `usage.output_tokens_details.thinking_tokens` when present (2.1.263 `[V]`), else `null` | `Σ thinkingTokens` when every model entry carries it (2.1.263 `[V]`), else `null` |
 | `totalInputTokens` | `fresh + write + read` | same |
 | `totalTokens` | `totalInputTokens + output` | same |
 | `listPriceEquivalentUsd` | `total_cost_usd` | `total_cost_usd` (and `costUSD` per model) |
@@ -228,6 +238,13 @@ undercount if `result.usage` were used; 85% overcount if both were summed).
 
 `freshInputTokens` maps straight from `input_tokens` with no subtraction because Anthropic's
 `input_tokens` already excludes cache reads and cache creations.
+
+`reasoningTokens` stays a reference field (invariant I3): thinking is billed as output, and since
+2.1.263 the CLI also breaks it out (`thinkingTokens` per model, `output_tokens_details.thinking_tokens`
+on `usage`). `0` means "broken out, and it was zero"; `null` means the version does not break it out.
+Each `perModel` entry carries its own `reasoningTokens` under the same rule, and its `model` is the
+`modelUsage` key — the concrete model id such as `claude-haiku-4-5-20251001` — not the `canonicalModel`
+alias the entry also carries.
 
 **Provenance is `reported`** for both bases: Loopmill only adds up numbers the runtime stated for this
 invocation. Summing `modelUsage` is not a derivation in the sense of section 1.3 — no vendor semantics
@@ -261,6 +278,25 @@ conformance failure (invariant I7).
 | `error_max_budget_usd` | as above, `reported`, basis `modelUsage` **required** — `result.usage` omits the response that crossed the cap while `modelUsage` includes it. If `modelUsage` is absent, `complete: false`. | `BUDGET_EXCEEDED` (runtime-side cap) |
 | `error_during_execution` | as above, **unless** the zeroed-crash rule below fires | `FAILED`, or `WAITING_FOR_QUOTA` when `classifyFailure` returns QUOTA |
 
+**`is_error` and `terminal_reason` (2.1.263 `[V]`).** `subtype` alone does not identify success: an
+unauthenticated run and an invalid-API-key run both end with `subtype: "success"`, `is_error: true`,
+`terminal_reason: "api_error"`, exit 1 and all-zero usage. The result additionally carries
+`terminal_reason`, observed as `completed`, `max_turns`, `api_error` and `aborted_streaming`:
+
+| `terminal_reason` | Observed with | `complete` |
+|---|---|---|
+| `completed` | `subtype: success`, `is_error: false`, exit 0 | `true` |
+| `max_turns` | `subtype: error_max_turns`, `is_error: true`, exit 1; usage reported in full (`claude-recorded-max-turns.json`) | `true` |
+| `api_error` | `subtype: success`, `is_error: true`, exit 1, `modelUsage: {}`, zeroed `usage` | zeroed-crash rule below → `unavailable` |
+| `aborted_streaming` | SIGINT mid-turn: `subtype: error_during_execution`, `is_error: true`, exit **0**, `result: null`; `result.usage` all zero; `modelUsage` lists only the calls that completed before the interrupt (`claude-recorded-sigint.json`) | **`false`** |
+
+`Decision (not in sheet)` — **`terminal_reason: "aborted_streaming"` ⟹ `complete: false`**, whatever
+the numbers say. The interrupted response's tokens appear in no field, so the record is a lower bound
+of the attempt. Provenance stays `reported` because every number in the record was stated by the
+runtime; `provenanceNote` names the reason; and the attempt is **unmeasured** for coverage (section
+4.1). This is the first MVP case where `complete: false` occurs together with a provenance other than
+`unavailable`.
+
 `Decision (not in sheet)` — **zeroed crash results.** A crashed session can emit a `result` message
 with every cost field zeroed. A claude-code turn that reached the model cannot have consumed zero
 input tokens. Therefore: if a record would be written with `provenance: "reported"` and
@@ -270,9 +306,15 @@ measurement of zero"`. This is the only place where Loopmill overrides a number 
 and it exists because storing that particular zero would silently bias every average downward for
 exactly the expensive runs that crashed.
 
-**Cancellation.** Loopmill cancels a claude-code attempt with **SIGINT**, which ends the turn and
-still writes the result (and therefore the usage). SIGTERM/SIGKILL leaves the turn unfinished with no
-result at all; see `claude-killed.json`.
+**Cancellation.** Loopmill cancels a claude-code attempt with **SIGINT**. Measured (2.1.263,
+GitHub-hosted runner, `claude-recorded-sigint.json`): the process exits **0** and still writes a
+`result` (`subtype: error_during_execution`, `is_error: true`, `terminal_reason: aborted_streaming`),
+so the session id, the cost and the usage of every call that completed before the interrupt survive —
+but the interrupted response's tokens appear nowhere, which is why that record is `complete: false`.
+SIGTERM, measured on the same runner and version: the process ends with exit **143** and writes
+**nothing** to stdout — no `result`, no usage — so the record is `unavailable`, `complete: false`,
+exactly the shape `claude-killed.json` was hand-written to describe. SIGKILL is not measured and is
+assumed to be no better than SIGTERM. This is why `cancel` is SIGINT first, grace, then SIGKILL.
 
 ### 2.2 `codex` (backends `github-actions`, `local`)
 
@@ -417,11 +459,12 @@ label that already carries the "never summed with measured values" rule.
 
 | Case | Detection | Record |
 |---|---|---|
-| Process killed (SIGTERM/SIGKILL, OOM, job cancel, runner eviction) | non-zero exit with a signal, no terminal event on stdout | `unavailable`, `complete: false`, `eventKind: null`, note names the signal |
+| Process killed (SIGTERM/SIGKILL, OOM, job cancel, runner eviction) | non-zero exit with a signal, no terminal event on stdout (claude-code SIGTERM: exit 143, empty stdout, measured on 2.1.263 `[V]`) | `unavailable`, `complete: false`, `eventKind: null`, note names the signal |
 | No terminal event (stream ends mid-turn; deadline hit; `codex` turn interrupted) | stream closed without `result` / `turn.completed` | `unavailable`, `complete: false`, `eventKind: null` |
 | `codex` `turn.failed` | `turn.failed` seen, no `turn.completed` on the thread | `unavailable`, `complete: false`, `eventKind: "turn.failed"` |
 | Malformed JSON (a truncated line, a non-JSON line, a schema-invalid usage object, a negative or non-integer field) | parse or validation failure | `unavailable`, `complete: false`, `eventKind` names the line kind, note carries the parse error |
-| `claude-code` result with all-zero usage after a crash | `subtype: "error_during_execution"` and `totalInputTokens === 0` | `unavailable` (section 2.1 zeroed-crash rule) |
+| `claude-code` result with all-zero usage after a crash or an authentication failure | `totalInputTokens === 0` on the chosen basis (`modelUsage: {}` and zeroed `usage`); seen with `subtype: "error_during_execution"`, and with `subtype: "success"`, `is_error: true`, `terminal_reason: "api_error"` `[V]` | `unavailable` (section 2.1 zeroed-crash rule) |
+| `claude-code` interrupted mid-turn (SIGINT) | `terminal_reason: "aborted_streaming"`, exit 0, a `result` whose `modelUsage` covers only the completed calls `[V]` | `reported`, `complete: false`, basis `modelUsage`; unmeasured for coverage (`claude-recorded-sigint.json`) |
 | Attempt state `LOST` (no completion by deadline) | control-plane sweep | `unavailable`, `complete: false`. The attempt burned tokens; the next attempt's record does not cover them. |
 | `observed` backend | capability `usage: none` | `unavailable`, `complete: false` |
 
@@ -495,8 +538,11 @@ Measured Tokens        1,171,000+
 - Full precision uses thousands separators: `1,171,000+`. Abbreviated form keeps the marker outside
   the unit: `1.17M+`, `947K+`.
 - A single `unavailable` record renders as `—` (em dash). Never `0`, never `0+`, never blank.
-- A scope with coverage `0/n` renders `0+`, which reads correctly as "at least zero, and we measured
-  none of it", and is always accompanied by the coverage line.
+- A scope with coverage `0/n` and no reported figure at all renders `0+`, which reads correctly as
+  "at least zero, and we measured none of it", and is always accompanied by the coverage line. A
+  `reported` record with `complete: false` (section 2.1, `aborted_streaming`) is unmeasured for
+  coverage but still contributes its figure to the lower bound, so a `0/1` scope holding one such
+  record renders that figure with the marker (`claude-recorded-sigint.json`: `928+`, `0/1 (0%)`).
 - A scope at 100% coverage renders with no marker at all. The absence of `+` is a positive claim and
   MUST NOT be produced by rounding.
 - The `+` is not a footnote: it is never dropped in a compact view, a CSV export, a job summary or a
@@ -550,9 +596,11 @@ counted, in numerator or denominator.
 `Decision (not in sheet)` — **when is a Node Execution "measured"?** The sheet defines coverage on
 provenance alone. A Node Execution counts as measured iff its aggregated record has provenance
 `reported` or `derived` **and** every contributing attempt has `complete === true`. For the MVP
-runtimes the two definitions coincide, because `complete: false` only ever occurs together with
-`unavailable`; the completeness clause matters only for future adapters that can report a partial
-turn, and it is stated now so that such an adapter cannot quietly inflate coverage.
+runtimes the two definitions coincide with one measured exception: a claude-code attempt interrupted
+by SIGINT ends with a `terminal_reason: aborted_streaming` result whose usage covers only the calls
+that completed (section 2.1) — `reported`, `complete: false`, and therefore **unmeasured**. The clause
+is what keeps such a partial turn from inflating coverage; its tokens still enter the scope's sum as a
+lower bound, marked per section 3.3.
 
 A Node Execution whose provenance is `estimated` counts as **unmeasured**. An estimate is not a
 measurement, and coverage is a statement about measurement.
@@ -959,10 +1007,13 @@ row MUST still show the per-runtime split and, if any contributing node is unmea
 
 ## 8. Test fixtures
 
-`docs/spec/usage-fixtures/*.json`. **These are hand-written from the documented event shapes; they are
-not recordings.** No CLI was executed and no vendor cloud task was triggered to produce any of them.
-Every file states this in its own `notARecording` field. Numeric values are illustrative but
-internally consistent with the rules above, so each fixture can be checked by hand.
+`docs/spec/usage-fixtures/*.json`. Two kinds of file live here. **`handWritten: true`** files are
+hand-written from the documented event shapes and are not recordings; no CLI was executed to produce
+them, every one says so in its `notARecording` field, and their numbers are illustrative but
+internally consistent with the rules above. **`handWritten: false`** files (`claude-recorded-*.json`)
+are verbatim recordings from the SPIKE-1 harness (claude-code 2.1.263 on a GitHub-hosted runner,
+2026-09-06, workflow run 34024962852) with their provenance under `recording`; the expected records
+were derived from them by the rules above and can be checked by hand.
 
 Common shape:
 
@@ -984,7 +1035,10 @@ matches one of them fails with a named diagnosis rather than a bare inequality.
 |---|---|---|
 | `claude-success.json` | `result.usage` basis; the four v0.4 numbers; stream placeholder lines and a repeated `message.id` present and ignored | `reported`, 486,210 / 21,442 / 420,102 / 18,928 → **946,682** |
 | `claude-with-subagents.json` | `modelUsage` overrides `usage`; `perModel` split; two models | `reported`, basis `modelUsage`, **767,400**; must not equal 656,300 (usage only) or 1,423,700 (both summed) |
-| `claude-killed.json` | SIGTERM, exit 143, no `result` line; stream lines that a tempting reconstruction would use | `unavailable`, all null, `complete: false`; must not equal 0 or 359,800 |
+| `claude-killed.json` | SIGTERM, exit 143, no `result` line; stream lines that a tempting reconstruction would use (shape confirmed by measurement on 2.1.263; the numbers stay illustrative) | `unavailable`, all null, `complete: false`; must not equal 0 or 359,800 |
+| `claude-recorded-success.json` (recording) | 2.1.263 clean success: `modelUsage` with a helper-model entry beside the main model; `thinkingTokens` broken out | `reported`, basis `modelUsage`, two `perModel` entries, **30,476**; must not equal 29,560 (`result.usage` alone) |
+| `claude-recorded-max-turns.json` (recording) | `error_max_turns`, `is_error: true`, exit 1, `terminal_reason: max_turns`: usage is reported in full on a failed attempt | `reported`, `complete: true`; must not be `unavailable` |
+| `claude-recorded-sigint.json` (recording) | SIGINT mid-turn: exit 0, `terminal_reason: aborted_streaming`, `result.usage` zeroed, `modelUsage` with the completed helper call only | `reported`, `complete: false`, unmeasured for coverage; must not equal 0 and must not be `complete: true` |
 | `codex-two-turns-cumulative.json` | thread reuse; the delta rule; the sum-of-deltas identity | two `derived` records, **140,000** and **101,300**, run total **241,300**; must not equal 381,300 |
 | `codex-fresh-thread.json` | fresh thread; subset arithmetic; reasoning as reference | `derived`, fresh = `max(0, 24,763−24,448−0)` = 315, total **25,973**; must not equal 50,421 or 26,913 |
 | `codex-turn-failed.json` | `turn.failed` with no `turn.completed`; quota classification kept off the usage record | `unavailable`, `complete: false`; must not equal 0 |

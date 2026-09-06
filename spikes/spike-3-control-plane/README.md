@@ -65,6 +65,13 @@ The fabricated completion is **not applied inside the same step**. It is returne
 GitHub Actions job by the workflow. That keeps the invariant *one step == one applied
 inbound event == one commit*, which is what makes the audit trail readable.
 
+An unknown schedule name in a `run-started` envelope's `params.schedule` is rejected
+by validation as an invalid envelope (`UNKNOWN_SCHEDULE`, exit 30) before it can ever
+reach the simulator. `simulateBackend` itself throws if it is ever invoked with a
+schedule id it does not recognize - that would mean validation was bypassed - rather
+than silently falling back to the default schedule; a mis-named hosted run hid behind
+exactly that kind of silent fallback once.
+
 ### The Envelope
 
 ```jsonc
@@ -163,8 +170,14 @@ node --test test/*.test.mjs        # or: npm test
 ```
 
 Fault injection used by the tests: `--crash-point after-stage|after-commit`
-(exit 98 / 97) and `--barrier-file <path>` (block before the first push until the
-file appears), plus `LOOPMILL_NOW` to freeze the clock.
+(exit 98 / 97), `--barrier-file <path>` (block before the first push until the
+file appears), and `--hold-ms <n>` (sleep between reading the state branch and
+pushing, on the first push attempt only, to widen the compare-and-swap window),
+plus `LOOPMILL_NOW` to freeze the clock. `--crash-point`, `--barrier-file` and
+`--hold-ms` each also have an environment-variable equivalent
+(`LOOPMILL_CRASH_POINT`, `LOOPMILL_BARRIER_FILE`, `LOOPMILL_HOLD_MS`), which is
+how the GitHub workflow forwards the spike-only `fault` and `hold_ms` inputs
+(see §4).
 
 ---
 
@@ -230,11 +243,25 @@ workflow_dispatch(event = started)
   results quoting the GitHub Docs "GITHUB_TOKEN" page and the 2022-09-08 changelog.
   The real workflow run is what actually settles it.
 * `permissions: contents: write` (push state) + `actions: write` (dispatch next step).
+* Two more `workflow_dispatch` inputs exist purely for spike fault injection: `fault`
+  (`after-stage` | `after-commit`, forwarded to `step.mjs` as `LOOPMILL_CRASH_POINT`)
+  and `hold_ms` (forwarded as `LOOPMILL_HOLD_MS`; see §2).
 * `concurrency: group: loopmill-<runId>`, `cancel-in-progress: false` - one in-flight
   step per run, and a step that is mid-transition is never cancelled. The group is
   built from a plain `run_id` input rather than `fromJSON(inputs.event).runId`,
   because `concurrency` is evaluated before the job exists and the expression must
-  not break when the input is absent (as it is for `repository_dispatch`).
+  not break when the input is absent (as it is for `repository_dispatch`). The
+  `run_id` **input** alone decides the group - nothing about the delivered event's
+  own `runId` is consulted - so dispatching an event with a different `run_id` input
+  than the rest of its run deliberately bypasses the group; that is exactly how the
+  forced-concurrency measurements in §5/§6 were produced.
+* GitHub keeps at most one pending run per concurrency group and cancels the older
+  pending run when another arrives; this was measured on 2026-09-06 (three events
+  dispatched 1.4s apart into one group: the first ran, the second was cancelled
+  before it started, the third ran, and the second event was never applied) - see
+  `docs/spikes/README.md` §5. The group is therefore a latency/serialization aid,
+  never a queue: at-least-once redelivery plus CAS is the actual correctness
+  mechanism.
 * Safety net: `step_no` is carried through the chain and the workflow refuses to
   dispatch past `MAX_CHAIN_STEPS = 12`. The loop is already bounded by
   `maxIterations` and `maxAttempts`; the cap only guards against a control-plane bug.
@@ -243,7 +270,7 @@ workflow_dispatch(event = started)
 
 ## 5. Properties the tests prove
 
-`node --test test/*.test.mjs` - 20 tests, 10 against the local store
+`node --test test/*.test.mjs` - 21 tests, 11 against the local store
 (`test/semantics.test.mjs`) and 10 against a git branch store backed by a local
 **bare** repository (`test/git-store.test.mjs`).
 
@@ -269,6 +296,15 @@ workflow_dispatch(event = started)
 
 Measured facts — local (this sandbox, local bare repo, Node 22.22.2 / git 2.43.0) and
 from the 22 GitHub-hosted runs of 2026-09-06 — are recorded in `docs/spikes/README.md` §5.
+The 2026-09-06 hosted measurements also cover: a forced CAS storm with six concurrent
+writers (`hold_ms=4000`: push attempts 1/2/3/3/4/4, conflicts 0/1/2/2/3/3, all six
+events applied); a 32,768-byte and a 65,400-byte envelope pushed through
+`workflow_dispatch` (a 66,000-byte envelope was rejected outright with HTTP 422
+"inputs are too large"); a job crashed after its local commit and before the push
+(remote left untouched; redelivering the identical envelope converged with exactly
+one commit); and an `always-fail` chain reaching `MAX_ITERATIONS_EXCEEDED` on GitHub
+in 8 steps and about 100 s. See `docs/spikes/README.md` §5 for the full numbers - they are not
+repeated here.
 
 ---
 
@@ -295,7 +331,9 @@ the winner's state and can legitimately decide the event is now stale.
 Measured: under N simultaneous steps on the same run, conflicts are the worst case
 `N(N-1)/2` (N=4 gave retries 0/1/2/3) - i.e. **retries grow linearly with the number
 of concurrent writers**, and with the default budget of 5 an N=6 storm made one step
-exit 40. Two consequences:
+exit 40. On the GitHub-hosted runners, a forced N=6 CAS storm (`hold_ms=4000`) needed
+at most 3 retries per step - comfortably inside the default budget of 5 - and all six
+events applied (see `docs/spikes/README.md` §5). Two consequences:
 
 * Per-run serialization (the Actions `concurrency` group) is not a nicety, it is
   what keeps N at 1 in normal operation.

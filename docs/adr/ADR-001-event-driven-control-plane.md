@@ -162,7 +162,7 @@ Not every triple is valid. The MVP matrix (decision sheet §4, §11):
 
 | Runtime | Backend | Auth mode | Status |
 | --- | --- | --- | --- |
-| `claude-code` | `github-actions` | `subscription-oauth` (`CLAUDE_CODE_OAUTH_TOKEN`) | Supported; gated on SPIKE-1 |
+| `claude-code` | `github-actions` | `subscription-oauth` (`CLAUDE_CODE_OAUTH_TOKEN`) | Supported; SPIKE-1 passed 2026-09-06 |
 | `claude-code` | `local` | `subscription-oauth` or interactive login | Supported |
 | `codex` | `observed` (Codex Cloud) | `subscription-login`, credential vendor-side | MVP, gated on SPIKE-2 R-runs |
 | `codex` | `github-actions` | `subscription-login` (seeded `auth.json` under `CODEX_HOME`) | **EXPERIMENTAL**, behind a flag, gated on SPIKE-2b |
@@ -222,9 +222,11 @@ duplicate); `causationId` (audit). `node-dispatched` is written **before** the d
 the two, the sweep re-dispatches after the lease expires, and the backend must tolerate a duplicate dispatch
 (`github-actions`: the concurrency group; `observed`: a `dedupeKey` in the trigger text).
 
-**Concurrency.** One GitHub Actions `concurrency` group per `runId` with `cancel-in-progress: false` is a
-convenience; the CAS push is the correctness mechanism. A hard cap `maxStepsPerRun` (default 200) prevents
-runaway chains.
+**Concurrency.** The CAS push is the correctness mechanism; a GitHub Actions `concurrency` group is not.
+Measured 2026-09-06: six concurrent steps on one run converged with at most 3 retries and no loss, while a
+per-`runId` group with `cancel-in-progress: false` kept one pending run and cancelled the older one, losing
+an event. `step` therefore runs without a per-run group (design section 7.5). A hard cap `maxStepsPerRun`
+(default 200) prevents runaway chains.
 
 **Portability.** `step` depends only on a `StateStore` interface (`git-branch`, `local-dir`) and a `Dispatcher`
 interface. GitHub Actions is the MVP executor, not the design.
@@ -546,7 +548,7 @@ with worktree isolation and missed-run catch-up, free with the subscription (`cl
 
 | # | Risk | If it lands | Retired by |
 | --- | --- | --- | --- |
-| R1 | `claude -p` with `CLAUDE_CODE_OAUTH_TOKEN` does not run headless on a hosted runner with usage JSON and structured output | `github-actions` loses its primary runtime → decision sheet STOP condition (a) | **SPIKE-1** |
+| R1 | `claude -p` with `CLAUDE_CODE_OAUTH_TOKEN` does not run headless on a hosted runner with usage JSON and structured output | `github-actions` loses its primary runtime → decision sheet STOP condition (a) | **SPIKE-1** — retired 2026-09-06 (run 34024962852: C1-C4 and C7 PASS, claude-code 2.1.263) |
 | R2 | `--bare` becomes the `-p` default; in bare mode Claude Code ignores OAuth and `CLAUDE_CODE_OAUTH_TOKEN` (#22, verified as a documented intention) | Subscription auth dies silently in CI on a routine CLI upgrade | **SPIKE-1**, plus a pinned minimum runtime version and a `doctor` assertion that fails loudly |
 | R3 | Codex: R4 (result reaches GitHub without a human click) or R7 (`ready` distinguishable from `error`, bounded in time) fails | `observed` is NO-GO; the MVP is Claude-only cross-role and "cross-vendor" is deferred → STOP condition (b) must be evaluated honestly | **SPIKE-2** (GO requires R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8)) |
 | R4 | Seeded `auth.json` refresh tokens do not survive ephemeral runners | `codex` on `github-actions` stays experimental indefinitely; Codex is reachable only as `observed` or `local` | **SPIKE-2b** |

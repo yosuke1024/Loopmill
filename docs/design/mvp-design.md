@@ -142,8 +142,10 @@ Actions for scheduling and execution, a git branch for state, GitHub Environment
 nothing is happening, nothing of Loopmill's is running anywhere.
 
 *Honest cost of this principle:* Loopmill inherits GitHub's semantics, including per-step runner start-up
-latency and GitHub's own scheduling behaviour `[S]` (SPIKE-3). It is a deliberate trade: the operator's
-minutes and quotas, not Loopmill's uptime.
+latency and GitHub's own scheduling behaviour `[V]` (SPIKE-3, 2026-09-06: 12-14 s per hop in a chain,
+38 s of queueing once under a concurrency group, and a concurrency group that keeps one pending run and
+cancels the older one — section 7.5). It is a deliberate trade: the operator's minutes and quotas, not
+Loopmill's uptime.
 
 ---
 
@@ -457,12 +459,16 @@ Notes that the table cannot carry:
   Retry Edge whose `to` is a condition, human or end node is rejected rather than discovered at 03:00.
 * **`fake` is a first-class MVP deliverable**, not a test detail: the whole reference loop must run green
   against it in CI with no network, no subscription and no tokens (acceptance criterion A31).
+* **`quotaSignal: classified` understates `claude-code` 2.1.263.** Its `stream-json` output carries a
+  structured `rate_limit_event` (per-window utilization and reset time, `isUsingOverage`) `[V]`, but the
+  shape at an actual refusal is unobserved `[U]`, so the backend capability stays `classified` until a
+  refusal has been recorded (`docs/spec/state-machine.md` §7.3).
 
 ### 6.3 Runtimes
 
 | Runtime | Non-interactive entry | Structured output | Usage | Quota signal |
 |---|---|---|---|---|
-| `claude-code` | `claude -p --output-format json` `[V]` | `--json-schema <schema>`, returned in `structured_output` `[V]` | `result.usage`; `modelUsage` overrides when present because `usage` excludes subagents `[V]` | No dedicated subtype: quota arrives as exit 1, `error_during_execution`, discriminated only by message text `[V]` |
+| `claude-code` | `claude -p --output-format json` `[V]`, measured headless on a GitHub-hosted runner with `CLAUDE_CODE_OAUTH_TOKEN` only (SPIKE-1, 2026-09-06, 2.1.263) `[V]` | `--json-schema <schema>`, returned in `structured_output` `[V]` | `modelUsage` sum — always present in 2.1.263 and carrying a helper-model call even without subagents, so `result.usage` alone undercounts `[V]`; `thinkingTokens` broken out `[V]` | No dedicated result subtype `[V]`; `stream-json` carries a structured `rate_limit_event` with per-window utilization and reset time `[V]`, refusal shape unobserved `[U]` |
 | `codex` | `codex exec --json` `[V]` | `--output-schema <FILE>` `[V]` | `turn.completed.usage`, **thread-cumulative** `[V]` | No exit code and no structured error; invariant substring `usage limit` in prose `[V]` |
 
 Version-fragility is a first-order risk, not a footnote: `--full-auto` has already been removed from
@@ -579,9 +585,19 @@ trigger text.
 
 ### 7.5 Concurrency
 
-One GitHub Actions `concurrency` group per `runId` with `cancel-in-progress: false` is a convenience; the
-**CAS push is the correctness mechanism**. Two steps that race both succeed — one pushes, the other
-re-reads and re-applies. A hard cap `maxStepsPerRun` (default 200) prevents a runaway chain.
+The **CAS push is the correctness mechanism**; a GitHub Actions `concurrency` group is not. Measured on
+2026-09-06 (SPIKE-3, `docs/spikes/README.md` §5): six steps for one run pushed concurrently with a 4 s
+hold between read and push — push attempts 1/2/3/3/4/4, all six events applied, none lost. And a
+`concurrency` group per `runId` with `cancel-in-progress: false` **drops events**: GitHub keeps one
+pending run per group and cancels the older pending run when another arrives (three events dispatched
+1.4 s apart: the first ran, the second was cancelled before it started, the third ran; the second event
+was never applied) `[V]`.
+
+`Decision (not in sheet)`: `step` runs **without** a per-run concurrency group. Two steps that race both
+succeed — one pushes, the other re-reads and re-applies — and `maxPushRetries` (default 5; worst case
+measured 3 with six writers) plus at-least-once redelivery bound the cost. A group may still serialise
+the *agent* jobs of one run, where the second arrival is a duplicate dispatch by construction (7.4). A
+hard cap `maxStepsPerRun` (default 200) prevents a runaway chain.
 
 SPIKE-3's local harness proves the store half of this today: 20/20 tests passing (2026-09-06) covering
 one-commit-per-event, duplicate delivery creating no commit, stale events recorded as ignored, CAS
@@ -589,8 +605,13 @@ rejection with re-read and re-apply, two concurrent steps where exactly one wins
 between commit and push, snapshot-equals-fold, and two runs sharing one branch `[V]`. The GitHub half is
 partly measured: 22 hosted runs on 2026-09-06 confirmed `GITHUB_TOKEN` dispatch chaining, the
 default-branch requirement and per-step overhead (~1.4-1.6 s step body, 13 s job, hop latency up to 38 s
-under the concurrency group) `[V]`; `repository_dispatch` chaining, a forced CAS conflict against GitHub
-and an interrupted job remain SPIKE-3's m0 work `[S]` (`docs/spikes/README.md` §5).
+under the concurrency group) `[V]`. A further 22 hosted runs on 2026-09-06 (one of them cancelled by the
+concurrency group, which is itself a finding) measured a forced CAS storm
+(six writers, up to 3 retries, no loss), a job killed after its local commit and before its push (remote
+untouched; redelivery of the identical envelope converged with exactly one commit), a 32 KiB and a
+65 KiB envelope through `workflow_dispatch`, the one-pending-run behaviour of a concurrency group, and
+an `always-fail` chain reaching `MAX_ITERATIONS_EXCEEDED` in 8 steps `[V]`; `repository_dispatch`
+chaining remains open until the workflow lives on the default branch `[S]` (`docs/spikes/README.md` §5).
 
 ### 7.6 Portability
 
@@ -642,7 +663,9 @@ MVP event types: `run-requested`, `run-started`, `node-dispatched`, `node-starte
 | GitHub comment | Human and `observed` handoffs | envelope inside a fenced ```` ```loopmill ```` block, `schemaVersion` first, parsed strictly; free text around it is ignored |
 | stdin / `--event-file` | `local`, `fake`, tests | the envelope itself |
 
-**Size rule:** an envelope is at most 32 KiB. Anything larger travels by `artifactRefs` — logs, diffs and
+**Size rule:** an envelope is at most 32 KiB. Measured 2026-09-06: a 32,768-byte and a 65,400-byte
+envelope passed through `workflow_dispatch` inputs and were applied; 66,000 bytes was refused by the API
+with HTTP 422 `inputs are too large`, confirming the 65,535-character ceiling `[V]`. Anything larger travels by `artifactRefs` — logs, diffs and
 outputs never travel inside an event.
 
 ### 8.3 Ingest and anti-loop rules
@@ -901,12 +924,12 @@ The four buckets are mutually disjoint by construction, which is what makes two 
 
 | | `claude-code` | `codex` | `observed` | `fake` |
 |---|---|---|---|---|
-| Source | `result.usage`; `modelUsage` sum overrides it when present, because `usage` excludes subagents `[V]` | `turn.completed.usage`, **thread-cumulative** `[V]` | — | fixture |
+| Source | `modelUsage` sum — always present in 2.1.263, and carrying a helper-model call even without subagents `[V]`; `result.usage` only when `modelUsage` is absent or `{}` | `turn.completed.usage`, **thread-cumulative** `[V]` | — | fixture |
 | fresh | `input_tokens` (excludes cache `[V]`) | `max(0, input − cached − cache_write)` | — | fixture |
 | write | `cache_creation_input_tokens` | `cache_write_input_tokens` | — | fixture |
 | read | `cache_read_input_tokens` | `cached_input_tokens` (a **subset** of input `[V]`) | — | fixture |
 | output | `output_tokens` | `output_tokens` | — | fixture |
-| reasoning | never broken out; billed as output `[V]` | `reasoning_output_tokens` (subset of output `[L]`) | — | — |
+| reasoning | `thinkingTokens` per model / `output_tokens_details.thinking_tokens`, broken out since 2.1.263 `[V]`; billed as output, reference only | `reasoning_output_tokens` (subset of output `[L]`) | — | — |
 | provenance | `reported` | `derived` | `unavailable` | `estimated` |
 
 Per-attempt Codex usage = last cumulative − cumulative at attempt start. With `sessionPolicy: fresh` the
@@ -1201,7 +1224,7 @@ its own product; and it does not resell or intermediate anyone's usage.
 
 | In scope | Status |
 |---|---|
-| `github-actions` + `claude-code` + `subscription-oauth` | Baseline. If SPIKE-1 fails, STOP (a) |
+| `github-actions` + `claude-code` + `subscription-oauth` | Baseline. SPIKE-1 passed on 2026-09-06 (C1-C4 and C7 PASS on a GitHub-hosted runner, claude-code 2.1.263) `[V]`; STOP (a) not triggered |
 | `github-actions` + `codex` + `subscription-login` | **EXPERIMENTAL**, behind a flag, until SPIKE-2b proves refresh-token survival on ephemeral runners |
 | `observed` (Codex Cloud via `@codex` comment; `codex cloud exec` where a credential exists) | Gated on SPIKE-2 R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8). SPIKE-2's own recommendation is *degraded-GO at best*: usage is `unavailable` and there is no per-task quota predicate `[V]`, so it ships labelled experimental |
 | `local` (manual and debug) | In scope, no scheduler, no reconcile |
@@ -1338,7 +1361,7 @@ Not in the MVP, and each for a stated reason:
 | Automatic merge | Never |
 | Parallel node execution, multi-repo loops | MVP is sequential, one repo; the schema leaves room |
 | OS-scheduler integration (launchd/systemd/Task Scheduler), `reconcile` | Replaced by GitHub's `schedule:`; local runs are manual |
-| Subscription quota percentages in the UI | The signals exist (`account/rateLimits/read` `[V]`, Claude status-line JSON `[V]`) but are not uniformly reachable headlessly; the columns are persisted, nothing renders them |
+| Subscription quota percentages in the UI | The signals exist (`account/rateLimits/read` `[V]`, Claude status-line JSON `[V]`, and since 2.1.263 the headless `stream-json` `rate_limit_event` `[V]`) but Codex has no headless equivalent; the columns are persisted, nothing renders them |
 | Session resume across cycles | `sessionPolicy: fresh` only; resume is additive later |
 | USD in headline views | Vendor cost fields are client-side estimates, documented as unsuitable for financial decisions `[V]` |
 
@@ -1348,10 +1371,10 @@ Not in the MVP, and each for a stated reason:
 
 | Spike | Question | Decides |
 |---|---|---|
-| **SPIKE-1** | Does `claude -p` with `CLAUDE_CODE_OAUTH_TOKEN` run headless on a hosted runner, with usage JSON and structured output, never `--bare`? | The `github-actions` backend's primary runtime. Failure → STOP (a) |
+| **SPIKE-1** | Does `claude -p` with `CLAUDE_CODE_OAUTH_TOKEN` run headless on a hosted runner, with usage JSON and structured output, never `--bare`? | The `github-actions` backend's primary runtime. Failure → STOP (a). **Passed 2026-09-06** (run 34024962852: C1-C4 and C7 PASS, claude-code 2.1.263) `[V]`; findings in `docs/spikes/README.md` §3 |
 | **SPIKE-2** | Codex Cloud R-runs: R1 task creation from a non-interactive process on subscription auth; R4 the result reaching GitHub without a click; R5 a schema-conforming JSON artifact ≥ 4/5; R7 `ready`/`error` distinguishable and bounded; R3 or R8 a trigger Loopmill can own | The `observed` backend. GO requires R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8) |
 | **SPIKE-2b** | Does a seeded `auth.json` survive refresh-token rotation on ephemeral runners (R11 terms)? | `codex` on `github-actions`. Failure keeps it flag-gated or removes it |
-| **SPIKE-3** | On real GitHub: CAS on the state branch, duplicate and concurrent delivery, an interrupted job, `GITHUB_TOKEN` dispatch chaining, the `repository_dispatch` default-branch restriction, per-step runner overhead | Sections 7-9. Local harness green (20/20) and 22 hosted runs on 2026-09-06 confirming chaining, the default-branch requirement and per-step overhead `[V]`; `repository_dispatch`, a forced CAS conflict and an interrupted job still open `[S]`. Failure changes the mechanism, not the positioning |
+| **SPIKE-3** | On real GitHub: CAS on the state branch, duplicate and concurrent delivery, an interrupted job, `GITHUB_TOKEN` dispatch chaining, the `repository_dispatch` default-branch restriction, per-step runner overhead | Sections 7-9. Local harness green (20/20) and 22 hosted runs on 2026-09-06 confirming chaining, the default-branch requirement and per-step overhead `[V]`; a forced CAS conflict, an interrupted job, a 32 KiB envelope and the concurrency group's one-pending-run behaviour measured 2026-09-06 `[V]`; `repository_dispatch` still open `[S]`. Failure changes the mechanism, not the positioning |
 
 **STOP conditions.** If one of these is true, the MVP does not ship as designed:
 

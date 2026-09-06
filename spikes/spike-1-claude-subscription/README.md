@@ -67,7 +67,13 @@ since it spends real tokens against your subscription.
 
 **From the GitHub UI:** Actions tab -> "SPIKE-1 - Claude Code on subscription
 OAuth only" -> Run workflow. Pick a branch, optionally set `model` (e.g.
-`sonnet`) and `scrub_test` (default `true`), and run.
+`sonnet`), `scrub_test` (default `true`), and `only`, and run.
+
+`only` takes a comma-separated list of check ids (e.g. `C6` or `C1,C6`); every
+check not in the list is reported as `SKIPPED` instead of being run. It exists
+to re-measure one check (typically C6, since it costs 8s+ per signal variant)
+without re-spending the whole run. `C10` (the environment record) always runs
+regardless of `only`, since it costs nothing.
 
 **From the CLI** (requires `gh` and push/write access to the repo):
 
@@ -77,7 +83,13 @@ gh workflow run spike-1-claude-subscription.yml --ref <branch>
 # with inputs:
 gh workflow run spike-1-claude-subscription.yml --ref <branch> \
   -f model=sonnet -f scrub_test=true
+
+# re-measure just C6:
+gh workflow run spike-1-claude-subscription.yml --ref <branch> -f only=C6
 ```
+
+Locally, the same selection is available via the `ONLY` environment variable
+(e.g. `ONLY=C6 bash run.sh`) — see "Local validation" below.
 
 Then watch it and pull the artifact once it finishes:
 
@@ -97,10 +109,10 @@ cat ./spike-1-out/RESULTS.md
 | **C4** | Same prompt, `--output-format stream-json --verbose` | Confirms the streaming event shape (`system/init`, `assistant`, `result`, …) that Loopmill's `execute(): AsyncIterable<AgentEvent>` would consume, and that the stream still ends in the same `result` object as C2. |
 | **C5a** | A tool-using prompt under `--max-turns 1`, `--permission-mode acceptEdits --permission-prompts none`, in a scratch directory | **Exit-code contract, part 1.** Whether a turn cap on a task that needs tools ends as `success` (finished within the cap) or `error_max_turns` (cut off) — and what the process exit code is either way. |
 | **C5b** | A deliberately invalid `--model` | **Exit-code contract, part 2.** Confirms invalid arguments fail loudly (non-zero exit, readable stderr) rather than silently falling back to something else — important for a runtime that has to tell FAILED apart from SUCCEEDED. |
-| **C6** (`sigint`/`sigterm`/`timeoutint`) | A long-running prompt, killed after 8s with `SIGINT`, then `SIGTERM`, then via `timeout -s INT 8` | **Cancel signal that preserves usage.** The CLI's own docs claim `SIGINT` ends the turn cleanly with a recorded result (and usage), while `SIGTERM` yields exit 143 with *no* result at all. Loopmill's `cancel(runId)` must know which signal to send if a cancelled node is still supposed to report token usage. |
+| **C6** (`sigint`/`sigterm`/`timeoutint`) | A long, pure text-generation prompt ("Write out the integers from 1 to 1500, one per line, with no other text before, between or after them. Do not use any tool; produce the numbers yourself"), run with `--tools "" --permission-mode default --permission-prompts none --max-turns 1` and killed after 8s with `SIGINT`, then `SIGTERM`, then via `timeout -s INT 8`. This is deliberately **not** plan mode: in plan mode the model can decline a non-planning request in about two seconds, so the 8s signal would reach an already-exited process and measure nothing (observed 2026-09-06). | **Cancel signal that preserves usage.** The CLI's own docs claim `SIGINT` ends the turn cleanly with a recorded result (and usage), while `SIGTERM` yields exit 143 with *no* result at all. Loopmill's `cancel(runId)` must know which signal to send if a cancelled node is still supposed to report token usage. Each variant records `signal_delivered` (whether `kill` actually found a live process at the 8s mark) alongside `terminal_reason`; `SIGINT`/`SIGTERM` are only graded PASS/FAIL when `signal_delivered=yes` — otherwise the row is `INFO`, since the signal never reached a live process. |
 | **C7** | C2's exact command, run detached (`setsid`) with stdin from `/dev/null`, under a 120s watchdog | **No-TTY hang behaviour.** Directly probes the failure mode reported in [anthropics/claude-code#9026](https://github.com/anthropics/claude-code/issues/9026): a `claude -p` invocation with no controlling terminal hanging instead of exiting. Exit code 124 means the watchdog had to kill it. |
 | **C8** (`bad`/`good`, only if `scrub_test`) | C2's command with an invalid `ANTHROPIC_API_KEY` exported alongside the OAuth token, then again without it | **Env precedence.** The docs state `ANTHROPIC_API_KEY` always wins over the OAuth token in `-p` mode with no fallback. This proves it empirically: the "bad" run is *expected* to fail (an invalid key was used instead of the valid subscription login), and the "good" run confirms the OAuth-only path still works right after. This is the exact mechanism Loopmill's environment policy depends on when it scrubs `ANTHROPIC_API_KEY` from a child process's environment (`docs/design/mvp-design.md` §13.2, deny list). |
-| **C9** | A trivial prompt, output grepped for `"hit your"` / `"limit"` | **Quota detectability.** There is no dedicated result subtype for a plan-limit hit — it is a generic failure with the limit message embedded in `result`/stderr. This check is informational: it only fires if you happen to be at your limit when you run the spike, but it records the raw text verbatim so a real hit can be matched against Loopmill's `WAITING_FOR_QUOTA` string patterns later. |
+| **C9** | A trivial prompt, output grepped for `"hit your"`, then for the limit phrases `usage limit`, `rate limit`, `limit reached`, `limit resets`, `too many requests` | **Quota detectability.** There is no dedicated result subtype for a plan-limit hit — it is a generic failure with the limit message embedded in `result`/stderr. The grep deliberately does **not** match a bare `"limit"`: the result object itself contains field names like `depth_limit` and `concurrency_limit` (subagent stats), so a bare match would always fire. This check is informational: it only fires if you happen to be at your limit when you run the spike, but it records the raw text verbatim so a real hit can be matched against Loopmill's `WAITING_FOR_QUOTA` string patterns later. |
 | **C10** | `node --version`, `claude --version`, `uname -a`, TTY check, `CLAUDE_CONFIG_DIR`/`HOME`/`PATH` | Baseline environment record so results are reproducible and comparable across runs/runners. |
 
 ## Pass/fail criteria
@@ -112,7 +124,14 @@ cat ./spike-1-out/RESULTS.md
   "success"`, the expected content. For a few checks (C5b, C8-bad, C6-sigterm)
   PASS means the *documented failure* was reproduced correctly — e.g. C8-bad
   is a PASS when the invalid API key run actually fails, because that is what
-  proves precedence.
+  proves precedence. PASS on **C2, C3, C4 and C8-good** additionally requires
+  `is_error: false` in the parsed result, not just `subtype: "success"`: the
+  CLI can report `subtype: "success"` together with `is_error: true` and exit
+  1 when it is not logged in, or when an invalid API key wins precedence over
+  the OAuth token (observed 2026-09-06). **C8-bad** is graded the mirror way:
+  it PASSes on a non-zero exit, a non-`"success"` subtype, or `is_error:
+  true` — any one of the three is accepted as proof the invalid key was
+  rejected.
 - **FAIL** — behavior diverged from what was expected/documented. This is
   the signal worth reading `out/<check>.summary.json` / `.err` for. In
   particular, a FAIL on **C1** or **C2** means the core premise of this
@@ -203,3 +222,7 @@ against a subscription you intend to test.
   masking in the job log.
 - `out/` is git-ignored in this directory (see `.gitignore`) — it is
   regenerated by every run and published as a build artifact, not committed.
+- `run.sh` expands its optional argv arrays (e.g. `MODEL_ARGS`) with the
+  `${arr[@]+"${arr[@]}"}` idiom rather than a plain `"${arr[@]}"`, so the dry
+  run also works under bash 3.2 with `set -u`, where expanding an empty array
+  the plain way is an unset-variable error.
