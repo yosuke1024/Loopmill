@@ -28,6 +28,7 @@
 import type { BackendCapabilities } from "./capabilities.ts";
 import type { Envelope } from "./envelope.ts";
 import type { AttemptRecord, Lease, RunSnapshot } from "./state.ts";
+import type { JsonValue, ResolvedEnvPolicy, ResolvedNode } from "./loop.ts";
 
 /** mvp-design.md §7.6 names the store's read/append shape `Snapshot`; it is `RunSnapshot`. */
 export type Snapshot = RunSnapshot;
@@ -87,21 +88,6 @@ export interface LeaseExpired {
   holder: LockHolder;
 }
 
-/** What `Dispatcher.dispatch` resolves with once a backend has accepted (or rejected) a Node
- * Execution. `backends/` refines this per backend. */
-export interface DispatchReceipt {
-  accepted: boolean;
-  dedupeKey?: string;
-}
-
-/** Minimal placeholder for the thing a `Dispatcher` is asked to run. `backends/` refines this
- * into the full request shape (resolved node, inputs, working directory, environment policy). */
-export interface NodeExecution {
-  nodeId: string;
-  cycleIndex: number;
-  attempt: number;
-}
-
 /** mvp-design.md §7.6: sqlite (MVP); local-dir and git-branch reserved (SPIKE-3). Synchronous —
  * see the deviation note at the top of this file. */
 export interface StateStore {
@@ -110,8 +96,82 @@ export interface StateStore {
   sweep(now: string): LeaseExpired[];
 }
 
-/** mvp-design.md §7.6: local, fake; github-actions reserved. */
+// ---------------------------------------------------------------------------------------------
+// Dispatcher (backends/): refined for m1 (docs/design/m1-plan.md `backends/` row).
+//
+// `NodeExecution` and `DispatchReceipt` (the m0 placeholders `dispatch(nodeExecution, envelope):
+// Promise<DispatchReceipt>` was sketched against) are removed: nothing outside this file ever
+// referenced them (checked across src/ and test/), and the shape they stood in for is now
+// `DispatchRequest` below, built directly from `mvp-design.md` §7.2/§11 and `state-machine.md`
+// §7.1/§10.4 rather than left as a placeholder for `backends/` to reinterpret.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * What a `Dispatcher` is asked to run: one Attempt of one Node Execution, fully resolved by the
+ * engine (mvp-design.md §7.2 step 6, §11; state-machine.md §10.1 Lease). Every reference in
+ * `inputs` has already been substituted to its current value (loop-file.md §9) — the dispatcher
+ * never resolves a reference itself, only renders `${name}` templates over what it is given.
+ *
+ * Decision (not in sheet), m1: `causationId` is added here, absent from the shape this task was
+ * briefed against. `envelope.md` §9.1 requires the completion envelope's `causationId` to be the
+ * `node-dispatched` event's own `eventId` ("the ONLY way a receiver can build the causation
+ * chain", §6.3) — without it on the request, a `Dispatcher` has no way to satisfy that rule, since
+ * a `Dispatcher` never sees the `node-dispatched` envelope itself (mvp-design.md §7.2 step 5: it
+ * is persisted in an earlier transaction, before dispatch). Optional because `describe()` and the
+ * `fake`/`local` unit tests do not always have (or need) a real one.
+ */
+export interface DispatchRequest {
+  runId: string;
+  loopId: string;
+  loopVersion: string;
+  slug: string;
+  cycleIndex: number;
+  nodeId: string;
+  attempt: number;
+  node: ResolvedNode;
+  /** Already resolved by the engine — every reference is a plain JSON value, ready to render. */
+  inputs: Record<string, JsonValue>;
+  /** Set when this attempt retries a cycle whose previous attempt changed nothing
+   * (state-machine.md §6.6, NO_PROGRESS) — the executor appends one prompt line noting it
+   * (`Decision (not in sheet), m1`, see `local/executor.ts`). */
+  retryHint?: "no_progress";
+  workspace: { repoRoot: string; worktreePath: string; branch: string; baseCommit: string };
+  env: ResolvedEnvPolicy;
+  deadlineAt: string;
+  timeoutMs: number | null;
+  dedupeKey: string;
+  /** The `node-dispatched` event's `eventId` — see the Decision above. */
+  causationId?: string;
+  signal?: AbortSignal;
+}
+
+/** What `Dispatcher.describe` reports without spawning anything or touching the filesystem
+ * beyond what its own backend needs to read (e.g. a prompt file) — `loopmill run --dry-run`
+ * prints exactly this (mvp-design.md acceptance criterion A16). `env` is the already-scrubbed
+ * child environment (A15: what would reach the subprocess, for the operator to audit). */
+export interface DispatchPlan {
+  argv: string[];
+  cwd: string;
+  env: Record<string, string>;
+  stdin: "/dev/null";
+  timeoutMs: number | null;
+  notes: string[];
+}
+
+/**
+ * mvp-design.md §7.6: local, fake; github-actions reserved. `dispatch` resolves to the
+ * completion envelope (`node-completed` | `node-failed` | `node-timed-out`, producer
+ * `backend:<id>`, envelope.md §9.1) once the backend has an answer for this Attempt, and
+ * **rejects** with a `LoopmillError` (`code: "dispatch_failed"`) only when the backend could not
+ * even start the work (e.g. the runtime binary could not be spawned at all) — the driver turns
+ * that rejection into a `dispatch-failed` event (state-machine.md §10.4). A runtime failure
+ * (the process ran and failed, timed out, or was cancelled) is never a rejection: it resolves
+ * with a `node-failed` / `node-timed-out` envelope like any other outcome, because node failure
+ * is data, not a broken dispatcher (mvp-design.md §7.3).
+ */
 export interface Dispatcher {
-  dispatch(nodeExecution: NodeExecution, envelope: Envelope): Promise<DispatchReceipt>;
+  dispatch(request: DispatchRequest, clock: { now(): string }): Promise<Envelope>;
+  /** Reports the plan `dispatch` would execute, without spawning anything. */
+  describe(request: DispatchRequest): DispatchPlan;
   capabilities(): BackendCapabilities;
 }

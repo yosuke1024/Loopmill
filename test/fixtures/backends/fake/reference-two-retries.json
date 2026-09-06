@@ -1,0 +1,103 @@
+{
+  "steps": {
+    "0:review-content:1": {
+      "status": "succeeded",
+      "structured": {
+        "needs_issue": true,
+        "title": "Broken link in the onboarding article",
+        "summary": "The article links to a docs page that returns 404."
+      },
+      "usageFixture": "codex-recorded-success",
+      "summary": "needs_issue=true: broken link found in the onboarding article"
+    },
+    "0:create-issue:1": {
+      "status": "succeeded",
+      "exitCode": 0,
+      "stdout": "https://github.com/example/example/issues/501\n",
+      "summary": "gh issue create exited 0"
+    },
+
+    "1:implement:1": {
+      "status": "succeeded",
+      "structured": { "changed": true, "summary": "Updated the link to point at the current docs page." },
+      "usageFixture": "claude-recorded-success",
+      "filesChanged": [
+        { "path": "site/onboarding.md", "digest": "sha256:0cba15f8deb23f741605df0a32876ae394bbf0ee0da47f29c5e78165fc7f4a28" }
+      ],
+      "summary": "changed=true: updated the link"
+    },
+    "1:run-tests:1": {
+      "status": "succeeded",
+      "exitCode": 0,
+      "stdout": "5 passing (110ms)\n",
+      "summary": "npm test exited 0"
+    },
+    "1:review-changes:1": {
+      "status": "succeeded",
+      "structured": {
+        "approved": false,
+        "reasons": "The link now resolves, but the fix has no regression test guarding against a future 404."
+      },
+      "usageFixture": "codex-recorded-structured",
+      "summary": "approved=false (cycle 1): no regression test added"
+    },
+
+    "2:implement:1": {
+      "status": "succeeded",
+      "structured": { "changed": true, "summary": "Added a regression test asserting the docs link resolves." },
+      "usageFixture": "claude-recorded-success",
+      "filesChanged": [
+        { "path": "site/onboarding.md", "digest": "sha256:013b94348b041c8150906e92eebe6909659e72933d99ad6f389947838bb4d192" },
+        { "path": "test/onboarding-links.test.js", "digest": "sha256:cd7088663f959bec3c2524dfca12040036ef300287ae92b4de0211a7ef5e7f42" }
+      ],
+      "summary": "changed=true: added a regression test for the docs link"
+    },
+    "2:run-tests:1": {
+      "status": "succeeded",
+      "exitCode": 0,
+      "stdout": "6 passing (140ms)\n",
+      "summary": "npm test exited 0"
+    },
+    "2:review-changes:1": {
+      "status": "succeeded",
+      "structured": {
+        "approved": false,
+        "reasons": "The new regression test asserts the wrong URL -- it still points at the broken path."
+      },
+      "usageFixture": "codex-recorded-structured",
+      "summary": "approved=false (cycle 2): the regression test targets the wrong URL"
+    },
+
+    "3:implement:1": {
+      "status": "succeeded",
+      "structured": { "changed": true, "summary": "Fixed the regression test to target the corrected URL." },
+      "usageFixture": "claude-recorded-success",
+      "filesChanged": [
+        { "path": "test/onboarding-links.test.js", "digest": "sha256:393a4470c00ad7d3c467c1f04e92072f9d582d58d25223fc12a1af048ff0f9fc" }
+      ],
+      "summary": "changed=true: fixed the regression test's target URL"
+    },
+    "3:run-tests:1": {
+      "status": "succeeded",
+      "exitCode": 0,
+      "stdout": "6 passing (140ms)\n",
+      "summary": "npm test exited 0"
+    },
+    "3:review-changes:1": {
+      "status": "succeeded",
+      "structured": {
+        "approved": true,
+        "reasons": "The link is fixed, and the regression test now correctly guards against the reported failure."
+      },
+      "usageFixture": "codex-recorded-structured",
+      "summary": "approved=true (cycle 3): fix confirmed, tests pass"
+    },
+
+    "0:create-pr:1": {
+      "status": "succeeded",
+      "exitCode": 0,
+      "stdout": "https://github.com/example/example/pull/512\n",
+      "summary": "gh pr create exited 0"
+    }
+  }
+}

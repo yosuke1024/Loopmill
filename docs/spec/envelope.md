@@ -249,6 +249,11 @@ Rules the schema enforces:
 - The four buckets are **disjoint**: `totalInputTokens = fresh + cacheWrite + cacheRead`, and
   `totalTokens = totalInputTokens + outputTokens`. `reasoningTokens` is reference only and is never
   summed into anything.
+- *Amendment (m0+), schema 1.1.0:* the object also accepts the six audit fields of
+  `usage-normalization.md` §1.2 (`usageBasis`, `sessionRef`, `usageAtAttemptStart`,
+  `listPriceEquivalentUsd`, `perModel`) and `model: null` / `source.runtimeVersion: null`, so the
+  envelope carries the stored `UsageRecord` in full rather than a stripped copy. All optional; a 1.0.0
+  record stays valid.
 - `provenance: unavailable` requires **all buckets null**, `complete: false` and a `provenanceNote`.
   An unmeasurable attempt is never stored as zero: zero is a measurement, null is the absence of one,
   and a report that cannot tell them apart is worse than no report.

@@ -77,7 +77,9 @@
     "artifactRefs": {
       "type": "array",
       "maxItems": 32,
-      "items": { "$ref": "#/$defs/artifactRef" },
+      "items": {
+        "$ref": "#/$defs/artifactRef"
+      },
       "description": "Pointers to everything too large, too binary or too mutable to live inside the envelope."
     },
     "usage": {
@@ -135,234 +137,564 @@
     {
       "$comment": "Node-level events carry the full node coordinates.",
       "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "$ref": "#/$defs/nodeLevelEventType" } }
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "$ref": "#/$defs/nodeLevelEventType"
+          }
+        }
       },
-      "then": { "required": ["cycle", "nodeId", "attempt"] }
+      "then": {
+        "required": [
+          "cycle",
+          "nodeId",
+          "attempt"
+        ]
+      }
     },
     {
       "$comment": "Run-level events carry no node coordinates at all.",
       "if": {
-        "required": ["eventType"],
+        "required": [
+          "eventType"
+        ],
         "properties": {
-          "eventType": { "enum": ["run-requested", "run-started", "run-finished", "resumed"] }
+          "eventType": {
+            "enum": [
+              "run-requested",
+              "run-started",
+              "run-finished",
+              "resumed"
+            ]
+          }
         }
       },
       "then": {
-        "properties": { "cycle": false, "nodeId": false, "attempt": false }
+        "properties": {
+          "cycle": false,
+          "nodeId": false,
+          "attempt": false
+        }
       }
     },
     {
       "$comment": "A Retry Edge traversal names the cycle it enters and the edge, never a node or an attempt.",
       "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "retry-edge-taken" } }
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "retry-edge-taken"
+          }
+        }
       },
       "then": {
-        "required": ["cycle", "retryEdge"],
-        "properties": { "nodeId": false, "attempt": false }
+        "required": [
+          "cycle",
+          "retryEdge"
+        ],
+        "properties": {
+          "nodeId": false,
+          "attempt": false
+        }
       }
     },
     {
       "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "run-requested" } }
-      },
-      "then": { "required": ["trigger"] }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "node-dispatched" } }
-      },
-      "then": { "required": ["dispatch"] }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "dispatch-failed" } }
-      },
-      "then": { "required": ["dispatch", "error"] }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "node-completed" } }
-      },
-      "then": { "required": ["result"] }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "node-failed" } }
-      },
-      "then": { "required": ["error"] }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "node-observed" } }
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "run-requested"
+          }
+        }
       },
       "then": {
-        "required": ["matcher", "artifactRefs"],
-        "properties": { "artifactRefs": { "type": "array", "minItems": 1 } }
+        "required": [
+          "trigger"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "node-dispatched"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "dispatch"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "dispatch-failed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "dispatch",
+          "error"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "node-completed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "result"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "node-failed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "node-observed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "matcher",
+          "artifactRefs"
+        ],
+        "properties": {
+          "artifactRefs": {
+            "type": "array",
+            "minItems": 1
+          }
+        }
       }
     },
     {
       "$comment": "A matcher that found something usable must carry what it found.",
       "if": {
-        "required": ["eventType", "matcher"],
+        "required": [
+          "eventType",
+          "matcher"
+        ],
         "properties": {
-          "eventType": { "const": "node-observed" },
-          "matcher": { "type": "object", "required": ["outcome"], "properties": { "outcome": { "const": "found_valid" } } }
+          "eventType": {
+            "const": "node-observed"
+          },
+          "matcher": {
+            "type": "object",
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "const": "found_valid"
+              }
+            }
+          }
         }
       },
-      "then": { "required": ["result"] }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "resumed" } }
-      },
-      "then": { "required": ["resume"] }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "human-requested" } }
-      },
       "then": {
-        "required": ["human"],
-        "properties": { "human": { "type": "object", "required": ["mode", "subjectDigest"] } }
+        "required": [
+          "result"
+        ]
       }
     },
     {
       "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "human-decided" } }
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "resumed"
+          }
+        }
       },
       "then": {
-        "required": ["human"],
-        "properties": { "human": { "type": "object", "required": ["decision", "subjectDigest"] } }
+        "required": [
+          "resume"
+        ]
       }
     },
     {
       "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "quota-parked" } }
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "human-requested"
+          }
+        }
       },
-      "then": { "required": ["quotaResetsAt"] }
+      "then": {
+        "required": [
+          "human"
+        ],
+        "properties": {
+          "human": {
+            "type": "object",
+            "required": [
+              "mode",
+              "subjectDigest"
+            ]
+          }
+        }
+      }
     },
     {
       "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "run-finished" } }
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "human-decided"
+          }
+        }
       },
-      "then": { "required": ["outcome"] }
+      "then": {
+        "required": [
+          "human"
+        ],
+        "properties": {
+          "human": {
+            "type": "object",
+            "required": [
+              "decision",
+              "subjectDigest"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "quota-parked"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "quotaResetsAt"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "run-finished"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "outcome"
+        ]
+      }
     },
     {
       "$comment": "A rejected delivery is only auditable if it names what it rejected and why.",
       "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "const": "ignored-stale" } }
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "ignored-stale"
+          }
+        }
       },
-      "then": { "required": ["reason", "causationId"] }
+      "then": {
+        "required": [
+          "reason",
+          "causationId"
+        ]
+      }
     },
     {
       "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "enum": ["resumed", "lease-expired"] } }
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "resumed",
+              "lease-expired"
+            ]
+          }
+        }
       },
-      "then": { "required": ["reason"] }
+      "then": {
+        "required": [
+          "reason"
+        ]
+      }
     },
     {
       "$comment": "Event-scoped objects appear only on the event types that define them.",
       "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "not": { "const": "run-requested" } } }
-      },
-      "then": { "properties": { "trigger": false } }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "not": { "const": "run-finished" } } }
-      },
-      "then": { "properties": { "outcome": false } }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "not": { "const": "retry-edge-taken" } } }
-      },
-      "then": { "properties": { "retryEdge": false } }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "not": { "const": "node-observed" } } }
-      },
-      "then": { "properties": { "matcher": false } }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": { "eventType": { "not": { "const": "resumed" } } }
-      },
-      "then": { "properties": { "resume": false } }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": {
-          "eventType": { "not": { "enum": ["node-dispatched", "dispatch-failed"] } }
-        }
-      },
-      "then": { "properties": { "dispatch": false } }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": {
-          "eventType": { "not": { "enum": ["human-requested", "human-decided"] } }
-        }
-      },
-      "then": { "properties": { "human": false } }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
-        "properties": {
-          "eventType": { "not": { "enum": ["quota-parked", "node-failed"] } }
-        }
-      },
-      "then": { "properties": { "quotaResetsAt": false } }
-    },
-    {
-      "if": {
-        "required": ["eventType"],
+        "required": [
+          "eventType"
+        ],
         "properties": {
           "eventType": {
             "not": {
-              "enum": ["node-completed", "node-failed", "node-timed-out", "node-observed"]
+              "const": "run-requested"
             }
           }
         }
       },
-      "then": { "properties": { "result": false, "usage": false } }
+      "then": {
+        "properties": {
+          "trigger": false
+        }
+      }
     },
     {
       "if": {
-        "required": ["eventType"],
+        "required": [
+          "eventType"
+        ],
         "properties": {
           "eventType": {
             "not": {
-              "enum": ["node-failed", "node-timed-out", "node-observed", "dispatch-failed", "lease-expired"]
+              "const": "run-finished"
             }
           }
         }
       },
-      "then": { "properties": { "error": false } }
+      "then": {
+        "properties": {
+          "outcome": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "not": {
+              "const": "retry-edge-taken"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "retryEdge": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "not": {
+              "const": "node-observed"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "matcher": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "not": {
+              "const": "resumed"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "resume": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "not": {
+              "enum": [
+                "node-dispatched",
+                "dispatch-failed"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dispatch": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "not": {
+              "enum": [
+                "human-requested",
+                "human-decided"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "human": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "not": {
+              "enum": [
+                "quota-parked",
+                "node-failed"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "quotaResetsAt": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "not": {
+              "enum": [
+                "node-completed",
+                "node-failed",
+                "node-timed-out",
+                "node-observed"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "result": false,
+          "usage": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "eventType"
+        ],
+        "properties": {
+          "eventType": {
+            "not": {
+              "enum": [
+                "node-failed",
+                "node-timed-out",
+                "node-observed",
+                "dispatch-failed",
+                "lease-expired"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error": false
+        }
+      }
     }
   ],
   "$defs": {
@@ -478,10 +810,19 @@
     "result": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "properties": {
         "status": {
-          "enum": ["succeeded", "failed", "timed_out", "cancelled", "skipped", "no_progress"],
+          "enum": [
+            "succeeded",
+            "failed",
+            "timed_out",
+            "cancelled",
+            "skipped",
+            "no_progress"
+          ],
           "description": "Terminal state of the Node Execution attempt, lowercased. The loop-level verdict (pass/fail) is never carried here; it lives in structured."
         },
         "exitCode": {
@@ -503,10 +844,21 @@
     "artifactRef": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "ref"],
+      "required": [
+        "kind",
+        "ref"
+      ],
       "properties": {
         "kind": {
-          "enum": ["commit", "branch", "pr", "issue", "comment", "actions-artifact", "file"]
+          "enum": [
+            "commit",
+            "branch",
+            "pr",
+            "issue",
+            "comment",
+            "actions-artifact",
+            "file"
+          ]
         },
         "ref": {
           "type": "string",
@@ -542,16 +894,29 @@
         "complete"
       ],
       "properties": {
-        "runtime": { "$ref": "#/$defs/runtimeId" },
-        "model": {
-          "type": "string",
-          "maxLength": 128,
-          "$ref": "#/$defs/secretFree"
+        "runtime": {
+          "$ref": "#/$defs/runtimeId"
         },
-        "freshInputTokens": { "$ref": "#/$defs/tokenBucket" },
-        "cacheWriteTokens": { "$ref": "#/$defs/tokenBucket" },
-        "cacheReadTokens": { "$ref": "#/$defs/tokenBucket" },
-        "outputTokens": { "$ref": "#/$defs/tokenBucket" },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128,
+          "description": "The model, when the runtime reports one at the attempt level; null when it reports per model (claude-code modelUsage basis) or not at all (codex)."
+        },
+        "freshInputTokens": {
+          "$ref": "#/$defs/tokenBucket"
+        },
+        "cacheWriteTokens": {
+          "$ref": "#/$defs/tokenBucket"
+        },
+        "cacheReadTokens": {
+          "$ref": "#/$defs/tokenBucket"
+        },
+        "outputTokens": {
+          "$ref": "#/$defs/tokenBucket"
+        },
         "reasoningTokens": {
           "$ref": "#/$defs/tokenBucket",
           "description": "Reference only. Never summed into totalTokens and never shown as a headline figure."
@@ -565,7 +930,12 @@
           "description": "totalInputTokens + outputTokens."
         },
         "provenance": {
-          "enum": ["reported", "derived", "estimated", "unavailable"],
+          "enum": [
+            "reported",
+            "derived",
+            "estimated",
+            "unavailable"
+          ],
           "description": "reported = the runtime stated it; derived = computed from cumulative runtime figures; estimated = heuristic, never summed with reported/derived in a headline; unavailable = not measurable."
         },
         "provenanceNote": {
@@ -575,13 +945,25 @@
         "source": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["runtimeVersion", "eventKind"],
+          "required": [
+            "runtimeVersion",
+            "eventKind"
+          ],
           "properties": {
-            "runtimeVersion": { "type": "string", "maxLength": 64 },
+            "runtimeVersion": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 64
+            },
             "eventKind": {
-              "type": "string",
+              "type": [
+                "string",
+                "null"
+              ],
               "maxLength": 64,
-              "description": "The runtime record the numbers came from, e.g. result.usage or turn.completed.usage."
+              "description": "The runtime record the numbers came from, e.g. result.usage or turn.completed; null when no such record existed (provenance unavailable)."
             }
           }
         },
@@ -590,66 +972,251 @@
           "description": "False when the attempt ended without a usage record the producer trusts."
         },
         "listPriceEquivalentUsd": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "minimum": 0,
-          "description": "Internal normalisation only. Never a headline figure, never shown by default; a subscription run has no per-run price."
+          "description": "usage-normalization.md section 5.2: the vendor's own list-price estimate, stored verbatim, never a headline figure."
+        },
+        "usageBasis": {
+          "enum": [
+            "result.usage",
+            "modelUsage",
+            "turn.completed",
+            "fixture",
+            "none"
+          ],
+          "description": "usage-normalization.md section 1.2: which vendor structure the record was normalized from."
+        },
+        "sessionRef": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "claude-session",
+                "codex-thread"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "description": "usage-normalization.md section 1.2: the runtime's own conversation handle."
+        },
+        "usageAtAttemptStart": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "usage-normalization.md section 1.2: the vendor counter at the start of the attempt, in the vendor's own field names (all-zero for codex in the MVP)."
+        },
+        "perModel": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "model",
+              "freshInputTokens",
+              "cacheWriteTokens",
+              "cacheReadTokens",
+              "outputTokens",
+              "reasoningTokens",
+              "totalInputTokens",
+              "totalTokens",
+              "listPriceEquivalentUsd",
+              "costBasis"
+            ],
+            "properties": {
+              "model": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "freshInputTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheWriteTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheReadTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reasoningTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "totalInputTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "totalTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "listPriceEquivalentUsd": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "costBasis": {
+                "enum": [
+                  "list",
+                  "managed",
+                  "unknown",
+                  null
+                ]
+              }
+            }
+          },
+          "description": "usage-normalization.md section 1.2: the per-model split when the runtime reports one; the parent buckets equal its element-wise sum."
         }
       },
       "allOf": [
         {
           "$comment": "An unmeasurable attempt stores nulls, never zeros.",
           "if": {
-            "required": ["provenance"],
-            "properties": { "provenance": { "const": "unavailable" } }
+            "required": [
+              "provenance"
+            ],
+            "properties": {
+              "provenance": {
+                "const": "unavailable"
+              }
+            }
           },
           "then": {
-            "required": ["provenanceNote"],
+            "required": [
+              "provenanceNote"
+            ],
             "properties": {
-              "freshInputTokens": { "type": "null" },
-              "cacheWriteTokens": { "type": "null" },
-              "cacheReadTokens": { "type": "null" },
-              "outputTokens": { "type": "null" },
-              "totalInputTokens": { "type": "null" },
-              "totalTokens": { "type": "null" },
-              "complete": { "const": false }
+              "freshInputTokens": {
+                "type": "null"
+              },
+              "cacheWriteTokens": {
+                "type": "null"
+              },
+              "cacheReadTokens": {
+                "type": "null"
+              },
+              "outputTokens": {
+                "type": "null"
+              },
+              "totalInputTokens": {
+                "type": "null"
+              },
+              "totalTokens": {
+                "type": "null"
+              },
+              "complete": {
+                "const": false
+              }
             }
           }
         },
         {
           "if": {
-            "required": ["provenance"],
-            "properties": { "provenance": { "const": "estimated" } }
+            "required": [
+              "provenance"
+            ],
+            "properties": {
+              "provenance": {
+                "const": "estimated"
+              }
+            }
           },
-          "then": { "required": ["provenanceNote"] }
+          "then": {
+            "required": [
+              "provenanceNote"
+            ]
+          }
         },
         {
           "$comment": "Measured usage must say which runtime record it came from.",
           "if": {
-            "required": ["provenance"],
-            "properties": { "provenance": { "enum": ["reported", "derived"] } }
+            "required": [
+              "provenance"
+            ],
+            "properties": {
+              "provenance": {
+                "enum": [
+                  "reported",
+                  "derived"
+                ]
+              }
+            }
           },
           "then": {
-            "required": ["source"],
+            "required": [
+              "source"
+            ],
             "properties": {
-              "freshInputTokens": { "type": "integer" },
-              "cacheWriteTokens": { "type": "integer" },
-              "cacheReadTokens": { "type": "integer" },
-              "outputTokens": { "type": "integer" },
-              "totalInputTokens": { "type": "integer" },
-              "totalTokens": { "type": "integer" }
+              "freshInputTokens": {
+                "type": "integer"
+              },
+              "cacheWriteTokens": {
+                "type": "integer"
+              },
+              "cacheReadTokens": {
+                "type": "integer"
+              },
+              "outputTokens": {
+                "type": "integer"
+              },
+              "totalInputTokens": {
+                "type": "integer"
+              },
+              "totalTokens": {
+                "type": "integer"
+              }
             }
           }
         }
       ]
     },
     "tokenBucket": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "minimum": 0
     },
     "error": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "message", "classified"],
+      "required": [
+        "code",
+        "message",
+        "classified"
+      ],
       "properties": {
         "code": {
           "$ref": "#/$defs/machineToken",
@@ -679,9 +1246,17 @@
     "trigger": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind"],
+      "required": [
+        "kind"
+      ],
       "properties": {
-        "kind": { "enum": ["manual", "schedule", "event"] },
+        "kind": {
+          "enum": [
+            "manual",
+            "schedule",
+            "event"
+          ]
+        },
         "source": {
           "type": "string",
           "maxLength": 64,
@@ -706,18 +1281,34 @@
           "$ref": "#/$defs/secretFree",
           "description": "Key used to decide whether an equivalent open change already exists (SKIPPED)."
         },
-        "scheduledFor": { "$ref": "#/$defs/timestamp" }
+        "scheduledFor": {
+          "$ref": "#/$defs/timestamp"
+        }
       }
     },
     "dispatch": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["backendId", "transport", "expectedProducer"],
+      "required": [
+        "backendId",
+        "transport",
+        "expectedProducer"
+      ],
       "properties": {
-        "backendId": { "$ref": "#/$defs/backendId" },
-        "runtimeId": { "$ref": "#/$defs/runtimeId" },
+        "backendId": {
+          "$ref": "#/$defs/backendId"
+        },
+        "runtimeId": {
+          "$ref": "#/$defs/runtimeId"
+        },
         "transport": {
-          "enum": ["repository_dispatch", "workflow_dispatch", "comment", "process", "api"]
+          "enum": [
+            "repository_dispatch",
+            "workflow_dispatch",
+            "comment",
+            "process",
+            "api"
+          ]
         },
         "expectedProducer": {
           "$ref": "#/$defs/producer",
@@ -744,14 +1335,38 @@
     "retryEdge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["edgeId", "fromNodeId", "toNodeId", "fromCycle", "toCycle", "maxIterations", "traversals", "budgetConsumed"],
+      "required": [
+        "edgeId",
+        "fromNodeId",
+        "toNodeId",
+        "fromCycle",
+        "toCycle",
+        "maxIterations",
+        "traversals",
+        "budgetConsumed"
+      ],
       "properties": {
-        "edgeId": { "$ref": "#/$defs/nodeId" },
-        "fromNodeId": { "$ref": "#/$defs/nodeId" },
-        "toNodeId": { "$ref": "#/$defs/nodeId" },
-        "fromCycle": { "type": "integer", "minimum": 0 },
-        "toCycle": { "type": "integer", "minimum": 1 },
-        "maxIterations": { "type": "integer", "minimum": 1 },
+        "edgeId": {
+          "$ref": "#/$defs/nodeId"
+        },
+        "fromNodeId": {
+          "$ref": "#/$defs/nodeId"
+        },
+        "toNodeId": {
+          "$ref": "#/$defs/nodeId"
+        },
+        "fromCycle": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "toCycle": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1
+        },
         "traversals": {
           "type": "integer",
           "minimum": 0,
@@ -766,10 +1381,18 @@
     "matcher": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "ref", "outcome"],
+      "required": [
+        "kind",
+        "ref",
+        "outcome"
+      ],
       "properties": {
         "kind": {
-          "enum": ["comment-block", "file-in-diff", "cloud-status"],
+          "enum": [
+            "comment-block",
+            "file-in-diff",
+            "cloud-status"
+          ],
           "description": "Which surface the observed backend's result was read from."
         },
         "ref": {
@@ -780,7 +1403,10 @@
           "description": "The comment id, the repository-relative file path, or the vendor task id the matcher looked at."
         },
         "outcome": {
-          "enum": ["found_valid", "found_invalid"],
+          "enum": [
+            "found_valid",
+            "found_invalid"
+          ],
           "description": "found_valid carries result; found_invalid carries error and drives the retry-or-fail branch."
         }
       }
@@ -788,14 +1414,24 @@
     "resume": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind"],
+      "required": [
+        "kind"
+      ],
       "properties": {
         "kind": {
-          "enum": ["due", "manual", "interrupted"],
+          "enum": [
+            "due",
+            "manual",
+            "interrupted"
+          ],
           "description": "Why the Run is being un-parked: a due quota window, an operator command, or recovery of an INTERRUPTED Run."
         },
         "decision": {
-          "enum": ["retry", "skip", "fail"],
+          "enum": [
+            "retry",
+            "skip",
+            "fail"
+          ],
           "description": "Only meaningful for kind: interrupted — re-dispatch the node, skip it, or abandon the Run."
         },
         "actor": {
@@ -809,27 +1445,45 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "mode": { "enum": ["cli", "pull-request-review", "label"] },
+        "mode": {
+          "enum": [
+            "cli",
+            "pull-request-review",
+            "label"
+          ]
+        },
         "subjectDigest": {
           "$ref": "#/$defs/sha256",
           "description": "Digest of exactly what is being approved. A new attempt produces a new digest and invalidates every earlier approval."
         },
-        "decision": { "enum": ["approve", "reject", "cancel"] },
+        "decision": {
+          "enum": [
+            "approve",
+            "reject",
+            "cancel"
+          ]
+        },
         "decidedBy": {
           "type": "string",
           "maxLength": 128,
           "$ref": "#/$defs/secretFree",
           "description": "Authenticated identity of the decider, as the boundary saw it."
         },
-        "deadline": { "$ref": "#/$defs/timestamp" },
-        "note": { "$ref": "#/$defs/shortText" }
+        "deadline": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "note": {
+          "$ref": "#/$defs/shortText"
+        }
       }
     },
     "outcome": {
       "$comment": "Amendment (m0+), envelope schema 1.1.0: per-state fields of state-machine.md §2.2's Outcome, added additively so a 1.0.0 run-finished record stays valid 1.1.0.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["state"],
+      "required": [
+        "state"
+      ],
       "properties": {
         "state": {
           "enum": [
@@ -856,7 +1510,9 @@
           "minimum": 0,
           "description": "Highest cycle index reached."
         },
-        "summary": { "$ref": "#/$defs/summaryText" },
+        "summary": {
+          "$ref": "#/$defs/summaryText"
+        },
         "nodeId": {
           "$ref": "#/$defs/nodeId",
           "description": "FAILED: the node the failure is attributed to, where known."
@@ -867,7 +1523,11 @@
           "description": "FAILED: the cycle the failure is attributed to, where known."
         },
         "by": {
-          "enum": ["human", "platform", "timeout-escalation"],
+          "enum": [
+            "human",
+            "platform",
+            "timeout-escalation"
+          ],
           "description": "CANCELLED: who or what cancelled the Run."
         },
         "actor": {
@@ -891,7 +1551,11 @@
           "description": "MAX_ITERATIONS_EXCEEDED: the edge's configured iteration budget."
         },
         "budgetKey": {
-          "enum": ["maxMeasuredTokens", "maxUnmeasuredExecutions", "maxStepsPerRun"],
+          "enum": [
+            "maxMeasuredTokens",
+            "maxUnmeasuredExecutions",
+            "maxStepsPerRun"
+          ],
           "description": "BUDGET_EXCEEDED: which budget was exhausted."
         },
         "limit": {
@@ -903,11 +1567,18 @@
           "description": "BUDGET_EXCEEDED: the observed value that exceeded limit."
         },
         "expiryReason": {
-          "enum": ["max_runtime", "human_timeout"],
+          "enum": [
+            "max_runtime",
+            "human_timeout"
+          ],
           "description": "EXPIRED: which deadline elapsed."
         },
         "skipReason": {
-          "enum": ["dedupe", "min_interval", "runs_per_window"],
+          "enum": [
+            "dedupe",
+            "min_interval",
+            "runs_per_window"
+          ],
           "description": "SKIPPED: why the Run was skipped without dispatching anything."
         },
         "ref": {
@@ -920,60 +1591,134 @@
       "allOf": [
         {
           "if": {
-            "required": ["state"],
-            "properties": { "state": { "const": "SUCCEEDED" } }
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "const": "SUCCEEDED"
+              }
+            }
           },
           "then": {
-            "required": ["endLabel"],
-            "properties": { "failureReason": false }
+            "required": [
+              "endLabel"
+            ],
+            "properties": {
+              "failureReason": false
+            }
           }
         },
         {
           "if": {
-            "required": ["state"],
-            "properties": { "state": { "const": "FAILED" } }
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "const": "FAILED"
+              }
+            }
           },
-          "then": { "required": ["failureReason"] }
+          "then": {
+            "required": [
+              "failureReason"
+            ]
+          }
         },
         {
           "$comment": "Amendment (m0+): CANCELLED carries who cancelled the Run.",
           "if": {
-            "required": ["state"],
-            "properties": { "state": { "const": "CANCELLED" } }
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "const": "CANCELLED"
+              }
+            }
           },
-          "then": { "required": ["by"] }
+          "then": {
+            "required": [
+              "by"
+            ]
+          }
         },
         {
           "$comment": "Amendment (m0+): MAX_ITERATIONS_EXCEEDED carries the exhausted edge's budget.",
           "if": {
-            "required": ["state"],
-            "properties": { "state": { "const": "MAX_ITERATIONS_EXCEEDED" } }
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "const": "MAX_ITERATIONS_EXCEEDED"
+              }
+            }
           },
-          "then": { "required": ["edgeId", "traversals", "maxIterations"] }
+          "then": {
+            "required": [
+              "edgeId",
+              "traversals",
+              "maxIterations"
+            ]
+          }
         },
         {
           "$comment": "Amendment (m0+): BUDGET_EXCEEDED carries which budget and by how much.",
           "if": {
-            "required": ["state"],
-            "properties": { "state": { "const": "BUDGET_EXCEEDED" } }
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "const": "BUDGET_EXCEEDED"
+              }
+            }
           },
-          "then": { "required": ["budgetKey", "limit", "observed"] }
+          "then": {
+            "required": [
+              "budgetKey",
+              "limit",
+              "observed"
+            ]
+          }
         },
         {
           "$comment": "Amendment (m0+): EXPIRED carries which deadline elapsed.",
           "if": {
-            "required": ["state"],
-            "properties": { "state": { "const": "EXPIRED" } }
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "const": "EXPIRED"
+              }
+            }
           },
-          "then": { "required": ["expiryReason"] }
+          "then": {
+            "required": [
+              "expiryReason"
+            ]
+          }
         },
         {
           "$comment": "Amendment (m0+): SKIPPED carries why nothing was dispatched.",
           "if": {
-            "required": ["state"],
-            "properties": { "state": { "const": "SKIPPED" } }
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "const": "SKIPPED"
+              }
+            }
           },
-          "then": { "required": ["skipReason"] }
+          "then": {
+            "required": [
+              "skipReason"
+            ]
+          }
         }
       ]
     }

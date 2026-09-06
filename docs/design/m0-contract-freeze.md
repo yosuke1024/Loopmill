@@ -119,6 +119,8 @@ a sheet entry that contradicts a frozen point is handled as an amendment.
 | 2026-09-06 | `envelope.schema.json`: the `backendId` description said "MVP: github-actions, observed, local, fake"; it now names `local` and `fake` as the MVP backends and the other two as reserved ids kept in the enum. No validation semantics changed; the Envelope stays at 1.0.0 | editorial |
 | 2026-09-06 | Status lines of the four specs marked "frozen at m0"; `state-machine.json` `specVersion` v0.5 → v0.6 (the tables had already been aligned to v0.6 in the same change set as ADR-002) | editorial |
 | 2026-09-06 | `envelope.schema.json` 1.0.0 → 1.1.0: `$defs.outcome` gains the per-state fields of `state-machine.md` §2.2 so `run-finished` can carry the engine's `Outcome` in full; additive | amendment |
+| 2026-09-07 | `envelope.schema.json` 1.1.0 (same version, not yet released): `$defs.usage` accepts the six audit fields of usage-normalization.md §1.2 and null for `model`, `source.runtimeVersion` and `source.eventKind`, so a completion envelope carries the stored `UsageRecord` in full; additive | amendment |
+| 2026-09-07 | `loop-file.md` §8.2: a command node's `env` allowlist has no default — unset means no further restriction, an explicit empty list is honoured literally; `ResolvedCommandNode.env` becomes `string[] \| null` | clarification |
 
 ---
 

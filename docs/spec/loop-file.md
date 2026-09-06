@@ -523,7 +523,7 @@ create-issue:
 |---|---|---|---|
 | `argv` | string[], ≥1 | — | Executed with `shell: false` on the backend that owns the working tree, never in the control-plane job. There is no shell, so there is no word splitting, no globbing, no `;`, no `&&`. |
 | `cwd` | repo-relative path | repo root | Absolute paths and `..` segments are rejected. |
-| `env` | string[] | `[]` | Allowlist of variable names, intersected with the effective preserve + inject set. |
+| `env` | string[] | — | Allowlist of variable names, intersected with the effective preserve + inject set. Unset means no further restriction; an explicit empty list is honoured literally (Decision (not in sheet), m1). |
 
 A command node exposes `stdout`, `exitCode` and `filesChanged` to later nodes. It
 has no `runtime` and no `auth`: it holds no vendor credential.

@@ -87,7 +87,7 @@ test("resolveLoop: a node-level value always wins over defaults.* (§6.2)", () =
   assert.equal(tidy.permissionProfile, "readonly");
 });
 
-test("resolveLoop: command node defaults -- cwd to the repo root, env to an empty allowlist", () => {
+test("resolveLoop: command node defaults -- cwd to the repo root, env unset (null: no further restriction)", () => {
   const file: LoopFile = {
     ...MINIMAL,
     nodes: {
@@ -98,7 +98,7 @@ test("resolveLoop: command node defaults -- cwd to the repo root, env to an empt
   const loop = resolveLoop(file);
   const cmd = loop.nodes.tidy as ResolvedCommandNode;
   assert.equal(cmd.cwd, ".");
-  assert.deepEqual(cmd.env, []);
+  assert.equal(cmd.env, null);
   assert.equal(cmd.backend, "local");
   assert.equal(cmd.onFailure, "fail_run");
   assert.equal(cmd.effects, "none");

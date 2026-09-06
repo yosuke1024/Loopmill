@@ -164,7 +164,7 @@ function resolveNodes(file: LoopFile): Record<string, ResolvedNode> {
         backend: node.backend ?? defaults.backend ?? "local",
         argv: node.argv,
         cwd: node.cwd ?? ".",
-        env: node.env ?? [],
+        env: node.env ?? null,
         inputs: resolveInputsField(node.inputs),
         ...timeoutFields(node.timeout),
         onFailure: node.onFailure ?? "fail_run",

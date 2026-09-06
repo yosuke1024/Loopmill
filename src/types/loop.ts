@@ -247,7 +247,7 @@ export interface ResolvedCommandNode {
   backend: LoopFileBackendId;
   argv: string[];
   cwd: string; // resolved: repo root ('.') when the node did not set one
-  env: string[]; // resolved: [] when the node did not set one
+  env: string[] | null; // null when the node did not set one (no further restriction); [] is an explicit empty allowlist
   inputs: ResolvedInputs;
   timeout?: string;
   timeoutMs?: number;
