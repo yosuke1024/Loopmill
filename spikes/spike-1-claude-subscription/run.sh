@@ -34,6 +34,17 @@ mkdir -p "$OUT_DIR"
 DRY_RUN="${SPIKE_DRY_RUN:-0}"
 SCRUB_TEST="${SCRUB_TEST:-true}"
 MODEL="${MODEL:-}"
+# ONLY: optional comma-separated list of check ids (C1,C2,...,C6,...,C10). When
+# set, every other check is reported as SKIPPED. Used to re-measure one check
+# (e.g. C6) without re-spending the whole run.
+ONLY="${ONLY:-}"
+
+# selected <id> -> 0 when the check should run
+selected() {
+  [ -z "$ONLY" ] && return 0
+  case ",$ONLY," in *",$1,"*) return 0 ;; esac
+  return 1
+}
 
 MODEL_ARGS=()
 if [ -n "$MODEL" ]; then
@@ -261,7 +272,7 @@ check_C2() {
   local cmd=(claude -p "Reply with exactly: LOOPMILL-OK" \
     --output-format json --max-turns 1 \
     --permission-mode plan --permission-prompts none)
-  cmd+=("${MODEL_ARGS[@]}")
+  cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
   if [ "$DRY_RUN" = "1" ]; then
     dry_row "$id" "$desc" "$(show_argv "${cmd[@]}") < /dev/null"
@@ -272,17 +283,20 @@ check_C2() {
   local code=$?
   gen_summary "$OUT_DIR/${id}.json" "$OUT_DIR/${id}.summary.json"
 
-  local subtype result
+  local subtype result is_error
   subtype=$(jget "$OUT_DIR/${id}.summary.json" "subtype")
   result=$(jget "$OUT_DIR/${id}.summary.json" "result")
+  is_error=$(jget "$OUT_DIR/${id}.summary.json" "is_error")
 
+  # `subtype` alone is not a success signal: an unauthenticated or
+  # mis-keyed run still reports subtype=success with is_error=true.
   local status="FAIL"
-  if [ "$code" = "0" ] && [ "$subtype" = "success" ] && [[ "$result" == *"LOOPMILL-OK"* ]]; then
+  if [ "$code" = "0" ] && [ "$subtype" = "success" ] && [ "$is_error" = "false" ] && [[ "$result" == *"LOOPMILL-OK"* ]]; then
     status="PASS"
   fi
 
   append_row "$id" "$desc" "$status" \
-    "exit=$code subtype=$subtype result=\"$result\" (see C2.summary.json)"
+    "exit=$code subtype=$subtype is_error=$is_error result=\"$result\" (see C2.summary.json)"
 }
 
 # ---------------------------------------------------------------------------
@@ -296,7 +310,7 @@ check_C3() {
     --output-format json --max-turns 1 \
     --permission-mode plan --permission-prompts none \
     --json-schema "$schema")
-  cmd+=("${MODEL_ARGS[@]}")
+  cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
   if [ "$DRY_RUN" = "1" ]; then
     dry_row "$id" "$desc" "$(show_argv "${cmd[@]}") < /dev/null"
@@ -307,8 +321,9 @@ check_C3() {
   local code=$?
   gen_summary "$OUT_DIR/${id}.json" "$OUT_DIR/${id}.summary.json"
 
-  local subtype verdict reason validates
+  local subtype verdict reason validates is_error
   subtype=$(jget "$OUT_DIR/${id}.summary.json" "subtype")
+  is_error=$(jget "$OUT_DIR/${id}.summary.json" "is_error")
   verdict=$(jget "$OUT_DIR/${id}.summary.json" "structured_output.verdict")
   reason=$(jget "$OUT_DIR/${id}.summary.json" "structured_output.reason")
 
@@ -320,12 +335,12 @@ check_C3() {
   fi
 
   local status="FAIL"
-  if [ "$code" = "0" ] && [ "$subtype" = "success" ] && [ "$validates" = "yes" ]; then
+  if [ "$code" = "0" ] && [ "$subtype" = "success" ] && [ "$is_error" = "false" ] && [ "$validates" = "yes" ]; then
     status="PASS"
   fi
 
   append_row "$id" "$desc" "$status" \
-    "exit=$code subtype=$subtype verdict=$verdict validates=$validates (see C3.summary.json)"
+    "exit=$code subtype=$subtype is_error=$is_error verdict=$verdict validates=$validates (see C3.summary.json)"
 }
 
 # ---------------------------------------------------------------------------
@@ -336,7 +351,7 @@ check_C4() {
   local cmd=(claude -p "Reply with exactly: LOOPMILL-OK" \
     --output-format stream-json --verbose --max-turns 1 \
     --permission-mode plan --permission-prompts none)
-  cmd+=("${MODEL_ARGS[@]}")
+  cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
   if [ "$DRY_RUN" = "1" ]; then
     dry_row "$id" "$desc" "$(show_argv "${cmd[@]}") < /dev/null"
@@ -347,18 +362,19 @@ check_C4() {
   local code=$?
   stream_summary "$OUT_DIR/${id}.json" "$OUT_DIR/${id}.summary.json"
 
-  local line_count assistant_count final_subtype
+  local line_count assistant_count final_subtype final_is_error
   line_count=$(jget "$OUT_DIR/${id}.summary.json" "line_count")
   assistant_count=$(jget "$OUT_DIR/${id}.summary.json" "assistant_message_count")
   final_subtype=$(jget "$OUT_DIR/${id}.summary.json" "final_result.subtype")
+  final_is_error=$(jget "$OUT_DIR/${id}.summary.json" "final_result.is_error")
 
   local status="FAIL"
-  if [ "$code" = "0" ] && [ "$final_subtype" = "success" ] && [ -n "$assistant_count" ] && [ "$assistant_count" -ge 1 ] 2>/dev/null; then
+  if [ "$code" = "0" ] && [ "$final_subtype" = "success" ] && [ "$final_is_error" = "false" ] && [ -n "$assistant_count" ] && [ "$assistant_count" -ge 1 ] 2>/dev/null; then
     status="PASS"
   fi
 
   append_row "$id" "$desc" "$status" \
-    "exit=$code lines=$line_count assistant_msgs=$assistant_count final_subtype=$final_subtype (see C4.summary.json)"
+    "exit=$code lines=$line_count assistant_msgs=$assistant_count final_subtype=$final_subtype final_is_error=$final_is_error (see C4.summary.json)"
 }
 
 # ---------------------------------------------------------------------------
@@ -372,7 +388,7 @@ check_C5a() {
   local cmd=(claude -p "$prompt" \
     --output-format json --max-turns 1 \
     --permission-mode acceptEdits --permission-prompts none)
-  cmd+=("${MODEL_ARGS[@]}")
+  cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
   if [ "$DRY_RUN" = "1" ]; then
     dry_row "$id" "$desc" "(in a temp dir) $(show_argv "${cmd[@]}") < /dev/null"
@@ -434,15 +450,21 @@ check_C5b() {
 # check_C6_bg <variant> <signal-name> -- launches claude in the background,
 # waits 8s, sends the signal, and records timing + whether a final result
 # with usage was captured.
+# The prompt must keep the model streaming for well over 8s and must not need
+# tools. Plan mode is deliberately NOT used here: in plan mode the model may
+# decline a non-planning request in ~2s, so the signal would reach an already
+# exited process and the check would measure nothing (observed on 2026-09-06).
+C6_PROMPT="Write out the integers from 1 to 600, one per line, with no other text before, between or after them."
+
 check_C6_bg() {
   local variant="$1" signal="$2"
   local id="C6-${variant}"
   local desc="signal handling: background + ${signal} after 8s"
-  local prompt="Count slowly from 1 to 200, one number per line, thinking carefully between numbers."
+  local prompt="$C6_PROMPT"
   local cmd=(claude -p "$prompt" \
-    --output-format json --max-turns 20 \
-    --permission-mode plan --permission-prompts none)
-  cmd+=("${MODEL_ARGS[@]}")
+    --output-format json --max-turns 1 \
+    --permission-mode default --permission-prompts none)
+  cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
   if [ "$DRY_RUN" = "1" ]; then
     dry_row "$id" "$desc" "$(show_argv "${cmd[@]}") < /dev/null & sleep 8; kill -s $signal \$!"
@@ -458,7 +480,10 @@ check_C6_bg() {
   "${cmd[@]}" >"$raw_out" 2>"$raw_err" < /dev/null &
   local pid=$!
   sleep 8
-  kill -s "$signal" "$pid" 2>/dev/null
+  # Record whether the process was still alive when the signal was sent. If it
+  # had already exited, nothing below measures signal handling.
+  local delivered="no"
+  if kill -s "$signal" "$pid" 2>/dev/null; then delivered="yes"; fi
   wait "$pid"
   local code=$?
   end=$(date +%s.%N)
@@ -470,8 +495,10 @@ check_C6_bg() {
   rm -f "$raw_out" "$raw_err"
 
   gen_summary "$OUT_DIR/${id}.json" "$OUT_DIR/${id}.summary.json"
-  local parse_ok has_usage
+  local parse_ok has_usage subtype terminal_reason
   parse_ok=$(jget "$OUT_DIR/${id}.summary.json" "parse_ok")
+  subtype=$(jget "$OUT_DIR/${id}.summary.json" "subtype")
+  terminal_reason=$(jget "$OUT_DIR/${id}.summary.json" "terminal_reason")
   has_usage="no"
   if [ "$parse_ok" = "true" ]; then
     local usage_present
@@ -482,29 +509,32 @@ check_C6_bg() {
   # Documented expectation (research brief, fact #18):
   #   SIGINT  -> turn ends cleanly, a final result WITH usage is recorded.
   #   SIGTERM -> exit 143, turn left unfinished, NO result recorded.
+  # Neither can be graded unless the signal actually reached a live process.
   local status="INFO"
-  case "$signal" in
-    INT)
-      if [ "$has_usage" = "yes" ]; then status="PASS"; else status="FAIL"; fi
-      ;;
-    TERM)
-      if [ "$code" = "143" ] && [ "$has_usage" = "no" ]; then status="PASS"; else status="FAIL"; fi
-      ;;
-  esac
+  if [ "$delivered" = "yes" ]; then
+    case "$signal" in
+      INT)
+        if [ "$has_usage" = "yes" ]; then status="PASS"; else status="FAIL"; fi
+        ;;
+      TERM)
+        if [ "$code" = "143" ] && [ "$has_usage" = "no" ]; then status="PASS"; else status="FAIL"; fi
+        ;;
+    esac
+  fi
 
   append_row "$id" "$desc" "$status" \
-    "exit=$code elapsed=${elapsed}s result_parsed=$parse_ok has_usage=$has_usage (see C6-${variant}.summary.json)"
+    "signal_delivered=$delivered exit=$code elapsed=${elapsed}s result_parsed=$parse_ok subtype=$subtype terminal_reason=$terminal_reason has_usage=$has_usage (see C6-${variant}.summary.json)"
 }
 
 # check_C6_timeout_int: `timeout -s INT 8 claude ...` as specified
 check_C6_timeout_int() {
   local id="C6-timeoutint"
   local desc="signal handling: timeout -s INT 8 (coreutils wrapper)"
-  local prompt="Count slowly from 1 to 200, one number per line, thinking carefully between numbers."
+  local prompt="$C6_PROMPT"
   local cmd=(timeout -s INT 8 claude -p "$prompt" \
-    --output-format json --max-turns 20 \
-    --permission-mode plan --permission-prompts none)
-  cmd+=("${MODEL_ARGS[@]}")
+    --output-format json --max-turns 1 \
+    --permission-mode default --permission-prompts none)
+  cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
   if [ "$DRY_RUN" = "1" ]; then
     dry_row "$id" "$desc" "$(show_argv "${cmd[@]}") < /dev/null"
@@ -519,8 +549,9 @@ check_C6_timeout_int() {
   elapsed=$(awk -v a="$start" -v b="$end" 'BEGIN { printf "%.2f", b - a }' 2>/dev/null || echo "?")
 
   gen_summary "$OUT_DIR/${id}.json" "$OUT_DIR/${id}.summary.json"
-  local parse_ok has_usage
+  local parse_ok has_usage terminal_reason
   parse_ok=$(jget "$OUT_DIR/${id}.summary.json" "parse_ok")
+  terminal_reason=$(jget "$OUT_DIR/${id}.summary.json" "terminal_reason")
   has_usage="no"
   if [ "$parse_ok" = "true" ]; then
     local usage_present
@@ -534,7 +565,7 @@ check_C6_timeout_int() {
   # above for the code-based check). Note: 124 means SIGINT was sent, not
   # that the process hung -- see C7 for the actual hang probe.
   append_row "$id" "$desc" "INFO" \
-    "timeout_exit=$code elapsed=${elapsed}s result_parsed=$parse_ok has_usage=$has_usage (see C6-timeoutint.summary.json; note: coreutils timeout returns 124 on its own timeout regardless of the child's response to the signal, unless --preserve-status is used)"
+    "timeout_exit=$code elapsed=${elapsed}s result_parsed=$parse_ok terminal_reason=$terminal_reason has_usage=$has_usage (see C6-timeoutint.summary.json; note: coreutils timeout returns 124 on its own timeout regardless of the child's response to the signal, unless --preserve-status is used)"
 }
 
 # ---------------------------------------------------------------------------
@@ -549,7 +580,7 @@ check_C7() {
   local inner_cmd=(claude -p "$prompt" \
     --output-format json --max-turns 1 \
     --permission-mode plan --permission-prompts none)
-  inner_cmd+=("${MODEL_ARGS[@]}")
+  inner_cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
   local cmd
   if [ "$have_setsid" = "yes" ]; then
@@ -598,7 +629,7 @@ check_C8() {
   local cmd=(claude -p "$prompt" \
     --output-format json --max-turns 1 \
     --permission-mode plan --permission-prompts none)
-  cmd+=("${MODEL_ARGS[@]}")
+  cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
   if [ "$DRY_RUN" = "1" ]; then
     dry_row "$id_bad" "$desc_bad" "ANTHROPIC_API_KEY=sk-ant-invalid-spike-*** $(show_argv "${cmd[@]}") < /dev/null"
@@ -618,27 +649,32 @@ check_C8() {
   local stderr_bad
   stderr_bad=$(head -c 300 "$OUT_DIR/${id_bad}.err" 2>/dev/null | tr '\n' ' ')
 
+  local is_error_bad result_bad
+  is_error_bad=$(jget "$OUT_DIR/${id_bad}.summary.json" "is_error")
+  result_bad=$(jget "$OUT_DIR/${id_bad}.summary.json" "result")
+
   local status_bad="FAIL"
-  if [ "$code_bad" != "0" ] || [ "$subtype_bad" != "success" ]; then
+  if [ "$code_bad" != "0" ] || [ "$subtype_bad" != "success" ] || [ "$is_error_bad" = "true" ]; then
     status_bad="PASS"
   fi
   append_row "$id_bad" "$desc_bad" "$status_bad" \
-    "exit=$code_bad subtype=$subtype_bad stderr=\"$stderr_bad\" (expected: failure, proving API-key precedence; see C8-bad.summary.json)"
+    "exit=$code_bad subtype=$subtype_bad is_error=$is_error_bad result=\"$result_bad\" stderr=\"$stderr_bad\" (expected: failure, proving API-key precedence; see C8-bad.summary.json)"
 
   # (good) re-run C2's exact shape without the bad key to confirm the
   # OAuth-only path is unaffected by the previous (isolated) export.
   run_and_finalize "$id_good" "${cmd[@]}"
   local code_good=$?
   gen_summary "$OUT_DIR/${id_good}.json" "$OUT_DIR/${id_good}.summary.json"
-  local subtype_good
+  local subtype_good is_error_good
   subtype_good=$(jget "$OUT_DIR/${id_good}.summary.json" "subtype")
+  is_error_good=$(jget "$OUT_DIR/${id_good}.summary.json" "is_error")
 
   local status_good="FAIL"
-  if [ "$code_good" = "0" ] && [ "$subtype_good" = "success" ]; then
+  if [ "$code_good" = "0" ] && [ "$subtype_good" = "success" ] && [ "$is_error_good" = "false" ]; then
     status_good="PASS"
   fi
   append_row "$id_good" "$desc_good" "$status_good" \
-    "exit=$code_good subtype=$subtype_good (see C8-good.summary.json)"
+    "exit=$code_good subtype=$subtype_good is_error=$is_error_good (see C8-good.summary.json)"
 }
 
 # ---------------------------------------------------------------------------
@@ -647,7 +683,7 @@ check_C8() {
 check_C9() {
   local id="C9" desc="quota probe: grep for a plan-limit message (informational)"
   local cmd=(claude -p "Say OK" --output-format json --max-turns 1)
-  cmd+=("${MODEL_ARGS[@]}")
+  cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
   if [ "$DRY_RUN" = "1" ]; then
     dry_row "$id" "$desc" "$(show_argv "${cmd[@]}") < /dev/null"
@@ -657,11 +693,14 @@ check_C9() {
   run_and_finalize "$id" "${cmd[@]}"
   local code=$?
 
+  # The result object itself contains field names such as "depth_limit" and
+  # "concurrency_limit" (subagent_stats), so a bare "limit" grep always
+  # matches. Look for the message shapes a plan/rate limit actually uses.
   local hit="no"
   if grep -qi "hit your" "$OUT_DIR/${id}.json" "$OUT_DIR/${id}.err" 2>/dev/null; then
     hit="yes"
-  elif grep -qi "limit" "$OUT_DIR/${id}.json" "$OUT_DIR/${id}.err" 2>/dev/null; then
-    hit="maybe (matched generic 'limit', see files)"
+  elif grep -qiE "usage limit|rate limit|limit reached|limit resets|too many requests" "$OUT_DIR/${id}.json" "$OUT_DIR/${id}.err" 2>/dev/null; then
+    hit="maybe (matched a limit phrase, see files)"
   fi
 
   append_row "$id" "$desc" "INFO" \
@@ -720,6 +759,7 @@ init_results() {
     echo "- Dry run: $([ "$DRY_RUN" = "1" ] && echo "yes" || echo "no")"
     echo "- scrub_test input: $SCRUB_TEST"
     echo "- model override: $([ -n "$MODEL" ] && echo "$MODEL" || echo "(account default)")"
+    echo "- only: $([ -n "$ONLY" ] && echo "$ONLY" || echo "(all checks)")"
     echo
     echo "| Check | Description | Status | Details |"
     echo "|---|---|---|---|"
@@ -741,21 +781,26 @@ finalize_results() {
   } >> "$RESULTS_MD"
 }
 
+skip_row() { append_row "$1" "$2" "SKIPPED" "not selected by ONLY=$ONLY"; }
+
 main() {
   init_results
 
-  check_C1
-  check_C2
-  check_C3
-  check_C4
-  check_C5a
-  check_C5b
-  check_C6_bg sigint INT
-  check_C6_bg sigterm TERM
-  check_C6_timeout_int
-  check_C7
-  check_C8
-  check_C9
+  if selected C1; then check_C1; else skip_row C1 "claude auth status --json"; fi
+  if selected C2; then check_C2; else skip_row C2 "claude -p plain prompt, --output-format json"; fi
+  if selected C3; then check_C3; else skip_row C3 "claude -p --json-schema structured output"; fi
+  if selected C4; then check_C4; else skip_row C4 "claude -p --output-format stream-json --verbose"; fi
+  if selected C5; then check_C5a; check_C5b; else skip_row C5a "tool-using prompt, --max-turns 1"; skip_row C5b "deliberately invalid --model"; fi
+  if selected C6; then
+    check_C6_bg sigint INT
+    check_C6_bg sigterm TERM
+    check_C6_timeout_int
+  else
+    skip_row C6-sigint "signal handling: INT"; skip_row C6-sigterm "signal handling: TERM"; skip_row C6-timeoutint "signal handling: timeout -s INT"
+  fi
+  if selected C7; then check_C7; else skip_row C7 "no-TTY hang probe"; fi
+  if selected C8; then check_C8; else skip_row C8-bad "API key precedence"; skip_row C8-good "OAuth-only confirmed"; fi
+  if selected C9; then check_C9; else skip_row C9 "quota probe"; fi
   check_C10
 
   finalize_results

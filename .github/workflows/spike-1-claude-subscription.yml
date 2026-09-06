@@ -28,6 +28,14 @@ on:
         required: false
         type: boolean
         default: true
+      only:
+        description: >-
+          Optional comma-separated list of check ids to run (e.g. "C6" or
+          "C1,C6"); every other check is reported as SKIPPED. Leave empty
+          to run everything. C10 (environment record) always runs.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -63,6 +71,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SCRUB_TEST: ${{ inputs.scrub_test }}
           MODEL: ${{ inputs.model }}
+          ONLY: ${{ inputs.only }}
         run: |
           # Belt and suspenders: in Claude Code's non-interactive (-p) mode,
           # ANTHROPIC_API_KEY is always used when present, with no fallback
