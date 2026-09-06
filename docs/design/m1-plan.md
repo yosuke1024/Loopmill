@@ -47,9 +47,9 @@ which conventions, and where each piece stands. It is updated as work lands; it 
 |---|---|---|---|
 | W0 | skeleton (`package.json`, `tsconfig`, `bin/`), `types/`, `util/`, this plan | — | done 2026-09-06 (67 tests) |
 | W1 | `loop-file/`, `envelope/`, `usage/`, `store/` — four independent modules | W0 | done 2026-09-06 (362 tests in total; envelope schema amended to 1.1.0 for `outcome`; the store is synchronous by design) |
-| W2 | `engine/` | W0, `types/` from W1 | in progress |
-| W3 | `backends/` (`fake`, then `local`), `driver/`, `cli/` | W1, W2 | `backends/` in progress alongside W2; `driver/` and `cli/` after both |
-| W4 | the reference loop end to end on `fake` (A31); then, with the maintainer's go-ahead, a live run on the maintainer's machine that lands a PR (the m1 cut-line) | W3 | pending |
+| W2 | `engine/` | W0, `types/` from W1 | done 2026-09-07 (177 tests; four spec amendments recorded in the freeze log) |
+| W3 | `backends/` (`fake`, then `local`), `driver/`, `cli/` | W1, W2 | done 2026-09-07 (615 tests in total); a follow-up fixes the defects a manual run exposed |
+| W4 | the reference loop end to end on `fake` (A31); then, with the maintainer's go-ahead, a live run on the maintainer's machine that lands a PR (the m1 cut-line) | W3 | A31 green in `test/driver/e2e-fake.test.ts`; the live run needs a target repository and the maintainer's go-ahead |
 
 ## 5. Acceptance criteria this milestone must meet
 
