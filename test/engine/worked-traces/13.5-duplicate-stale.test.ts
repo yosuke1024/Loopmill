@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drive, runRequested, nodeCompleted, leaseExpired, fullUsage, wireUsage, ctxAt, RUN_ID, LOOP_ID, LOOP_VERSION, type Step } from "../../fixtures/engine/helpers.ts";
+import { drive, runRequested, nodeCompleted, leaseExpired, fullUsage, wireUsage, ctxAt, assertActions, RUN_ID, LOOP_ID, LOOP_VERSION, type Step } from "../../fixtures/engine/helpers.ts";
 import { NODES } from "../../fixtures/engine/reference-loop.ts";
 import { transition } from "../../../src/engine/transition.ts";
 import type { Envelope } from "../../../src/types/envelope.ts";
@@ -35,6 +35,7 @@ test("13.5 row 1-2: exact eventId redelivery collapses to duplicate, persists no
   steps.push({ now: t1, event: e1, expectKind: "applied" });
   const r1 = drive(steps);
   assert.equal(r1.snapshot.nodes["1:implement"]?.state, "SUCCEEDED");
+  assertActions(r1.results[r1.results.length - 1]!, "row 1-2 hop: implement completes -> run-tests dispatched");
 
   steps.push({ now: "2026-09-06T06:21:00.000Z", event: e1, expectKind: "duplicate" });
   const r2 = drive(steps);
@@ -73,10 +74,12 @@ test("13.5 row 3: a fresh eventId, same (nodeId,cycle,attempt,eventType), alread
 
 test("13.5 row 4: a superseded attempt's late report is ignored-stale(stale_attempt) and its usage is still banked (D-20, O-5)", () => {
   const { steps } = baseline();
-  const afterDispatch = drive(steps).snapshot;
+  const dispatchResult = drive(steps);
+  const afterDispatch = dispatchResult.snapshot;
   assert.equal(afterDispatch.current?.nodeId, NODES.implement);
   assert.equal(afterDispatch.current?.attempt, 1);
   assert.ok(afterDispatch.lease);
+  assertActions(dispatchResult.results[dispatchResult.results.length - 1]!, "row 4 hop 1: baseline dispatch of implement attempt 1");
 
   // The lease genuinely expires (implement's timeout PT30M + the default dispatch grace).
   const t1 = afterDispatch.lease!.expiresAt;
@@ -84,6 +87,7 @@ test("13.5 row 4: a superseded attempt's late report is ignored-stale(stale_atte
   const afterLease = drive(steps);
   assert.equal(afterLease.snapshot.current?.attempt, 2, "R-31: retryable + effects:none -> re-dispatch attempt+1");
   assert.equal(afterLease.snapshot.attempts["1:implement:1"]?.state, "LOST");
+  assertActions(afterLease.results[afterLease.results.length - 1]!, "row 4 hop 2: lease-expired -> RUNNING, implement attempt 2 dispatched");
 
   // The original (now superseded) attempt 1's completion arrives late, carrying usage.
   const staleReport = nodeCompleted(t1, {
@@ -170,6 +174,7 @@ test("13.5 row 7: a report after run-finished is ignored-stale(run_terminal), R-
   });
   const afterCancel = drive(steps);
   assert.equal(afterCancel.snapshot.status, "CANCELLED");
+  assertActions(afterCancel.results[afterCancel.results.length - 1]!, "row 7 hop: node-failed(cancelled) -> CANCELLED(by: platform)");
 
   const lateReport = nodeCompleted("2026-09-06T06:40:00.000Z", { cycle: 1, nodeId: NODES.runTests, attempt: 1, result: { status: "succeeded", exitCode: 0 } });
   steps.push({ now: "2026-09-06T06:40:00.000Z", event: lateReport, expectKind: "ignored-stale" });

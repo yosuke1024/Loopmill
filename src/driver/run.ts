@@ -3,7 +3,7 @@
 // Implements the seven-phase algorithm of `docs/design/m1-plan.md`'s `run.ts` row: the sweep,
 // `--dry-run`, admission, the lock, the first transaction, the dispatch loop, and the exit.
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join, resolve as resolvePath } from "node:path";
@@ -17,6 +17,7 @@ import type { Dispatcher, DispatchRequest } from "../types/interfaces.ts";
 import type { JsonValue, ResolvedNode } from "../types/loop.ts";
 import type { Outcome, RunSnapshot, RunState, TransitionResult } from "../types/state.ts";
 import { LoopmillError } from "../util/errors.ts";
+import { redact } from "../util/redact.ts";
 import { formatRfc3339, parseRfc3339 } from "../util/time.ts";
 import type { RunContext } from "./context.ts";
 
@@ -29,6 +30,7 @@ import { runSweep } from "./sweep.ts";
 import { applyStep } from "./step.ts";
 import { writeRunReport } from "./report.ts";
 import { defaultDispatchers } from "./dispatchers.ts";
+import { dispatchPlanPath } from "./status.ts";
 
 export interface Writer {
   write(chunk: string): void;
@@ -130,6 +132,45 @@ function emittedOf(result: TransitionResult): Envelope[] {
  * store, not a re-signed or re-validated one). */
 function withCommitRef(envelope: Envelope, commit: string): Envelope {
   return { ...envelope, artifactRefs: [{ kind: "commit", ref: commit }, ...(envelope.artifactRefs ?? [])] };
+}
+
+/** Item 2's own shape: the `dispatch-failed` control-plane envelope, built with the same
+ * coordinates and `dispatch` payload the corresponding `node-dispatched` carried (mvp-design.md
+ * §7.2 step 6, state-machine.md R-29/R-30) — used both when `dispatchers[node.backend]` is
+ * missing (`code: "no_dispatcher"`) and when `dispatcher.dispatch()` itself rejects with
+ * `dispatch_failed` (`code` is the rejection's own `LoopmillError.code`, currently always
+ * `"dispatch_failed"`). A missing/rejecting dispatcher is never an abort: this envelope is
+ * applied through `transition()` exactly like a real completion, so the Run's own retry/exhaust
+ * policy (R-29 retries up to `maxAttempts`, R-30 fails the Run) decides what happens next, never
+ * a bare process crash. */
+function buildDispatchFailedEnvelope(params: {
+  snapshot: RunSnapshot;
+  runId: string;
+  current: NonNullable<RunSnapshot["current"]>;
+  backendId: string;
+  deadlineAt: string;
+  dedupeKey: string;
+  causationId: string;
+  code: string;
+  message: string;
+  now: string;
+}): Envelope {
+  return makeEnvelope(
+    {
+      eventType: "dispatch-failed",
+      producer: "control-plane",
+      loopId: params.snapshot.loopId,
+      loopVersion: params.snapshot.loopVersion,
+      runId: params.runId,
+      cycle: params.current.cycleIndex,
+      nodeId: params.current.nodeId,
+      attempt: params.current.attempt,
+      causationId: params.causationId,
+      dispatch: { backendId: params.backendId, transport: "process", expectedProducer: `backend:${params.backendId}`, deadline: params.deadlineAt, dedupeKey: params.dedupeKey },
+      error: { code: params.code, message: params.message, classified: "backend_error" },
+    },
+    { now: params.now },
+  );
 }
 
 function outcomeExitCode(outcome: Outcome): number {
@@ -278,30 +319,89 @@ export interface ContinueRunInput {
 }
 
 /**
+ * Item 1's own instruction: a cheap I-30-style guard that `continueRun`'s snapshot-derived
+ * control-flow decision and `transition.ts`'s own `result.actions` never silently disagree.
+ * Only meaningful for `applied` results — `duplicate`/`ignored-stale`/`invalid` all carry a
+ * statically empty `actions: []` (`src/types/state.ts`) regardless of what `result.snapshot`
+ * still shows from a prior transition, so there is nothing to cross-check for those. Throws
+ * `LoopmillError("internal_invariant", ...)`, which every caller of `continueRun` already maps to
+ * exit 1 (the `catch` blocks in `runLoop`/`gates.ts`'s `decideGate`, via `err.exitCode`).
+ */
+function assertActionsAgree(result: TransitionResult): void {
+  if (result.kind !== "applied") return;
+  const snapshot = result.snapshot;
+  const current = snapshot.current;
+  const dispatchActions = result.actions.filter((a): a is Extract<typeof a, { type: "dispatch" }> => a.type === "dispatch");
+
+  if (current && current.nodeState === "DISPATCHED") {
+    if (dispatchActions.length !== 1) {
+      throw new LoopmillError(
+        "internal_invariant",
+        `snapshot says ${current.nodeId} (cycle ${current.cycleIndex}, attempt ${current.attempt}) is DISPATCHED, but result.actions carries ${dispatchActions.length} dispatch action(s) instead of exactly one`,
+      );
+    }
+    const a = dispatchActions[0]!;
+    if (a.nodeId !== current.nodeId || a.cycle !== current.cycleIndex || a.attempt !== current.attempt) {
+      throw new LoopmillError(
+        "internal_invariant",
+        `result.actions' dispatch (${a.nodeId}, cycle ${a.cycle}, attempt ${a.attempt}) disagrees with snapshot.current (${current.nodeId}, cycle ${current.cycleIndex}, attempt ${current.attempt})`,
+      );
+    }
+    return;
+  }
+  if (dispatchActions.length > 0) {
+    throw new LoopmillError(
+      "internal_invariant",
+      `result.actions carries a dispatch action but snapshot.current is not DISPATCHED (status ${snapshot.status})`,
+    );
+  }
+
+  // Not a dispatch: the other three action kinds each correspond to exactly one Run status this
+  // same transition can have just produced (WAITING_HUMAN / WAITING_FOR_QUOTA / INTERRUPTED / a
+  // terminal status) — checked only when the resulting status actually is one of those, since an
+  // `applied` result reached via a mid-flight event (e.g. N-07's heartbeat on node-started) both
+  // carries no Action and leaves the Run's status wherever it already was.
+  if (snapshot.status === "WAITING_HUMAN") {
+    const approvals = result.actions.filter((a) => a.type === "request-approval");
+    if (approvals.length !== 1) {
+      throw new LoopmillError("internal_invariant", `snapshot.status is WAITING_HUMAN but result.actions carries ${approvals.length} request-approval action(s) instead of exactly one`);
+    }
+  } else if (snapshot.status === "WAITING_FOR_QUOTA") {
+    const waits = result.actions.filter((a) => a.type === "wait");
+    if (waits.length !== 1) {
+      throw new LoopmillError("internal_invariant", `snapshot.status is WAITING_FOR_QUOTA but result.actions carries ${waits.length} wait action(s) instead of exactly one`);
+    }
+  } else if (snapshot.status === "INTERRUPTED") {
+    const waits = result.actions.filter((a) => a.type === "wait" && a.until === null);
+    if (waits.length !== 1) {
+      throw new LoopmillError("internal_invariant", `snapshot.status is INTERRUPTED but result.actions carries ${waits.length} wait(until: null) action(s) instead of exactly one`);
+    }
+  } else if (isTerminalRun(snapshot.status)) {
+    const finishes = result.actions.filter((a) => a.type === "finish");
+    if (finishes.length !== 1) {
+      throw new LoopmillError("internal_invariant", `snapshot.status is terminal (${snapshot.status}) but result.actions carries ${finishes.length} finish action(s) instead of exactly one`);
+    }
+  }
+}
+
+/**
  * Phases 6-7 of mvp-design.md §7.2, factored out so `run.ts`'s own `run-requested` continuation
  * and `gates.ts`'s `human-decided` continuation (mvp-design.md §12: "continues the Run in the
  * same process") share one dispatch loop and one exit-code mapping instead of two. Does **not**
  * take or release the loop's lock itself — both callers already hold it (`gates.ts` takes it the
  * same way `runLoop` does, immediately before calling this).
  *
- * Decision (not in sheet), m1 — driven by the resulting `RunSnapshot`, not `TransitionResult
- * .actions`: `docs/design/m1-plan.md`'s brief for this file (and `state-machine.md` §5.1's own
- * `Action` union) frames "dispatch the next node" / "request-approval" / "wait" / "finish" as
- * something `transition()` hands back as a described action for the driver to perform. As
- * checked against `src/engine/transition.ts` at the time this module was written, `actions` is
- * never actually populated for a dispatch decision — every `ok(...)` call site at the base of
- * the recursion either omits the `actions` parameter (defaulting to `[]`) or threads through a
- * prior call's `[]`, and no call site anywhere constructs an `Action` of `type: "dispatch"` (or
- * `"request-approval"`/`"wait"`/`"finish"`) at all (grepped for `"dispatch"`/`'dispatch'` as a
- * literal `type` value: zero matches outside the type definition itself). This function
- * therefore reads `result.snapshot.current?.nodeState === "DISPATCHED"` to decide whether to
- * dispatch (matching exactly what `transition.ts`'s own `dispatchEnvelope()` sets), and
- * `result.snapshot.status` (`WAITING_HUMAN` / `WAITING_FOR_QUOTA` / `INTERRUPTED` / terminal) to
- * decide phase 7's exit — never `result.actions`. This is forward-compatible: if `actions` is
- * populated later, nothing here needs to change. **Report**: `src/engine/transition.ts` should
- * populate `TransitionResult.actions` for every dispatch/request-approval/wait/finish decision,
- * matching the documented `Action` union — right now it is dead weight that always resolves to
- * `[]` from the base cases up.
+ * Control flow is still driven by the resulting `RunSnapshot` (`result.snapshot.current?.
+ * nodeState === "DISPATCHED"` to decide whether to dispatch, `result.snapshot.status` to decide
+ * phase 7's exit) rather than by `TransitionResult.actions` directly — the snapshot is the one
+ * value every other driver module (store, report, status) already reasons about, so re-deriving
+ * control flow from it here keeps one source of truth instead of two. `transition.ts` now
+ * populates `actions` for every dispatch/request-approval/wait/finish decision (state-machine.md
+ * §5.1's `Action` union, matching the "Side effects" column of §4.1) — `assertActionsAgree`,
+ * below, is a cheap I-30-style guard that the two views can never silently diverge: it re-checks,
+ * on every `applied` result this function sees, that the snapshot-derived decision and
+ * `result.actions` name the same node/cycle/attempt (or the same wait/finish), and throws
+ * `internal_invariant` (mapped to exit 1, `cli/main.ts`'s `printError`) the moment they don't.
  */
 export async function continueRun(input: ContinueRunInput): Promise<RunLoopResult> {
   const { ctx, policy, clock, runId, dispatchers, trigger, heartbeatSeconds, json } = input;
@@ -310,6 +410,7 @@ export async function continueRun(input: ContinueRunInput): Promise<RunLoopResul
 
   // Phase 6: the dispatch loop.
   dispatchLoop: while (true) {
+    assertActionsAgree(result);
     const snapshot: RunSnapshot = result.snapshot;
     const current = snapshot.current;
     if (!current || current.nodeState !== "DISPATCHED") {
@@ -328,102 +429,133 @@ export async function continueRun(input: ContinueRunInput): Promise<RunLoopResul
 
     const backendId = node.backend;
     const dispatcher = dispatchers[backendId];
-    if (!dispatcher) {
-      throw new LoopmillError("backend_unavailable", `no dispatcher registered for backend "${backendId}"`, { exitCode: 4 });
-    }
-
-    const repoRoot = resolveRepoRoot(ctx);
-    const worktreePath = join(ctx.layout.worktrees, runId);
-    const branch = `loopmill/${ctx.loop.slug}/${runId}`;
-    const defaultBase = ctx.loop.repos[0]!.defaultBase;
-    const baseCommit = resolveBaseCommit(repoRoot, worktreePath, defaultBase);
-
-    const refCtx = referenceContextFor(snapshot, ctx.loop, current.cycleIndex, { trigger });
-    const inputs = resolveInputs(node.inputs, refCtx);
 
     const deadlineAt = dispatchedEnvelope.dispatch.deadline ?? formatRfc3339(parseRfc3339(clock.now()) + (node.timeoutMs ?? 0));
     const dedupeKey = dispatchedEnvelope.dispatch.dedupeKey ?? `${runId}:${current.cycleIndex}:${current.nodeId}:${current.attempt}`;
 
-    const request: DispatchRequest = {
-      runId,
-      // A2: the Run's own pinned identity (`snapshot.loopId`/`snapshot.loopVersion`), not
-      // `ctx.loop`'s current one — see `step.ts`'s `applyStep` doc comment on the loopVersion
-      // drift guard for why the two can differ across process boundaries.
-      loopId: snapshot.loopId,
-      loopVersion: snapshot.loopVersion,
-      slug: ctx.loop.slug,
-      cycleIndex: current.cycleIndex,
-      nodeId: current.nodeId,
-      attempt: current.attempt,
-      node,
-      inputs,
-      workspace: { repoRoot, worktreePath, branch, baseCommit },
-      env: ctx.loop.env,
-      deadlineAt,
-      timeoutMs: node.timeoutMs ?? null,
-      dedupeKey,
-      causationId: dispatchedEnvelope.eventId,
-    };
-
-    // Heartbeat while the attempt is in flight (mvp-design.md §7.5, state-machine.md §10.1
-    // D-24). `leaseUntil` here follows this task's own instruction literally
-    // (`deadlineAt + policy.dispatchGraceSeconds`); the engine's own `deadlineAt` already
-    // folds one grace period in (`transition.ts`'s `deadlineAtFor`), so this heartbeat value
-    // is deliberately a little more generous than `snapshot.lease.expiresAt` — a second grace
-    // period is a safety margin against the sweep expiring an attempt the moment its deadline
-    // passes while a heartbeat is mid-flight, never a correctness requirement (the
-    // authoritative lease the engine itself reasons about, `lease_not_expired`, stays exactly
-    // `deadlineAt`, refreshed separately by `applyStep`'s own `append({ lease: ... })` once
-    // the completion lands). Decision (not in sheet), m1.
-    const heartbeatLeaseUntil = formatRfc3339(parseRfc3339(deadlineAt) + policy.dispatchGraceSeconds * 1000);
-    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-    if (heartbeatSeconds > 0) {
-      heartbeatTimer = setInterval(() => {
-        ctx.store.heartbeat(ctx.loop.slug, runId, { now: clock.now(), leaseUntil: heartbeatLeaseUntil });
-      }, heartbeatSeconds * 1000);
-      heartbeatTimer.unref();
-    }
-
     let completionEnvelope: Envelope;
-    try {
-      completionEnvelope = await dispatcher.dispatch(request, clock);
-    } catch (err) {
-      if (err instanceof LoopmillError && err.code === "dispatch_failed") {
-        completionEnvelope = makeEnvelope(
-          {
-            eventType: "dispatch-failed",
-            producer: "control-plane",
-            loopId: snapshot.loopId,
-            loopVersion: snapshot.loopVersion,
-            runId,
-            cycle: current.cycleIndex,
-            nodeId: current.nodeId,
-            attempt: current.attempt,
-            causationId: dispatchedEnvelope.eventId,
-            dispatch: { backendId, transport: "process", expectedProducer: `backend:${backendId}`, dedupeKey },
-            error: { code: "dispatch_failed", message: err.message, classified: "backend_error" },
-          },
-          { now: clock.now() },
-        );
-      } else {
-        throw err;
-      }
-    } finally {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-    }
+    if (!dispatcher) {
+      // Item 2: a dispatcher that cannot be found is a `dispatch-failed` completion (R-29/R-30),
+      // never a process abort — no request was ever built, no worktree ever touched, nothing was
+      // spawned, so there is nothing to heartbeat or clean up here either.
+      completionEnvelope = buildDispatchFailedEnvelope({
+        snapshot,
+        runId,
+        current,
+        backendId,
+        deadlineAt,
+        dedupeKey,
+        causationId: dispatchedEnvelope.eventId,
+        code: "no_dispatcher",
+        message: `no dispatcher registered for backend "${backendId}"`,
+        now: clock.now(),
+      });
+    } else {
+      const repoRoot = resolveRepoRoot(ctx);
+      const worktreePath = join(ctx.layout.worktrees, runId);
+      const branch = `loopmill/${ctx.loop.slug}/${runId}`;
+      const defaultBase = ctx.loop.repos[0]!.defaultBase;
+      const baseCommit = resolveBaseCommit(repoRoot, worktreePath, defaultBase);
 
-    // §7.2 step 6 / §18: one commit per cycle, on the local backend's own success.
-    if (backendId === "local" && completionEnvelope.eventType === "node-completed") {
-      const message = `loopmill: ${ctx.loop.slug} cycle ${current.cycleIndex} (${runId})`;
-      const commit = commitCycle(worktreePath, message);
-      if (commit) {
-        completionEnvelope = withCommitRef(completionEnvelope, commit.commit);
+      const refCtx = referenceContextFor(snapshot, ctx.loop, current.cycleIndex, { trigger });
+      const inputs = resolveInputs(node.inputs, refCtx);
+
+      const request: DispatchRequest = {
+        runId,
+        // A2: the Run's own pinned identity (`snapshot.loopId`/`snapshot.loopVersion`), not
+        // `ctx.loop`'s current one — see `step.ts`'s `applyStep` doc comment on the loopVersion
+        // drift guard for why the two can differ across process boundaries.
+        loopId: snapshot.loopId,
+        loopVersion: snapshot.loopVersion,
+        slug: ctx.loop.slug,
+        cycleIndex: current.cycleIndex,
+        nodeId: current.nodeId,
+        attempt: current.attempt,
+        node,
+        inputs,
+        workspace: { repoRoot, worktreePath, branch, baseCommit },
+        env: ctx.loop.env,
+        deadlineAt,
+        timeoutMs: node.timeoutMs ?? null,
+        dedupeKey,
+        causationId: dispatchedEnvelope.eventId,
+      };
+
+      // Heartbeat while the attempt is in flight (mvp-design.md §7.5, state-machine.md §10.1
+      // D-24). `leaseUntil` here follows this task's own instruction literally
+      // (`deadlineAt + policy.dispatchGraceSeconds`); the engine's own `deadlineAt` already
+      // folds one grace period in (`transition.ts`'s `deadlineAtFor`), so this heartbeat value
+      // is deliberately a little more generous than `snapshot.lease.expiresAt` — a second grace
+      // period is a safety margin against the sweep expiring an attempt the moment its deadline
+      // passes while a heartbeat is mid-flight, never a correctness requirement (the
+      // authoritative lease the engine itself reasons about, `lease_not_expired`, stays exactly
+      // `deadlineAt`, refreshed separately by `applyStep`'s own `append({ lease: ... })` once
+      // the completion lands). Decision (not in sheet), m1.
+      const heartbeatLeaseUntil = formatRfc3339(parseRfc3339(deadlineAt) + policy.dispatchGraceSeconds * 1000);
+      let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+      if (heartbeatSeconds > 0) {
+        heartbeatTimer = setInterval(() => {
+          ctx.store.heartbeat(ctx.loop.slug, runId, { now: clock.now(), leaseUntil: heartbeatLeaseUntil });
+        }, heartbeatSeconds * 1000);
+        heartbeatTimer.unref();
+      }
+
+      // Item 5 / mvp-design.md §15.2's `logs` promise ("resolved inputs, effective command
+      // line..."): persist the dispatch plan `logs` will later read, right before the dispatcher
+      // actually spends anything. Best-effort — a plan file that could not be written must never
+      // abort a real dispatch (the attempt itself is far more important than its own log entry).
+      try {
+        const plan = dispatcher.describe(request);
+        const planPath = dispatchPlanPath(ctx.layout.logs, runId, current.cycleIndex, current.nodeId, current.attempt);
+        mkdirSync(join(ctx.layout.logs, runId), { recursive: true });
+        writeFileSync(planPath, `${redact(JSON.stringify({ ...plan, inputs }, null, 2))}\n`, "utf8");
+      } catch {
+        // best-effort, see above.
+      }
+
+      try {
+        completionEnvelope = await dispatcher.dispatch(request, clock);
+      } catch (err) {
+        if (err instanceof LoopmillError && err.code === "dispatch_failed") {
+          // Item 2: the rejection's own code, not a hardcoded literal — currently always
+          // "dispatch_failed" (the only code this catch matches), kept as `err.code` rather than
+          // inlined so a dispatcher that rejects with a more specific LoopmillError code in the
+          // future carries it straight through without another edit here.
+          completionEnvelope = buildDispatchFailedEnvelope({
+            snapshot,
+            runId,
+            current,
+            backendId,
+            deadlineAt,
+            dedupeKey,
+            causationId: dispatchedEnvelope.eventId,
+            code: err.code,
+            message: err.message,
+            now: clock.now(),
+          });
+        } else {
+          throw err;
+        }
+      } finally {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+      }
+
+      // §7.2 step 6 / §18: one commit per cycle, on the local backend's own success.
+      if (backendId === "local" && completionEnvelope.eventType === "node-completed") {
+        const message = `loopmill: ${ctx.loop.slug} cycle ${current.cycleIndex} (${runId})`;
+        const commit = commitCycle(worktreePath, message);
+        if (commit) {
+          completionEnvelope = withCommitRef(completionEnvelope, commit.commit);
+        }
       }
     }
 
     const completionStep = applyStep({ ctx, envelope: completionEnvelope, clock, sweepFirst: false, skipLockCheck: true, policy });
     if (!completionStep.result || completionStep.exitCode !== 0) {
-      const exitCode = completionStep.exitCode === 3 ? 3 : 2;
+      // Item 2: exit 4 is reserved for the case where even a `dispatch-failed` completion could
+      // not be recorded (a store-level conflict/invalid on top of an already-failed dispatch) —
+      // every other completion keeps the existing exit 2 (invalid)/3 (lock conflict) mapping.
+      const exitCode = completionEnvelope.eventType === "dispatch-failed" ? 4 : completionStep.exitCode === 3 ? 3 : 2;
       printSummary(stdout, json, { exitCode, runId, outcome: null, state: null, message: "the completion could not be applied" });
       return { exitCode, runId, outcome: null, state: null };
     }

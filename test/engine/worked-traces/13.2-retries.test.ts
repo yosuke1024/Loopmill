@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drive, runRequested, nodeCompleted, humanDecided, fullUsage, wireUsage, type Step } from "../../fixtures/engine/helpers.ts";
+import { drive, runRequested, nodeCompleted, humanDecided, fullUsage, wireUsage, assertActions, type Step } from "../../fixtures/engine/helpers.ts";
 import { NODES, RETRY_EDGE_ID } from "../../fixtures/engine/reference-loop.ts";
 
 function fileDigest(n: number): string {
@@ -42,6 +42,7 @@ test("13.2: two retries, then success — traversals 2/3, maxCycleIndex 3", () =
     assert.equal(r.snapshot.current?.cycleIndex, 2);
     const lastResult = r.results[r.results.length - 1]!;
     assert.equal(lastResult.kind, "applied");
+    assertActions(lastResult, "hop 1: review-changes(approved:false) -> retry-edge-taken, implement re-dispatched (cycle 2)");
     if (lastResult.kind === "applied") {
       assert.deepEqual(
         lastResult.emitted.map((e) => e.eventType),
@@ -61,6 +62,7 @@ test("13.2: two retries, then success — traversals 2/3, maxCycleIndex 3", () =
     const r = drive(steps);
     assert.equal(r.snapshot.nodes["2:implement"]?.state, "SUCCEEDED", "different change-set: not NO_PROGRESS");
     assert.notEqual(r.snapshot.changeFingerprints["2:implement"], r.snapshot.changeFingerprints["1:implement"]);
+    assertActions(r.results[r.results.length - 1]!, "hop 2: cycle-2 implement completes -> run-tests dispatched");
   }
   push((t) => nodeCompleted(t, { cycle: 2, nodeId: NODES.runTests, attempt: 1, result: { status: "succeeded", exitCode: 0 } }));
   push((t) => nodeCompleted(t, { cycle: 2, nodeId: NODES.reviewChanges, attempt: 1, result: { status: "succeeded", structured: { approved: false, reasons: "reason 2, different evidence" } }, usage: wireUsage(fullUsage()) }));
@@ -69,6 +71,7 @@ test("13.2: two retries, then success — traversals 2/3, maxCycleIndex 3", () =
     assert.deepEqual(r.snapshot.traversals, { [RETRY_EDGE_ID]: 2 });
     assert.equal(r.snapshot.cycleIndex, 3);
     assert.equal(r.snapshot.maxCycleIndex, 3);
+    assertActions(r.results[r.results.length - 1]!, "hop 3: review-changes(approved:false) again -> retry-edge-taken, implement re-dispatched (cycle 3)");
   }
 
   // Cycle 3: implement, run-tests, review-changes(approved:true) -> success.
@@ -83,6 +86,7 @@ test("13.2: two retries, then success — traversals 2/3, maxCycleIndex 3", () =
     assert.equal(r.snapshot.cycleIndex, 0, "leaving the body resets cycleIndex to 0");
     assert.equal(r.snapshot.maxCycleIndex, 3);
     approvalDigest = r.snapshot.pendingApproval!.subject.digest;
+    assertActions(r.results[r.results.length - 1]!, "hop 4: cycle-3 review-changes(approved:true) -> WAITING_HUMAN, approve-pr requested");
   }
   push((t) => humanDecided(t, { cycle: 0, nodeId: NODES.approvePr, decision: "approve", subjectDigest: approvalDigest }));
   push((t) => nodeCompleted(t, { cycle: 0, nodeId: NODES.createPr, attempt: 1, result: { status: "succeeded", exitCode: 0 }, artifactRefs: [{ kind: "pr", ref: "77" }] }));
@@ -92,4 +96,5 @@ test("13.2: two retries, then success — traversals 2/3, maxCycleIndex 3", () =
   assert.deepEqual(final.snapshot.outcome, { state: "SUCCEEDED", label: "success" });
   assert.deepEqual(final.snapshot.traversals, { [RETRY_EDGE_ID]: 2 });
   assert.equal(final.snapshot.maxCycleIndex, 3, "body executed 3 times (cycles 1,2,3)");
+  assertActions(final.results[final.results.length - 1]!, "hop 5: human-decided approve + create-pr completes -> run-finished(SUCCEEDED)");
 });

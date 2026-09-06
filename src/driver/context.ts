@@ -111,13 +111,17 @@ export interface DryRunLoopContext {
  * Everything `--dry-run` needs (mvp-design.md acceptance criterion A16: "spending zero tokens",
  * and this task's own instruction to exit 0 "without touching the store") — resolves the layout
  * and loads the loop file exactly like `openRunContext`, but never calls `openStore`, so
- * `state.sqlite` is never created or opened for a run that must touch nothing.
+ * `state.sqlite` is never created or opened for a run that must touch nothing. Item 4, m1
+ * follow-up: nor does it create `.loopmill/` itself — `layoutFor` is pure path arithmetic
+ * (`ensureLayout`'s own `mkdir`/`.gitignore` write is reserved for a real `run`/`step`/`approve`/
+ * `reject`), so a `--dry-run` in a repository that has never run anything leaves the filesystem
+ * exactly as it found it.
  */
 export async function resolveDryRunContext(
   opts: Pick<OpenRunContextOptions, "repoRoot" | "env" | "loopPath" | "slug">,
 ): Promise<DryRunLoopContext> {
   const home = resolveLoopmillHome({ repoRoot: opts.repoRoot, env: opts.env });
-  const layout = await ensureLayout(home.home);
+  const layout = layoutFor(home.home);
   const loopPath = resolveLoopPath(opts, layout);
   const { loop } = await loadLoop(loopPath);
   return { layout, loop, repoRoot: opts.repoRoot };

@@ -11,11 +11,13 @@ import {
   applyStep,
   decideGate,
   defaultDispatchers,
+  layoutFor,
   logsOf,
   listRunsView,
   openRunContext,
   printDryRun,
   resolveDryRunContext,
+  resolveLoopPath,
   runDoctor,
   runLoop,
   statusOf,
@@ -28,7 +30,9 @@ import { loadLoop } from "../loop-file/index.ts";
 import { loadFakeScript } from "../backends/fake/index.ts";
 import { BACKEND_CAPABILITIES } from "../backends/index.ts";
 import { ensureLayout, openStore, resolveLoopmillHome, type Layout, type ListRunsOptions } from "../store/index.ts";
+import type { ResolvedLoop } from "../types/loop.ts";
 import type { Envelope, TriggerPayload } from "../types/envelope.ts";
+import type { Dispatcher } from "../types/interfaces.ts";
 import { LoopmillError } from "../util/errors.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -138,6 +142,45 @@ async function openContextForRun(repoRoot: string, env: NodeJS.ProcessEnv, clock
   return openRunContext({ repoRoot, env, clock, slug: loopId });
 }
 
+/** Item 4: `status`, `runs`, `logs`, `rebuild-snapshot`, `export` and `doctor` must never create
+ * `.loopmill/` — only `run` (non-dry), `step`, `approve` and `reject` do. This is
+ * `openContextForRun`'s read-only counterpart: `layoutFor` (pure path arithmetic, no mkdir)
+ * instead of `ensureLayout`, and it never opens the store at all when `state.sqlite` does not
+ * exist yet — `null` in that case, for the caller to report "no runs recorded for this
+ * repository" itself (the right exit code differs: 0 for `status --last`/`runs`, 2 for a command
+ * that names a `<runId>`, so this function does not print or choose one). */
+async function openExistingContextForRun(repoRoot: string, env: NodeJS.ProcessEnv, clock: Clock, runId: string): Promise<RunContext | null> {
+  const home = resolveLoopmillHome({ repoRoot, env });
+  const layout = layoutFor(home.home);
+  if (!existsSync(layout.stateDb)) return null;
+  const peek = openStore(layout.stateDb);
+  let loopId: string | null;
+  try {
+    loopId = peek.readRunHeader(runId)?.loopId ?? null;
+  } finally {
+    peek.close();
+  }
+  if (loopId === null) {
+    throw new LoopmillError("run_not_found", `no run ${runId} in ${layout.stateDb}`, { exitCode: 2 });
+  }
+  const loopPath = resolveLoopPath({ repoRoot, slug: loopId }, layout);
+  const { loop, file } = await loadLoop(loopPath);
+  const store = openStore(layout.stateDb);
+  return { layout, store, loop, file, loopPath, repoRoot, clock, close: () => store.close() };
+}
+
+/** Item 3: `run`, `approve` and `reject` all accept `--fake-script <file>` the same way — a
+ * script path resolved against the cwd, registering the `fake` backend alongside `local`
+ * (`defaultDispatchers`' own rule: `fake` is only ever registered when a script was actually
+ * given). Shared so the three commands' option parsing cannot drift apart (`resume` needs the
+ * same in m2, per this task's own instruction). */
+function resolveDispatchersFromFlags(ctx: { layout: Layout }, flags: Record<string, string | boolean>): Record<string, Dispatcher> {
+  const fakeScriptPath = flagString(flags, "fake-script");
+  return fakeScriptPath
+    ? defaultDispatchers({ layout: ctx.layout, fakeScript: loadFakeScript(isAbsolute(fakeScriptPath) ? fakeScriptPath : resolvePath(process.cwd(), fakeScriptPath)) })
+    : defaultDispatchers({ layout: ctx.layout });
+}
+
 function printError(err: unknown): number {
   if (err instanceof LoopmillError) {
     process.stderr.write(`loopmill: ${err.code}: ${err.message}\n`);
@@ -162,8 +205,8 @@ function printHelp(): void {
       "  validate [<file>]",
       "  run <slug|path> [--dry-run] [--json] [--fake-script <file>] [--repo <dir>] [--trigger manual|schedule]",
       "  step [--event-file <path>] [--json]        (stdin otherwise)",
-      "  approve <runId> [--reason <text>] [--actor <name>]",
-      "  reject <runId> [--reason <text>] [--actor <name>]",
+      "  approve <runId> [--reason <text>] [--actor <name>] [--fake-script <file>] [--repo <dir>]",
+      "  reject <runId> [--reason <text>] [--actor <name>] [--fake-script <file>] [--repo <dir>]",
       "  status [<runId>|--last] [--json]",
       "  runs [--loop <slug>] [--since <rfc3339>] [--json]",
       "  logs <runId> [--node <id>] [--cycle <n>] [--json]",
@@ -234,10 +277,7 @@ async function cmdRun(positional: string[], flags: Record<string, string | boole
   }
 
   try {
-    const fakeScriptPath = flagString(flags, "fake-script");
-    const dispatchers = fakeScriptPath
-      ? defaultDispatchers({ layout: ctx.layout, fakeScript: loadFakeScript(isAbsolute(fakeScriptPath) ? fakeScriptPath : resolvePath(process.cwd(), fakeScriptPath)) })
-      : defaultDispatchers({ layout: ctx.layout });
+    const dispatchers = resolveDispatchersFromFlags(ctx, flags);
 
     const triggerKind = flagString(flags, "trigger") ?? "manual";
     if (triggerKind !== "manual" && triggerKind !== "schedule") {
@@ -321,12 +361,14 @@ async function cmdGate(decision: "approve" | "reject", positional: string[], fla
   }
   try {
     const reason = flagString(flags, "reason");
+    const dispatchers = resolveDispatchersFromFlags(ctx, flags);
     const result = await decideGate({
       ctx,
       runId,
       decision,
       actor: flagString(flags, "actor") ?? "operator",
       clock: ctx.clock,
+      dispatchers,
       ...(reason !== undefined ? { note: reason } : {}),
       json: flagBool(flags, "json"),
     });
@@ -339,15 +381,34 @@ async function cmdGate(decision: "approve" | "reject", positional: string[], fla
 async function cmdStatus(positional: string[], flags: Record<string, string | boolean>): Promise<number> {
   const repoRoot = resolveRepoRootArg(flagString(flags, "repo"));
   const runIdArg = positional[0];
+
+  // Item 4: `status` never creates `.loopmill/` — a repository that has never run anything yet
+  // has, by definition, nothing to report; `--last`/`runs` says so on stdout and exits 0, a bare
+  // `<runId>` says so on stderr and exits 2 (the same "no runs recorded" fact, phrased for the
+  // exit code each case documents).
+  const home = resolveLoopmillHome({ repoRoot, env: process.env });
+  const layout = layoutFor(home.home);
+  if (!existsSync(layout.stateDb)) {
+    if (runIdArg) {
+      process.stderr.write("loopmill: run_not_found: no runs recorded for this repository\n");
+      return 2;
+    }
+    process.stdout.write("no runs recorded for this repository\n");
+    return 0;
+  }
+
   let ctx: RunContext;
   let which: string | "last";
   try {
     if (runIdArg) {
-      ctx = await openContextForRun(repoRoot, process.env, realClock, runIdArg);
+      const found = await openExistingContextForRun(repoRoot, process.env, realClock, runIdArg);
+      if (!found) {
+        process.stderr.write("loopmill: run_not_found: no runs recorded for this repository\n");
+        return 2;
+      }
+      ctx = found;
       which = runIdArg;
     } else {
-      const home = resolveLoopmillHome({ repoRoot, env: process.env });
-      const layout = await ensureLayout(home.home);
       const slug = resolveDefaultSlug(layout, repoRoot);
       if (!slug) {
         process.stderr.write("loopmill: loop_not_found: no loop to report status for — pass a runId, or add a loop file\n");
@@ -387,6 +448,15 @@ async function cmdRuns(flags: Record<string, string | boolean>): Promise<number>
   const loopSlug = flagString(flags, "loop");
   const since = flagString(flags, "since");
 
+  // Item 4: `runs` never creates `.loopmill/` — a repository with no `state.sqlite` yet has no
+  // runs to list, full stop, regardless of `--loop`.
+  const home = resolveLoopmillHome({ repoRoot, env: process.env });
+  const layout = layoutFor(home.home);
+  if (!existsSync(layout.stateDb)) {
+    process.stdout.write("no runs recorded for this repository\n");
+    return 0;
+  }
+
   if (loopSlug) {
     const ctx = await openRunContext({ repoRoot, env: process.env, clock: realClock, slug: loopSlug });
     try {
@@ -403,9 +473,8 @@ async function cmdRuns(flags: Record<string, string | boolean>): Promise<number>
   // No `--loop`: list across every loop in the store (Decision (not in sheet), m1 — see
   // `resolveDefaultSlug`'s own comment: mvp-design.md §15.2 does not say what an unscoped `runs`
   // does in a multi-loop repository). Tokens/coverage are not rendered here since interpreting
-  // which node executions are "agent" ones needs each row's own resolved loop file.
-  const home = resolveLoopmillHome({ repoRoot, env: process.env });
-  const layout = await ensureLayout(home.home);
+  // which node executions are "agent" ones needs each row's own resolved loop file. `state.sqlite`
+  // is already known to exist (checked above), so opening it here creates nothing.
   const store = openStore(layout.stateDb);
   try {
     const opts: ListRunsOptions = {};
@@ -443,7 +512,12 @@ async function cmdLogs(positional: string[], flags: Record<string, string | bool
   const repoRoot = resolveRepoRootArg(flagString(flags, "repo"));
   let ctx: RunContext;
   try {
-    ctx = await openContextForRun(repoRoot, process.env, realClock, runId);
+    const found = await openExistingContextForRun(repoRoot, process.env, realClock, runId);
+    if (!found) {
+      process.stderr.write("loopmill: run_not_found: no runs recorded for this repository\n");
+      return 2;
+    }
+    ctx = found;
   } catch (err) {
     return printError(err);
   }
@@ -459,11 +533,24 @@ async function cmdLogs(positional: string[], flags: Record<string, string | bool
     } else {
       for (const v of views) {
         process.stdout.write(`\n${v.nodeId} (cycle ${v.cycleIndex}) — ${v.state}\n`);
+        if (v.structured !== null && v.structured !== undefined) process.stdout.write(`  structured output: ${JSON.stringify(v.structured)}\n`);
+        if (v.stdout !== null) process.stdout.write(`  stdout: ${v.stdout}\n`);
+        if (v.exitCode !== null) process.stdout.write(`  exitCode: ${v.exitCode}\n`);
         for (const a of v.attempts) {
           process.stdout.write(`  attempt ${a.attempt}: ${a.state}\n`);
+          if (a.plan) {
+            process.stdout.write(`    resolved inputs: ${JSON.stringify(a.plan.inputs)}\n`);
+            process.stdout.write(`    argv: ${JSON.stringify(a.plan.argv)}\n`);
+            process.stdout.write(`    cwd: ${a.plan.cwd}\n`);
+            for (const note of a.plan.notes) process.stdout.write(`    ${note}\n`);
+          }
           process.stdout.write(`    stdout: ${a.stdoutPath}\n`);
+          if (a.stdoutTail) process.stdout.write(`    stdout tail: ${a.stdoutTail}\n`);
           process.stdout.write(`    stderr: ${a.stderrPath}\n`);
           if (a.stderrTail) process.stdout.write(`    stderr tail: ${a.stderrTail}\n`);
+          if (a.usage) process.stdout.write(`    usage: ${JSON.stringify(a.usage)}\n`);
+          if (a.error) process.stdout.write(`    error: ${JSON.stringify(a.error)}\n`);
+          if (a.artifactRefs.length > 0) process.stdout.write(`    artifactRefs: ${JSON.stringify(a.artifactRefs)}\n`);
         }
       }
     }
@@ -492,7 +579,12 @@ async function cmdRebuildSnapshot(positional: string[], flags: Record<string, st
   const repoRoot = resolveRepoRootArg(flagString(flags, "repo"));
   let ctx: RunContext;
   try {
-    ctx = await openContextForRun(repoRoot, process.env, realClock, runId);
+    const found = await openExistingContextForRun(repoRoot, process.env, realClock, runId);
+    if (!found) {
+      process.stderr.write("loopmill: run_not_found: no runs recorded for this repository\n");
+      return 2;
+    }
+    ctx = found;
   } catch (err) {
     return printError(err);
   }
@@ -517,7 +609,11 @@ async function cmdExport(positional: string[], flags: Record<string, string | bo
   }
   const repoRoot = resolveRepoRootArg(flagString(flags, "repo"));
   const home = resolveLoopmillHome({ repoRoot, env: process.env });
-  const layout = await ensureLayout(home.home);
+  const layout = layoutFor(home.home);
+  if (!existsSync(layout.stateDb)) {
+    process.stderr.write("loopmill: run_not_found: no runs recorded for this repository\n");
+    return 2;
+  }
   const store = openStore(layout.stateDb);
   try {
     const header = store.readRunHeader(runId);
@@ -536,22 +632,30 @@ async function cmdExport(positional: string[], flags: Record<string, string | bo
 }
 
 async function cmdDoctor(flags: Record<string, string | boolean>): Promise<number> {
+  // Item 4: `doctor` never creates `.loopmill/` either — it must be safe to run as the very
+  // first command in a fresh repository, reporting what is actually there (binaries, logins, the
+  // env simulation for any committed loop file) without conjuring a store or worktrees directory
+  // into existence just to look complete.
   const repoRoot = resolveRepoRootArg(flagString(flags, "repo"));
   const home = resolveLoopmillHome({ repoRoot, env: process.env });
-  const layout = await ensureLayout(home.home);
+  const layout = layoutFor(home.home);
   const slug = resolveDefaultSlug(layout, repoRoot);
 
-  let doctorCtx: DoctorContext;
-  let close: () => void;
-  if (slug) {
-    const ctx = await openRunContext({ repoRoot, env: process.env, clock: realClock, slug });
-    doctorCtx = ctx;
-    close = () => ctx.close();
-  } else {
-    const store = openStore(layout.stateDb);
-    doctorCtx = { layout, store, loop: null };
-    close = () => store.close();
+  let loop: ResolvedLoop | null = null;
+  try {
+    if (slug) {
+      const loopPath = resolveLoopPath({ repoRoot, slug }, layout);
+      ({ loop } = await loadLoop(loopPath));
+    }
+  } catch (err) {
+    return printError(err);
   }
+
+  const store = existsSync(layout.stateDb) ? openStore(layout.stateDb) : null;
+  const doctorCtx: DoctorContext = { layout, store, loop };
+  const close = (): void => {
+    if (store) store.close();
+  };
 
   try {
     const result = runDoctor({ ctx: doctorCtx, scheduler: flagBool(flags, "scheduler") });

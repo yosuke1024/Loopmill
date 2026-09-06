@@ -9,6 +9,8 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { existsSync, readFileSync } from "node:fs";
+
 import { defaultDispatchers, runLoop } from "../../src/driver/index.ts";
 import type { TriggerPayload } from "../../src/types/envelope.ts";
 import { LOCAL_MINI_LOOP_PATH, currentBranch, fixedClock, headCommitOf, makeScratchRepo, openTestContext, statusPorcelain } from "../fixtures/driver/helpers.ts";
@@ -56,6 +58,17 @@ test("A20: worktree isolation and the one-commit-per-cycle rule against the loca
       const expected = `loopmill: ${ctx.loop.slug} cycle 0 (${runId})`;
       assert.ok(messages.includes(expected), `expected a commit "${expected}", got ${JSON.stringify(messages)}`);
       assert.equal(headCommitOf(worktreePath) === operatorHeadBefore, false, "the worktree must have advanced past the operator's base commit");
+
+      // Item 5, m1 follow-up: the dispatch plan `logs` reads back is persisted right before
+      // dispatch, against the real `local` backend — `LocalDispatcher.describe()`'s own env
+      // deny/inject notes prove this is more than the `fake` backend's placeholder note.
+      const planPath = join(ctx.layout.logs, runId, "0-implement-1.plan.json");
+      assert.ok(existsSync(planPath), `dispatch plan missing at ${planPath}`);
+      const plan = JSON.parse(readFileSync(planPath, "utf8")) as { argv: string[]; cwd: string; notes: string[]; inputs: Record<string, unknown> };
+      assert.ok(plan.argv.length > 0);
+      assert.equal(plan.cwd, worktreePath);
+      assert.ok(plan.notes.some((n) => n.startsWith("env denied:")), `expected an "env denied:" note, got ${JSON.stringify(plan.notes)}`);
+      assert.ok(plan.notes.some((n) => n.startsWith("env injected:")), `expected an "env injected:" note, got ${JSON.stringify(plan.notes)}`);
     } finally {
       ctx.close();
     }

@@ -17,10 +17,13 @@ import type { ResolvedLoop } from "../types/loop.ts";
  * with no `.loopmill/*.loop.yaml` committed yet still has binaries, logins, a worktrees
  * directory and a lock table worth checking. `loop: null` skips only the per-node env
  * deny/preserve simulation (the one check that needs a loop's own nodes); every other check
- * still runs. Decision (not in sheet), m1. */
+ * still runs. Decision (not in sheet), m1. `store: null` — item 4, m1 follow-up: `doctor` must
+ * never create `.loopmill/state.sqlite` just to run; a repository that has never had a real run
+ * yet has no store to open, so the one check that reads it (`lock.state`) is skipped rather than
+ * forcing one into existence. */
 export interface DoctorContext {
   layout: Layout;
-  store: SqliteStore;
+  store: SqliteStore | null;
   loop: ResolvedLoop | null;
 }
 
@@ -134,7 +137,7 @@ export function runDoctor(opts: RunDoctorOptions): DoctorResult {
   }
 
   // -- lock / lease state ---------------------------------------------------------------------
-  if (ctx.loop) {
+  if (ctx.loop && ctx.store) {
     const lock = ctx.store.readLock(ctx.loop.slug);
     checks.push({
       id: "lock.state",

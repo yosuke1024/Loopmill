@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drive, runRequested, nodeCompleted, nodeFailed, resumed, fullUsage, wireUsage, type Step } from "../../fixtures/engine/helpers.ts";
+import { drive, runRequested, nodeCompleted, nodeFailed, resumed, fullUsage, wireUsage, assertActions, type Step } from "../../fixtures/engine/helpers.ts";
 import { NODES } from "../../fixtures/engine/reference-loop.ts";
 
 test("13.4: quota park (reported reset) and resume", () => {
@@ -52,6 +52,7 @@ test("13.4: quota park (reported reset) and resume", () => {
     assert.equal(r.snapshot.quota?.quotaResetsAt, quotaResetsAt);
     const last = r.results[r.results.length - 1]!;
     assert.equal(last.kind, "applied");
+    assertActions(last, "hop A: implement attempt 1 fails classified quota -> WAITING_FOR_QUOTA, quota-parked");
     if (last.kind === "applied") {
       assert.deepEqual(
         last.emitted.map((e) => e.eventType),
@@ -80,6 +81,7 @@ test("13.4: quota park (reported reset) and resume", () => {
     assert.equal(r.snapshot.current?.nodeId, NODES.implement);
     assert.equal(r.snapshot.current?.attempt, 2, "re-dispatch increments attempt for identity");
     assert.equal(r.snapshot.quota, null);
+    assertActions(r.results[r.results.length - 1]!, "hop C: resumed(kind:due) after resumeDueAt -> RUNNING, implement attempt 2 dispatched");
   }
 
   // 7. node-completed SUCCESS on the retried attempt.
@@ -114,6 +116,7 @@ test("13.4: quota park (reported reset) and resume", () => {
   assert.equal(final.snapshot.current?.attempt, 1);
   const last = final.results[final.results.length - 1]!;
   assert.equal(last.kind, "applied");
+  assertActions(last, "hop D: implement attempt 2 completes -> run-tests dispatched");
   if (last.kind === "applied") {
     assert.deepEqual(
       last.emitted.map((e) => e.eventType),
@@ -148,11 +151,12 @@ test("13.4 variant: §7.1 wire table — 'quota' classified with no quotaResetsA
     event: nodeFailed(now, { cycle: 1, nodeId: NODES.implement, attempt: 1, error: { code: "quota", message: "a generic usage message with no recognisable limit name", classified: "quota" } }),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.status, "RUNNING", "classification FAILED + retryable -> attempt 2, never WAITING_FOR_QUOTA");
   assert.equal(snapshot.attempts["1:implement:1"]?.classification, "FAILED");
   assert.equal(snapshot.current?.attempt, 2);
   assert.equal(snapshot.quota, null);
+  assertActions(results[results.length - 1]!, "13.4 variant (no quotaResetsAt): classification degrades to FAILED -> attempt 2 dispatched");
 });
 
 test("13.4 variant: R-24 — classified quota with a quotaResetsAt this engine cannot parse -> FAILED(quota_unclassifiable)", () => {
@@ -182,11 +186,12 @@ test("13.4 variant: R-24 — classified quota with a quotaResetsAt this engine c
   const okEnvelope = nodeFailed(now, { cycle: 1, nodeId: NODES.implement, attempt: 1, error: { code: "quota", message: "hit the limit", classified: "quota" }, quotaResetsAt: "2026-09-06T09:45:00.000Z" });
   const raw = { ...okEnvelope, quotaResetsAt: "2026-13-99T99:99:99Z" };
   steps.push({ now: tick(5), event: raw, expectKind: "applied" });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.status, "FAILED");
   if (snapshot.outcome?.state === "FAILED") {
     assert.equal(snapshot.outcome.failureReason, "quota_unclassifiable");
   } else {
     assert.fail("expected FAILED");
   }
+  assertActions(results[results.length - 1]!, "13.4 variant (R-24): unparseable quotaResetsAt -> FAILED(quota_unclassifiable)");
 });

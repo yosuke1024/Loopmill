@@ -22,6 +22,7 @@ import {
   ctxAt,
   baselineAtEntry,
   baselineAtImplement,
+  assertActions,
   RUN_ID,
   LOOP_ID,
   LOOP_VERSION,
@@ -65,28 +66,33 @@ const HUMAN_ENTRY_LOOP = resolveLoop(HUMAN_ENTRY_RAW);
 // -------------------------------------------------------------------------------------------
 
 test("R-01: ∅ + run-requested (valid, admitted) -> PENDING then folded straight to RUNNING with the entry node dispatched", () => {
-  const { snapshot } = baselineAtEntry();
+  const { steps } = baselineAtEntry();
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.status, "RUNNING");
   assert.equal(snapshot.current?.nodeId, REFERENCE_LOOP.entry);
+  assertActions(results[results.length - 1]!, "R-01");
 });
 
 test("R-02: ∅ + run-requested, an open change exists for the dedupeKey -> SKIPPED(dedupe)", () => {
   const rr = runRequested(T0, { dedupeKey: "issue-42" });
-  const { snapshot } = drive([{ now: T0, event: rr, admission: { openChangeForDedupeKey: "issue-42" }, expectKind: "applied" }]);
+  const { results, snapshot } = drive([{ now: T0, event: rr, admission: { openChangeForDedupeKey: "issue-42" }, expectKind: "applied" }]);
   assert.equal(snapshot.status, "SKIPPED");
   assert.deepEqual(snapshot.outcome, { state: "SKIPPED", skipReason: "dedupe", ref: "issue-42" });
+  assertActions(results[results.length - 1]!, "R-02");
 });
 
 test("R-03: ∅ + run-requested, minInterval breached -> SKIPPED(min_interval)", () => {
-  const { snapshot } = drive([{ now: T0, event: runRequested(T0), admission: { minIntervalBreached: true }, expectKind: "applied" }]);
+  const { results, snapshot } = drive([{ now: T0, event: runRequested(T0), admission: { minIntervalBreached: true }, expectKind: "applied" }]);
   assert.equal(snapshot.status, "SKIPPED");
   assert.deepEqual(snapshot.outcome, { state: "SKIPPED", skipReason: "min_interval" });
+  assertActions(results[results.length - 1]!, "R-03");
 });
 
 test("R-03b: ∅ + run-requested, maxRunsPerWindow breached -> SKIPPED(runs_per_window)", () => {
-  const { snapshot } = drive([{ now: T0, event: runRequested(T0), admission: { runsPerWindowBreached: true }, expectKind: "applied" }]);
+  const { results, snapshot } = drive([{ now: T0, event: runRequested(T0), admission: { runsPerWindowBreached: true }, expectKind: "applied" }]);
   assert.equal(snapshot.status, "SKIPPED");
   assert.deepEqual(snapshot.outcome, { state: "SKIPPED", skipReason: "runs_per_window" });
+  assertActions(results[results.length - 1]!, "R-03b");
 });
 
 test("R-04: ∅ + run-requested pins a loopVersion ctx.loop does not resolve to -> invalid", () => {
@@ -102,6 +108,7 @@ test("R-05: PENDING (persisted, not yet dispatched) + run-started -> RUNNING, en
   const runStarted = env(T0, { eventType: "run-started", producer: "control-plane" });
   const result = transition(withApplied, runStarted, ctxAt(T0));
   assert.equal(result.kind, "applied");
+  assertActions(result, "R-05");
   assert.equal(result.snapshot.status, "RUNNING");
   assert.equal(result.snapshot.current?.nodeId, REFERENCE_LOOP.entry);
 });
@@ -113,6 +120,7 @@ test("R-06 / N-03: PENDING + run-started, entry node is human -> WAITING_HUMAN, 
   const runStarted = env(T0, { eventType: "run-started", producer: "control-plane", loopId: HUMAN_ENTRY_LOOP.slug, loopVersion: HUMAN_ENTRY_LOOP.loopVersion });
   const result = transition(withApplied, runStarted, ctxAt(T0, HUMAN_ENTRY_LOOP));
   assert.equal(result.kind, "applied", result.kind === "invalid" ? `${result.error.code} ${result.error.message}` : "");
+  assertActions(result, "R-06 / N-03");
   assert.equal(result.snapshot.status, "WAITING_HUMAN");
   assert.equal(result.snapshot.current?.nodeId, "gate");
   assert.equal(result.snapshot.nodes["0:gate"]?.state, "WAITING_HUMAN");
@@ -145,6 +153,7 @@ test("R-08: PENDING + run-started, preDispatch breaches immediately -> terminal 
   const runStarted = env(T0, { eventType: "run-started", producer: "control-plane", loopId: tinyBudgetLoop.slug, loopVersion: tinyBudgetLoop.loopVersion });
   const result = transition(withApplied, runStarted, ctxAt(T0, tinyBudgetLoop));
   assert.equal(result.kind, "applied");
+  assertActions(result, "R-08");
   assert.equal(result.snapshot.status, "BUDGET_EXCEEDED");
   assert.equal(result.snapshot.current, null);
 });
@@ -156,11 +165,12 @@ test("R-09 / N-08 / A-03: RUNNING + node-completed(SUCCESS) routes to next -> RU
     event: nodeCompleted("2026-09-06T06:05:00.000Z", { cycle: 0, nodeId: NODES.reviewContent, attempt: 1, result: { status: "succeeded", structured: { needs_issue: true, title: "t", summary: "s" } }, usage: wireUsage(fullUsage()) }),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.attempts["0:review-content:1"]?.state, "COMPLETED");
   assert.equal(snapshot.attempts["0:review-content:1"]?.classification, "SUCCESS");
   assert.equal(snapshot.nodes["0:review-content"]?.state, "SUCCEEDED");
   assert.equal(snapshot.current?.nodeId, NODES.createIssue);
+  assertActions(results[results.length - 1]!, "R-09 / N-08 / A-03");
 });
 
 test("R-10: RUNNING + node-completed routes to a human node -> WAITING_HUMAN", () => {
@@ -172,9 +182,10 @@ test("R-10: RUNNING + node-completed routes to a human node -> WAITING_HUMAN", (
     event: nodeCompleted("2026-09-06T06:20:00.000Z", { cycle: 1, nodeId: NODES.reviewChanges, attempt: 1, result: { status: "succeeded", structured: { approved: true, reasons: "ok" } }, usage: wireUsage(fullUsage()) }),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.status, "WAITING_HUMAN");
   assert.equal(snapshot.current?.nodeId, NODES.approvePr);
+  assertActions(results[results.length - 1]!, "R-10");
 });
 
 test("R-11: reserved (observed backend on next node), unreachable in the MVP", { todo: "observed backend, ADR-002 D4" }, () => {});
@@ -198,10 +209,11 @@ test("R-12 / N-04: RUNNING + node-completed routes to an end node -> SUCCEEDED",
     event: nodeCompleted("2026-09-06T06:05:00.000Z", { cycle: 0, nodeId: "step", attempt: 1, result: { status: "succeeded" }, usage: wireUsage(fullUsage()), loopId: directEndLoop.slug, loopVersion: directEndLoop.loopVersion }),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps, directEndLoop);
+  const { results, snapshot } = drive(steps, directEndLoop);
   assert.equal(snapshot.status, "SUCCEEDED");
   assert.deepEqual(snapshot.outcome, { state: "SUCCEEDED", label: "done" });
   assert.equal(snapshot.nodes["0:finish"]?.state, "SUCCEEDED");
+  assertActions(results[results.length - 1]!, "R-12 / N-04");
   void dispatched;
 });
 
@@ -214,10 +226,11 @@ test("R-13: RUNNING + node-completed routes to a retry edge, budget ok -> RUNNIN
     event: nodeCompleted("2026-09-06T06:20:00.000Z", { cycle: 1, nodeId: NODES.reviewChanges, attempt: 1, result: { status: "succeeded", structured: { approved: false, reasons: "no" } }, usage: wireUsage(fullUsage()) }),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.deepEqual(snapshot.traversals, { [RETRY_EDGE_ID]: 1 });
   assert.equal(snapshot.cycleIndex, 2);
   assert.equal(snapshot.current?.nodeId, NODES.implement);
+  assertActions(results[results.length - 1]!, "R-13");
 });
 
 test("R-14: RUNNING + node-completed routes to a retry edge, exhausted -> MAX_ITERATIONS_EXCEEDED (covered fully in 13.3)", () => {
@@ -252,6 +265,7 @@ test("R-15 / N-09: RUNNING + node-completed(NO_PROGRESS), streak below limit, fr
   assert.equal(snapshot.noProgressStreak, 1);
   const last = results[results.length - 1]!;
   assert.equal(last.kind, "applied");
+  assertActions(last, "R-15 / N-09");
   if (last.kind === "applied") {
     assert.deepEqual(
       last.emitted.map((e) => e.eventType),
@@ -278,9 +292,10 @@ test("R-16: two consecutive NO_PROGRESS halt the Run as FAILED(no_progress_stall
     event: implementDone(3, "2026-09-06T06:20:00.000Z"),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps, loop);
+  const { results, snapshot } = drive(steps, loop);
   assert.equal(snapshot.status, "FAILED");
   assert.deepEqual(snapshot.outcome, { state: "FAILED", failureReason: "no_progress_stalled" });
+  assertActions(results[results.length - 1]!, "R-16");
 });
 
 test("R-17: freeTraversals already at the edge's maxIterations -> the next NO_PROGRESS is MAX_ITERATIONS_EXCEEDED (D-10), not a further free retry", () => {
@@ -322,6 +337,7 @@ test("R-17: freeTraversals already at the edge's maxIterations -> the next NO_PR
   // cycle 3: identical again -> NO_PROGRESS; freeTraversals (1) >= maxIterations (1) -> R-17.
   const result = apply("2026-09-06T06:20:00.000Z", implementDone(3, "2026-09-06T06:20:00.000Z"));
   assert.equal(result.kind, "applied");
+  assertActions(result, "R-17");
   if (result.kind === "applied") {
     assert.equal(result.snapshot.status, "MAX_ITERATIONS_EXCEEDED");
     assert.deepEqual(result.snapshot.outcome, { state: "MAX_ITERATIONS_EXCEEDED", edgeId: NO_PROGRESS_EDGE_ID, traversals: 1, maxIterations: 1 });
@@ -339,13 +355,14 @@ test("R-18 / N-11 / A-06: node-failed classified FAILED, retryable -> RUNNING, d
     event: nodeFailed("2026-09-06T06:15:00.000Z", { cycle: 1, nodeId: NODES.implement, attempt: 1, error: { code: "runtime_error", message: "crashed", classified: "runtime_error" } }),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.attempts["1:implement:1"]?.state, "FAILED");
   assert.equal(snapshot.attempts["1:implement:1"]?.classification, "FAILED");
   assert.equal(snapshot.chargedAttempts["1:implement"], 1);
   assert.equal(snapshot.current?.nodeId, NODES.implement);
   assert.equal(snapshot.current?.attempt, 2);
   assert.equal(snapshot.status, "RUNNING");
+  assertActions(results[results.length - 1]!, "R-18 / N-11 / A-06");
 });
 
 test("R-19 / N-12: node-failed classified FAILED, attempts exhausted, onFailure fail_run -> FAILED(node_failed)", () => {
@@ -356,10 +373,11 @@ test("R-19 / N-12: node-failed classified FAILED, attempts exhausted, onFailure 
     event: nodeFailed("2026-09-06T06:20:00.000Z", { cycle: 1, nodeId: NODES.implement, attempt: 2, error: { code: "runtime_error", message: "crashed again", classified: "runtime_error" } }),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.nodes["1:implement"]?.state, "FAILED");
   assert.equal(snapshot.status, "FAILED");
   assert.deepEqual(snapshot.outcome, { state: "FAILED", failureReason: "node_failed", nodeId: NODES.implement, cycleIndex: 1 });
+  assertActions(results[results.length - 1]!, "R-19 / N-12");
 });
 
 test("R-20 / (N-05-shaped SKIPPED): node-failed exhausted, onFailure continue -> RUNNING, node-completed(SKIPPED) + dispatch", () => {
@@ -376,6 +394,7 @@ test("R-20 / (N-05-shaped SKIPPED): node-failed exhausted, onFailure continue ->
   assert.equal(snapshot.status, "WAITING_HUMAN", "step's onFailure:continue -> next: gate (a human node)");
   const last = results[results.length - 1]!;
   assert.equal(last.kind, "applied");
+  assertActions(last, "R-20");
   if (last.kind === "applied") {
     assert.deepEqual(
       last.emitted.map((e) => e.eventType),
@@ -401,6 +420,7 @@ test("R-21: node-failed exhausted, onFailure retry_edge:<id>, budget ok -> RUNNI
   assert.equal(snapshot.current?.attempt, 1, "a fresh Retry Edge traversal dispatches a fresh attempt 1, not a further retry of the exhausted one");
   const last = results[results.length - 1]!;
   assert.equal(last.kind, "applied");
+  assertActions(last, "R-21");
   if (last.kind === "applied") {
     assert.deepEqual(
       last.emitted.map((e) => e.eventType),
@@ -429,9 +449,10 @@ test("R-22: node-failed exhausted, onFailure retry_edge:<id>, budget exhausted -
   // A third exhaustion attempts a third traversal, refused by preDispatch before any Attempt.
   steps.push({ now: tick(5), event: nodeFailed(now, { cycle, nodeId: "step", attempt: 1, error: { code: "runtime_error", message: "x", classified: "runtime_error" }, usage: wireUsage(fullUsage()), loopId: loop.slug, loopVersion: loop.loopVersion }) });
   steps.push({ now: tick(5), event: nodeFailed(now, { cycle, nodeId: "step", attempt: 2, error: { code: "runtime_error", message: "x again", classified: "runtime_error" }, usage: wireUsage(fullUsage()), loopId: loop.slug, loopVersion: loop.loopVersion }), expectKind: "applied" });
-  const { snapshot } = drive(steps, loop);
+  const { results, snapshot } = drive(steps, loop);
   assert.equal(snapshot.status, "MAX_ITERATIONS_EXCEEDED");
   assert.deepEqual(snapshot.outcome, { state: "MAX_ITERATIONS_EXCEEDED", edgeId: "back-edge", traversals: 2, maxIterations: 2 });
+  assertActions(results[results.length - 1]!, "R-22");
 });
 
 test("R-23: node-failed classified QUOTA, resolvable, parks available -> WAITING_FOR_QUOTA (covered fully in 13.4)", () => {
@@ -458,9 +479,10 @@ test("R-25: node-failed classified QUOTA, quota.parks >= maxQuotaParks -> FAILED
     steps.push({ now: tick(1), event: resumed(now, { kind: "manual" }) });
   }
   steps.push({ now: tick(5), event: quotaFail(DEFAULT_POLICY.maxQuotaParks + 1, "2026-09-07T09:00:00.000Z"), expectKind: "applied" });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.status, "FAILED");
   assert.deepEqual(snapshot.outcome, { state: "FAILED", failureReason: "quota_parks_exhausted", nodeId: NODES.implement, cycleIndex: 1 });
+  assertActions(results[results.length - 1]!, "R-25");
 });
 
 test("R-26 / N-14 / A-06: node-failed classified CANCELLED -> CANCELLED(by: platform)", () => {
@@ -470,50 +492,55 @@ test("R-26 / N-14 / A-06: node-failed classified CANCELLED -> CANCELLED(by: plat
     event: nodeFailed("2026-09-06T06:15:00.000Z", { cycle: 1, nodeId: NODES.implement, attempt: 1, error: { code: "cancelled", message: "cancelled", classified: "cancelled" } }),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.nodes["1:implement"]?.state, "CANCELLED");
   assert.equal(snapshot.attempts["1:implement:1"]?.classification, "CANCELLED");
   assert.equal(snapshot.status, "CANCELLED");
   assert.deepEqual(snapshot.outcome, { state: "CANCELLED", by: "platform" });
+  assertActions(results[results.length - 1]!, "R-26 / N-14 / A-06");
 });
 
 test("R-27 / N-16: node-timed-out(node_timeout), retryable, effects:none -> RUNNING, dispatch attempt+1", () => {
   const { steps } = baselineAtImplement();
   steps.push({ now: "2026-09-06T06:15:00.000Z", event: nodeTimedOut("2026-09-06T06:15:00.000Z", { cycle: 1, nodeId: NODES.implement, attempt: 1, code: "node_timeout" }), expectKind: "applied" });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.attempts["1:implement:1"]?.state, "FAILED");
   assert.equal(snapshot.attempts["1:implement:1"]?.classification, "TIMEOUT");
   assert.equal(snapshot.current?.attempt, 2);
   assert.equal(snapshot.status, "RUNNING");
+  assertActions(results[results.length - 1]!, "R-27 / N-16");
 });
 
 test("R-28 / N-15: node-timed-out(node_timeout), exhausted, onFailure fail_run -> FAILED(node_timed_out), Node Execution TIMED_OUT (not FAILED)", () => {
   const { steps } = baselineAtImplement();
   steps.push({ now: "2026-09-06T06:15:00.000Z", event: nodeTimedOut("2026-09-06T06:15:00.000Z", { cycle: 1, nodeId: NODES.implement, attempt: 1, code: "node_timeout" }) });
   steps.push({ now: "2026-09-06T06:20:00.000Z", event: nodeTimedOut("2026-09-06T06:20:00.000Z", { cycle: 1, nodeId: NODES.implement, attempt: 2, code: "node_timeout" }), expectKind: "applied" });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.nodes["1:implement"]?.state, "TIMED_OUT", "N-15: a timed-out Node Execution's own state is TIMED_OUT, distinct from FAILED");
   assert.equal(snapshot.status, "FAILED");
   assert.deepEqual(snapshot.outcome, { state: "FAILED", failureReason: "node_timed_out", nodeId: NODES.implement, cycleIndex: 1 });
+  assertActions(results[results.length - 1]!, "R-28 / N-15");
 });
 
 test("R-29 / N-20: dispatch-failed, retryable -> RUNNING, dispatch attempt+1", () => {
   const { steps } = baselineAtImplement();
   steps.push({ now: "2026-09-06T06:15:00.000Z", event: dispatchFailed("2026-09-06T06:15:00.000Z", { cycle: 1, nodeId: NODES.implement, attempt: 1 }), expectKind: "applied" });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.attempts["1:implement:1"]?.state, "FAILED");
   assert.equal(snapshot.current?.attempt, 2);
   assert.equal(snapshot.status, "RUNNING");
+  assertActions(results[results.length - 1]!, "R-29 / N-20");
 });
 
 test("R-30 / N-21: dispatch-failed, exhausted -> FAILED(dispatch_failed)", () => {
   const { steps } = baselineAtImplement();
   steps.push({ now: "2026-09-06T06:15:00.000Z", event: dispatchFailed("2026-09-06T06:15:00.000Z", { cycle: 1, nodeId: NODES.implement, attempt: 1 }) });
   steps.push({ now: "2026-09-06T06:20:00.000Z", event: dispatchFailed("2026-09-06T06:20:00.000Z", { cycle: 1, nodeId: NODES.implement, attempt: 2 }), expectKind: "applied" });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.nodes["1:implement"]?.state, "FAILED");
   assert.equal(snapshot.status, "FAILED");
   assert.deepEqual(snapshot.outcome, { state: "FAILED", failureReason: "dispatch_failed", nodeId: NODES.implement, cycleIndex: 1 });
+  assertActions(results[results.length - 1]!, "R-30 / N-21");
 });
 
 test("R-31 / N-17: lease-expired, onInterrupted retry, retryable -> RUNNING, dispatch attempt+1 (covered fully in 13.6a)", () => {
@@ -532,11 +559,12 @@ test("R-33 / N-18 / A-09: lease-expired, exhausted, effects:none, onFailure fail
   const afterFirst = drive(steps).snapshot;
   const t2 = afterFirst.lease!.expiresAt;
   steps.push({ now: t2, event: leaseExpired(t2, { cycle: 1, nodeId: NODES.implement, attempt: 2 }), expectKind: "applied" });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.attempts["1:implement:2"]?.state, "LOST");
   assert.equal(snapshot.nodes["1:implement"]?.state, "FAILED");
   assert.equal(snapshot.status, "FAILED");
   assert.deepEqual(snapshot.outcome, { state: "FAILED", failureReason: "attempts_exhausted", nodeId: NODES.implement, cycleIndex: 1 });
+  assertActions(results[results.length - 1]!, "R-33 / N-18 / A-09");
 });
 
 // -------------------------------------------------------------------------------------------
@@ -559,11 +587,12 @@ test("R-35 / N-27: human-decided reject, digest matches, onFailure fail_run -> F
   const { steps, snapshot } = driveToApprovePr();
   const digest = snapshot.pendingApproval!.subject.digest;
   steps.push({ now: "2026-09-06T06:40:00.000Z", event: humanDecided("2026-09-06T06:40:00.000Z", { cycle: 0, nodeId: NODES.approvePr, decision: "reject", subjectDigest: digest }), expectKind: "applied" });
-  const { snapshot: final } = drive(steps);
+  const { results, snapshot: final } = drive(steps);
   assert.equal(final.nodes["0:approve-pr"]?.state, "SUCCEEDED", "N-27: a rejected gate SUCCEEDED — the gate did its job");
   assert.deepEqual(final.nodes["0:approve-pr"]?.structured, { decision: "reject" });
   assert.equal(final.status, "FAILED");
   assert.deepEqual(final.outcome, { state: "FAILED", failureReason: "human_rejected", nodeId: NODES.approvePr, cycleIndex: 0 });
+  assertActions(results[results.length - 1]!, "R-35");
 });
 
 test("R-36: human-decided reject, digest matches, onFailure retry_edge:<id>, budget ok -> RUNNING, retry-edge-taken + dispatch", () => {
@@ -588,6 +617,7 @@ test("R-36: human-decided reject, digest matches, onFailure retry_edge:<id>, bud
   assert.equal(snapshot.status, "RUNNING");
   const last = results[results.length - 1]!;
   assert.equal(last.kind, "applied");
+  assertActions(last, "R-36");
   if (last.kind === "applied") {
     assert.deepEqual(
       last.emitted.map((e) => e.eventType),
@@ -600,10 +630,11 @@ test("R-37 / N-28: human-decided cancel, digest matches -> CANCELLED(by: human)"
   const { steps, snapshot } = driveToApprovePr();
   const digest = snapshot.pendingApproval!.subject.digest;
   steps.push({ now: "2026-09-06T06:40:00.000Z", event: humanDecided("2026-09-06T06:40:00.000Z", { cycle: 0, nodeId: NODES.approvePr, decision: "cancel", subjectDigest: digest }), expectKind: "applied" });
-  const { snapshot: final } = drive(steps);
+  const { results, snapshot: final } = drive(steps);
   assert.equal(final.nodes["0:approve-pr"]?.state, "CANCELLED");
   assert.equal(final.status, "CANCELLED");
   assert.deepEqual(final.outcome, { state: "CANCELLED", by: "human" });
+  assertActions(results[results.length - 1]!, "R-37");
 });
 
 test("R-38: human-decided with a mismatched subjectDigest -> ignored-stale(approval_subject_mismatch), still WAITING_HUMAN", () => {
@@ -619,10 +650,11 @@ test("R-39 / N-29: node-timed-out(human_timeout), gate expired -> EXPIRED(human_
   const { steps, snapshot } = driveToApprovePr();
   const expiresAt = snapshot.pendingApproval!.expiresAt;
   steps.push({ now: expiresAt, event: nodeTimedOut(expiresAt, { cycle: 0, nodeId: NODES.approvePr, attempt: 0, code: "human_timeout" }), expectKind: "applied" });
-  const { snapshot: final } = drive(steps);
+  const { results, snapshot: final } = drive(steps);
   assert.equal(final.nodes["0:approve-pr"]?.state, "TIMED_OUT");
   assert.equal(final.status, "EXPIRED");
   assert.deepEqual(final.outcome, { state: "EXPIRED", expiryReason: "human_timeout", nodeId: NODES.approvePr });
+  assertActions(results[results.length - 1]!, "R-39");
 });
 
 // -------------------------------------------------------------------------------------------
@@ -643,10 +675,11 @@ test("R-41: resumed(kind:manual) -> RUNNING, dispatch attempt+1, bypassing the d
   assert.equal(parked.status, "WAITING_FOR_QUOTA");
   // Manual resume immediately, long before quotaResetsAt — no not_due check applies.
   steps.push({ now: "2026-09-06T06:16:00.000Z", event: resumed("2026-09-06T06:16:00.000Z", { kind: "manual" }), expectKind: "applied" });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.status, "RUNNING");
   assert.equal(snapshot.current?.nodeId, NODES.implement);
   assert.equal(snapshot.current?.attempt, 2);
+  assertActions(results[results.length - 1]!, "R-41");
 });
 
 test("R-42: resumed(kind:due) before resumeDueAt -> ignored-stale(not_due) (covered fully in 13.4)", () => {
@@ -683,10 +716,11 @@ test("R-48: resumed(kind:interrupted, decision:retry), preDispatch ok -> RUNNING
   const afterInterrupt = drive(steps2).snapshot;
   assert.equal(afterInterrupt.status, "INTERRUPTED");
   steps2.push({ now: "2026-09-06T07:00:00.000Z", event: resumed("2026-09-06T07:00:00.000Z", { kind: "interrupted", decision: "retry" }), expectKind: "applied" });
-  const { snapshot } = drive(steps2);
+  const { results, snapshot } = drive(steps2);
   assert.equal(snapshot.status, "RUNNING");
   assert.equal(snapshot.current?.nodeId, NODES.createIssue);
   assert.equal(snapshot.current?.attempt, 2);
+  assertActions(results[results.length - 1]!, "R-48");
 });
 
 test("R-49: resumed(kind:interrupted, decision:skip) -> RUNNING, node-completed(SKIPPED) + dispatch (covered fully in 13.6b)", () => {
@@ -743,11 +777,13 @@ test("R-56: a control-plane-only eventType from a non-control-plane producer -> 
 // -------------------------------------------------------------------------------------------
 
 test("N-01 / A-01: ∅ + node-dispatched(attempt>=1, not observed) -> DISPATCHED (every ordinary dispatch)", () => {
-  const { snapshot } = baselineAtEntry();
+  const { steps } = baselineAtEntry();
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.nodes["0:review-content"]?.state, "DISPATCHED");
   assert.equal(snapshot.attempts["0:review-content:1"]?.state, "DISPATCHED");
   assert.ok(snapshot.attempts["0:review-content:1"]?.dispatchedAt);
   assert.ok(snapshot.attempts["0:review-content:1"]?.deadlineAt);
+  assertActions(results[results.length - 1]!, "N-01 / A-01");
 });
 
 test("N-02: reserved (observed backend), unreachable in the MVP", { todo: "observed backend, ADR-002 D4" }, () => {});
@@ -767,10 +803,11 @@ test("N-07 / A-02: DISPATCHED + node-started (attempt matches) -> RUNNING, heart
     event: env("2026-09-06T06:01:00.000Z", { eventType: "node-started", producer: "backend:local", cycle: 0, nodeId: NODES.reviewContent, attempt: 1 }),
     expectKind: "applied",
   });
-  const { snapshot } = drive(steps);
+  const { results, snapshot } = drive(steps);
   assert.equal(snapshot.nodes["0:review-content"]?.state, "RUNNING");
   assert.equal(snapshot.current?.nodeState, "RUNNING");
   assert.equal(snapshot.lease?.heartbeatAt, "2026-09-06T06:01:00.000Z");
+  assertActions(results[results.length - 1]!, "N-07 / A-02");
 });
 
 test("N-10: DISPATCHED/RUNNING + node-completed, structuredOutput declared and invalid -> FAILED(schema_invalid) (covered fully by the smoke suite)", () => {

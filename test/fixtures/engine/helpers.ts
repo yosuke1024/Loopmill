@@ -266,6 +266,70 @@ export function lastEmitted(result: TransitionResult): Envelope[] {
 }
 
 // -------------------------------------------------------------------------------------------
+// Action assertions (state-machine.md §5.1's Action union; the "Side effects" column of §4.1).
+// Item 1 of the m1 follow-up: `TransitionResult.actions` must now carry exactly the Action the
+// row's own "Side effects" column names — `dispatch` alongside a `node-dispatched`, `request-
+// approval` alongside a `human-requested`, `wait` on `quota-parked`/`INTERRUPTED`, `finish`
+// alongside `run-finished`, or nothing at all for a row whose column reads "—". `expectedAction`
+// derives what that Action *should* be from the result's own `emitted`/`snapshot` — the same
+// coordinates the row's own text and `transition.ts`'s side-effect column agree on — independent
+// of transition.ts's own call sites, so this is a real cross-check, not a restatement of the
+// implementation.
+// -------------------------------------------------------------------------------------------
+
+import type { Action } from "../../../src/types/state.ts";
+
+/** The single Action `result` should carry, or `null` for a row with side effect "—" (a plain
+ * snapshot-only change: heartbeat, a digest-mismatch ignored-stale is never `applied` at all). */
+export function expectedAction(result: Extract<TransitionResult, { kind: "applied" }>): Action | null {
+  const dispatched = result.emitted.find((e) => e.eventType === "node-dispatched" && e.dispatch);
+  if (dispatched) {
+    const d = dispatched.dispatch!;
+    return {
+      type: "dispatch",
+      backendId: d.backendId,
+      nodeId: dispatched.nodeId!,
+      cycle: dispatched.cycle!,
+      attempt: dispatched.attempt!,
+      deadlineAt: d.deadline!,
+      dedupeKey: d.dedupeKey!,
+    };
+  }
+  const requested = result.emitted.find((e) => e.eventType === "human-requested");
+  if (requested) {
+    const pending = result.snapshot.pendingApproval;
+    assert.ok(pending, "human-requested was emitted but snapshot.pendingApproval is null");
+    return { type: "request-approval", mode: pending.mode, nodeId: pending.nodeId, cycle: pending.cycleIndex, subject: pending.subject, expiresAt: pending.expiresAt };
+  }
+  const finished = result.emitted.find((e) => e.eventType === "run-finished");
+  if (finished) {
+    assert.ok(result.snapshot.outcome, "run-finished was emitted but snapshot.outcome is null");
+    return { type: "finish", outcome: result.snapshot.outcome };
+  }
+  const quotaParked = result.emitted.find((e) => e.eventType === "quota-parked");
+  if (quotaParked) {
+    assert.ok(result.snapshot.quota, "quota-parked was emitted but snapshot.quota is null");
+    return { type: "wait", until: result.snapshot.quota.resumeDueAt };
+  }
+  if (result.snapshot.status === "INTERRUPTED") {
+    return { type: "wait", until: null };
+  }
+  return null;
+}
+
+/** Asserts `result.actions` is exactly `[expectedAction(result)]`, or `[]` when there is none. */
+export function assertActions(result: TransitionResult, message?: string): void {
+  assert.equal(result.kind, "applied", `assertActions: expected an applied result${message ? ` (${message})` : ""}, got ${result.kind}`);
+  if (result.kind !== "applied") return;
+  const expected = expectedAction(result);
+  if (message !== undefined) {
+    assert.deepEqual(result.actions, expected ? [expected] : [], message);
+  } else {
+    assert.deepEqual(result.actions, expected ? [expected] : []);
+  }
+}
+
+// -------------------------------------------------------------------------------------------
 // Baselines for the per-row test suite (test/engine/rows.test.ts): fast, reusable starting
 // points reached via the real event log rather than hand-built snapshots, so every row test
 // still exercises `transition()` end to end.

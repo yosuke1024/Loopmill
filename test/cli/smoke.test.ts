@@ -5,6 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -141,6 +142,37 @@ test("cli smoke: doctor --json (driven at driver level with injected binaries/ex
     } finally {
       store.close();
     }
+  } finally {
+    await repo.cleanup();
+  }
+});
+
+test("item 4: run --dry-run and status --last never create .loopmill/ in a fresh repo with no prior runs", async () => {
+  const repo = await makeScratchRepo();
+  try {
+    const loopmillDir = join(repo.repoRoot, ".loopmill");
+    assert.equal(existsSync(loopmillDir), false, "the scratch repo starts with no .loopmill/ at all");
+
+    // The loop file is passed by its own absolute path (mvp-design.md §15.2's `run <slug|path>`),
+    // never copied into `.loopmill/<slug>.loop.yaml` — a real `--dry-run` must resolve and print
+    // the graph without ever needing (or creating) the layout a real run would live under.
+    const dryRunOut = await captureMain(["run", EXIT_CODES_LOOP_PATH, "--repo", repo.repoRoot, "--dry-run", "--json"]);
+    assert.equal(dryRunOut.exitCode, 0, `stderr: ${dryRunOut.stderr}`);
+    assert.equal(existsSync(loopmillDir), false, "run --dry-run must not create .loopmill/");
+
+    const statusOut = await captureMain(["status", "--last", "--repo", repo.repoRoot]);
+    assert.equal(statusOut.exitCode, 0, `stderr: ${statusOut.stderr}`);
+    assert.match(statusOut.stdout, /no runs recorded/);
+    assert.equal(existsSync(loopmillDir), false, "status --last must not create .loopmill/ either");
+
+    const runsOut = await captureMain(["runs", "--repo", repo.repoRoot]);
+    assert.equal(runsOut.exitCode, 0, `stderr: ${runsOut.stderr}`);
+    assert.match(runsOut.stdout, /no runs recorded/);
+    assert.equal(existsSync(loopmillDir), false, "runs must not create .loopmill/ either");
+
+    const doctorOut = await captureMain(["doctor", "--repo", repo.repoRoot, "--json"]);
+    assert.equal(doctorOut.exitCode <= 1, true, `doctor should run cleanly (its own binary/login checks may fail): ${doctorOut.stderr}`);
+    assert.equal(existsSync(loopmillDir), false, "doctor must not create .loopmill/ either");
   } finally {
     await repo.cleanup();
   }

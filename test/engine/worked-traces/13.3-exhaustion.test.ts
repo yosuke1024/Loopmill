@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drive, runRequested, nodeCompleted, fullUsage, wireUsage, type Step } from "../../fixtures/engine/helpers.ts";
+import { drive, runRequested, nodeCompleted, fullUsage, wireUsage, assertActions, type Step } from "../../fixtures/engine/helpers.ts";
 import { NODES, RETRY_EDGE_ID } from "../../fixtures/engine/reference-loop.ts";
 
 function fileDigest(n: number): string {
@@ -44,6 +44,7 @@ test("13.3: exhaustion — traversals 3/3, MAX_ITERATIONS_EXCEEDED, no 4th Attem
 
   const lastResult = final.results[final.results.length - 1]!;
   assert.equal(lastResult.kind, "applied");
+  assertActions(lastResult, "final hop: 4th review-changes(approved:false) refused by preDispatch -> MAX_ITERATIONS_EXCEEDED");
   if (lastResult.kind === "applied") {
     // Only run-finished — no retry-edge-taken for the refused traversal.
     assert.deepEqual(

@@ -238,7 +238,7 @@ function finishFromScratch(
   const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
   working = applyFinish(working, ctx, outcome, finished.eventId);
   working = finalizeCounts(working, 1, 1);
-  return { kind: "applied", snapshot: working, emitted: [finished], actions: [] };
+  return { kind: "applied", snapshot: working, emitted: [finished], actions: [finishAction(outcome)] };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -412,6 +412,24 @@ function internal(message: string): InvalidHandlerResult {
   return { kind: "invalid", error: { code: "internal_invariant", message } };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Action construction (state-machine.md §5.1's Action union; the "Side effects" column of §4.1).
+// `transition()` returns a *description* of the side effect the impure shell must perform — one
+// Action per applied result, matching whichever row fired (dispatch/request-approval/wait/finish),
+// or none for a row whose own "Side effects" column reads "—" (heartbeat, an ignored digest
+// mismatch, etc.). `dispatchEnvelope`/`startHumanGate` build their own `dispatch`/`request-approval`
+// Action alongside the envelope they already construct (the same coordinates, computed once); the
+// `finish`/`wait` Actions are built here, at each call site, from the `Outcome`/`until` value that
+// site already has in scope for `emitRunFinished`/`quota-parked`/`INTERRUPTED`.
+// ---------------------------------------------------------------------------------------------
+
+function finishAction(outcome: Outcome): Action {
+  return { type: "finish", outcome };
+}
+function waitAction(until: string | null): Action {
+  return { type: "wait", until };
+}
+
 function dispatchByStatus(snapshot: RunSnapshot, event: Envelope, ctx: EngineTransitionContext, emitIdx: { n: number }): HandlerResult | null {
   switch (snapshot.status) {
     case "PENDING":
@@ -489,7 +507,7 @@ function startRun(snapshot: RunSnapshot, ctx: EngineTransitionContext, causation
     const outcome: Outcome = { state: "SUCCEEDED", label: entryNode.outcome };
     const finished = emitRunFinished(withEndNode, ctx, outcome, causationEventId, emitIdx);
     const finishedSnapshot = applyFinish(withEndNode, ctx, outcome, finished.eventId);
-    return ok(finishedSnapshot, [...endEmitted, finished]);
+    return ok(finishedSnapshot, [...endEmitted, finished], [finishAction(outcome)]);
   }
   if (entryNode.kind === "condition") {
     // A condition entry node settles through the same routing chain a completion would.
@@ -500,10 +518,10 @@ function startRun(snapshot: RunSnapshot, ctx: EngineTransitionContext, causation
   if (!check.ok) {
     const finished = emitRunFinished(working, ctx, check.outcome, causationEventId, emitIdx);
     working = applyFinish(working, ctx, check.outcome, finished.eventId);
-    return ok(working, [finished]);
+    return ok(working, [finished], [finishAction(check.outcome)]);
   }
-  const { envelope, snapshot: dispatched } = dispatchEnvelope(working, ctx, entryNode, entryNodeId, 0, 1, causationEventId, emitIdx);
-  return ok(dispatched, [envelope]);
+  const { envelope, snapshot: dispatched, action } = dispatchEnvelope(working, ctx, entryNode, entryNodeId, 0, 1, causationEventId, emitIdx);
+  return ok(dispatched, [envelope], [action]);
 }
 
 /** `backend` capability is looked up via `loop.nodes[id]`'s own `backend` field for agent/command
@@ -604,10 +622,11 @@ function dispatchEnvelope(
   attempt: number,
   causationEventId: string,
   emitIdx: { n: number },
-): { envelope: Envelope; snapshot: RunSnapshot } {
+): { envelope: Envelope; snapshot: RunSnapshot; action: Action } {
   const backendId = "backend" in node ? node.backend : "control-plane";
   const deadlineAt = deadlineAtFor(ctx, node);
   const dedupeKey = dedupeKeyFor(snapshot.runId, cycle, nodeId, attempt);
+  const action: Action = { type: "dispatch", backendId, nodeId, cycle, attempt, deadlineAt, dedupeKey };
   const envelope = emit(
     snapshot,
     ctx,
@@ -666,7 +685,7 @@ function dispatchEnvelope(
     attempts: { ...snapshot.attempts, [attemptKey(cycle, nodeId, attempt)]: attemptRecord },
     lease: { kind: "attempt", holder: `${cycle}:${nodeId}:${attempt}`, acquiredAt: ctx.now, heartbeatAt: ctx.now, expiresAt: deadlineAt },
   };
-  return { envelope, snapshot: updated };
+  return { envelope, snapshot: updated, action };
 }
 
 function startHumanGate(
@@ -717,7 +736,8 @@ function startHumanGate(
     lease: null,
     pendingApproval: { nodeId: node.id, cycleIndex: cycle, attempt: 0, mode: node.mode, subject, requestedAt: ctx.now, expiresAt },
   };
-  return ok(updated, [envelope]);
+  const action: Action = { type: "request-approval", mode: node.mode, nodeId: node.id, cycle, subject, expiresAt };
+  return ok(updated, [envelope], [action]);
 }
 
 /** state-machine.md §8.2: the digest of what is being approved. For `human.subject` naming an
@@ -815,7 +835,7 @@ function settleAndFinalize(
       const outcome: Outcome = { state: "FAILED", failureReason: "condition_error", nodeId: startNodeId, cycleIndex: currentCycle };
       const finished = emitRunFinished(working, ctx, outcome, causationEventId, emitIdx);
       working = applyFinish(working, ctx, outcome, finished.eventId);
-      return ok(working, [finished]);
+      return ok(working, [finished], [finishAction(outcome)]);
     }
     const { snapshot: withStart, emitted: startEmitted } = recordControlPlaneCompletion(working, ctx, startNodeId, currentCycle, "succeeded", causationEventId, emitIdx, { branch: branch.branch });
     working = withStart;
@@ -853,7 +873,7 @@ function settleAndFinalize(
       const finished = emitRunFinished(working, ctx, outcome, causationEventId, emitIdx);
       working = applyFinish(working, ctx, outcome, finished.eventId);
       emitted.push(finished);
-      return ok(working, emitted);
+      return ok(working, emitted, [finishAction(outcome)]);
     }
 
     if (routed.kind === "end") {
@@ -864,7 +884,7 @@ function settleAndFinalize(
       const finished = emitRunFinished(working, ctx, outcome, causationEventId, emitIdx);
       working = applyFinish(working, ctx, outcome, finished.eventId);
       emitted.push(finished);
-      return ok(working, emitted);
+      return ok(working, emitted, [finishAction(outcome)]);
     }
 
     if (routed.kind === "humanGate") {
@@ -883,7 +903,7 @@ function settleAndFinalize(
         const finished = emitRunFinished(working, ctx, outcome, causationEventId, emitIdx);
         working = applyFinish(working, ctx, outcome, finished.eventId);
         emitted.push(finished);
-        return ok(working, emitted);
+        return ok(working, emitted, [finishAction(outcome)]);
       }
       return traverseRetryEdge(working, ctx, edge, currentCycle, causationEventId, emitIdx, emitted, false);
     }
@@ -899,7 +919,7 @@ function settleAndFinalize(
         const finished = emitRunFinished(working, ctx, outcome, causationEventId, emitIdx);
         working = applyFinish(working, ctx, outcome, finished.eventId);
         emitted.push(finished);
-        return ok(working, emitted);
+        return ok(working, emitted, [finishAction(outcome)]);
       }
       const { snapshot: withCondition, emitted: conditionEmitted } = recordControlPlaneCompletion(
         working,
@@ -931,11 +951,11 @@ function settleAndFinalize(
       const finished = emitRunFinished(working, ctx, check.outcome, causationEventId, emitIdx);
       working = applyFinish(working, ctx, check.outcome, finished.eventId);
       emitted.push(finished);
-      return ok(working, emitted);
+      return ok(working, emitted, [finishAction(check.outcome)]);
     }
-    const { envelope, snapshot: dispatched } = dispatchEnvelope(working, ctx, node, node.id, dispatchCycle, 1, causationEventId, emitIdx);
+    const { envelope, snapshot: dispatched, action } = dispatchEnvelope(working, ctx, node, node.id, dispatchCycle, 1, causationEventId, emitIdx);
     emitted.push(envelope);
-    return ok(dispatched, emitted);
+    return ok(dispatched, emitted, [action]);
   }
 
   return internal(`routing did not settle after 64 hops starting from "${startNodeId}" (a cycle in the loop's forward graph?)`);
@@ -980,7 +1000,7 @@ function traverseRetryEdge(
   if (!check.ok) {
     const finished = emitRunFinished(snapshot, ctx, check.outcome, causationEventId, emitIdx);
     const working = applyFinish(snapshot, ctx, check.outcome, finished.eventId);
-    return ok(working, [...emittedSoFar, finished]);
+    return ok(working, [...emittedSoFar, finished], [finishAction(check.outcome)]);
   }
 
   const newTraversals = (snapshot.traversals[edge.id] ?? 0) + (free ? 0 : 1);
@@ -1015,9 +1035,9 @@ function traverseRetryEdge(
     noProgressStreak: free ? snapshot.noProgressStreak : 0,
   };
 
-  const { envelope: dispatchEnv, snapshot: dispatched } = dispatchEnvelope(working, ctx, toNode, edge.to, toCycle, 1, causationEventId, emitIdx);
+  const { envelope: dispatchEnv, snapshot: dispatched, action } = dispatchEnvelope(working, ctx, toNode, edge.to, toCycle, 1, causationEventId, emitIdx);
   working = dispatched;
-  return ok(working, [...emittedSoFar, edgeTaken, dispatchEnv]);
+  return ok(working, [...emittedSoFar, edgeTaken, dispatchEnv], [action]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1231,7 +1251,7 @@ function handleNoProgress(
     const outcome: Outcome = { state: "FAILED", failureReason: "no_progress_stalled" };
     const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
     working = applyFinish(working, ctx, outcome, finished.eventId);
-    return ok(working, [finished]);
+    return ok(working, [finished], [finishAction(outcome)]);
   }
 
   const freeTraversals = working.freeTraversals[edge.id] ?? 0;
@@ -1239,7 +1259,7 @@ function handleNoProgress(
     const outcome: Outcome = { state: "MAX_ITERATIONS_EXCEEDED", edgeId: edge.id, traversals: freeTraversals, maxIterations: edge.maxIterations };
     const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
     working = applyFinish(working, ctx, outcome, finished.eventId);
-    return ok(working, [finished]);
+    return ok(working, [finished], [finishAction(outcome)]);
   }
 
   return traverseRetryEdge(working, ctx, edge, cur.cycleIndex, event.eventId, emitIdx, [], true);
@@ -1307,7 +1327,7 @@ function finishNodeWithFailure(
       const outcome: Outcome = { state: "FAILED", failureReason, nodeId, cycleIndex: cycle };
       const finished = emitRunFinished(working, ctx, outcome, causationEventId, emitIdx);
       working = applyFinish(working, ctx, outcome, finished.eventId);
-      return ok(working, [...skipEmitted, finished]);
+      return ok(working, [...skipEmitted, finished], [finishAction(outcome)]);
     }
     const result = settleFromNext(working, ctx, node.next, cycle, causationEventId, emitIdx);
     if (result.kind === "invalid") return result;
@@ -1323,7 +1343,7 @@ function finishNodeWithFailure(
       const outcome: Outcome = { state: "MAX_ITERATIONS_EXCEEDED", edgeId: edge.id, traversals, maxIterations: edge.maxIterations };
       const finished = emitRunFinished(working, ctx, outcome, causationEventId, emitIdx);
       working = applyFinish(working, ctx, outcome, finished.eventId);
-      return ok(working, [finished]);
+      return ok(working, [finished], [finishAction(outcome)]);
     }
     return traverseRetryEdge(working, ctx, edge, cycle, causationEventId, emitIdx, [], false);
   }
@@ -1331,7 +1351,7 @@ function finishNodeWithFailure(
   const outcome: Outcome = { state: "FAILED", failureReason, nodeId, cycleIndex: cycle };
   const finished = emitRunFinished(working, ctx, outcome, causationEventId, emitIdx);
   working = applyFinish(working, ctx, outcome, finished.eventId);
-  return ok(working, [finished]);
+  return ok(working, [finished], [finishAction(outcome)]);
 }
 
 /** A synthesised routing continuation for onFailure=continue / resume --decision skip, where the
@@ -1349,7 +1369,7 @@ function settleFromNext(snapshot: RunSnapshot, ctx: EngineTransitionContext, nex
     const outcome: Outcome = { state: "SUCCEEDED", label: target.outcome };
     const finished = emitRunFinished(withEndNode, ctx, outcome, causationEventId, emitIdx);
     const working = applyFinish(withEndNode, ctx, outcome, finished.eventId);
-    return ok(working, [...endEmitted, finished]);
+    return ok(working, [...endEmitted, finished], [finishAction(outcome)]);
   }
   if (target.kind === "condition") {
     return settleAndFinalize(snapshot, ctx, nextNodeId, cycle, causationEventId, emitIdx, null);
@@ -1364,10 +1384,10 @@ function settleFromNext(snapshot: RunSnapshot, ctx: EngineTransitionContext, nex
   if (!check.ok) {
     const finished = emitRunFinished(working0, ctx, check.outcome, causationEventId, emitIdx);
     const working = applyFinish(working0, ctx, check.outcome, finished.eventId);
-    return ok(working, [finished]);
+    return ok(working, [finished], [finishAction(check.outcome)]);
   }
-  const { envelope, snapshot: dispatched } = dispatchEnvelope(working0, ctx, target, nextNodeId, dispatchCycle, 1, causationEventId, emitIdx);
-  return ok(dispatched, [envelope]);
+  const { envelope, snapshot: dispatched, action } = dispatchEnvelope(working0, ctx, target, nextNodeId, dispatchCycle, 1, causationEventId, emitIdx);
+  return ok(dispatched, [envelope], [action]);
 }
 
 /**
@@ -1437,7 +1457,7 @@ function applyRunningNodeFailed(snapshot: RunSnapshot, event: Envelope, ctx: Eng
     const outcome: Outcome = { state: "CANCELLED", by: "platform" };
     const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
     working = applyFinish(working, ctx, outcome, finished.eventId);
-    return ok(working, [finished]);
+    return ok(working, [finished], [finishAction(outcome)]);
   }
 
   if (classification === "QUOTA") {
@@ -1463,9 +1483,9 @@ function applyRunningNodeFailed(snapshot: RunSnapshot, event: Envelope, ctx: Eng
       chargedAttempts: { ...snapshot.chargedAttempts, [nKey]: (snapshot.chargedAttempts[nKey] ?? 0) + 1 },
     };
     const nextAttempt = cur.attempt + 1;
-    const { envelope, snapshot: dispatched } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, nextAttempt, event.eventId, emitIdx);
+    const { envelope, snapshot: dispatched, action } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, nextAttempt, event.eventId, emitIdx);
     working = dispatched;
-    return ok(working, [envelope]);
+    return ok(working, [envelope], [action]);
   }
 
   return finishNodeWithFailure(snapshot, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "node_failed", event.eventId, emitIdx, existingNode, existingAttempt, event.usage ?? null, "FAILED", "FAILED", "node-failed");
@@ -1514,7 +1534,7 @@ function enterQuotaPark(
     const outcome: Outcome = { state: "FAILED", failureReason: "quota_unclassifiable", nodeId: cur.nodeId, cycleIndex: cur.cycleIndex };
     const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
     working = applyFinish(working, ctx, outcome, finished.eventId);
-    return ok(working, [finished]);
+    return ok(working, [finished], [finishAction(outcome)]);
   }
 
   // Decision (not in sheet), m1: counted from the Attempt ledger (every QUOTA-classified attempt
@@ -1532,7 +1552,7 @@ function enterQuotaPark(
     const outcome: Outcome = { state: "FAILED", failureReason: "quota_parks_exhausted", nodeId: cur.nodeId, cycleIndex: cur.cycleIndex };
     const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
     working = applyFinish(working, ctx, outcome, finished.eventId);
-    return ok(working, [finished]);
+    return ok(working, [finished], [finishAction(outcome)]);
   }
 
   const resumeDueAt = formatRfc3339(quotaResetsAtMs + ctx.policy.quotaJitterSeconds * 1000);
@@ -1553,7 +1573,7 @@ function enterQuotaPark(
     lease: null,
     quota: { parks: parksSoFar + 1, quotaResetsAt: quotaResetsAtNormalised, resumeDueAt, window: "unknown", source: "reported" },
   };
-  return ok(working, [quotaParked]);
+  return ok(working, [quotaParked], [waitAction(resumeDueAt)]);
 }
 
 function applyRunningNodeTimedOut(snapshot: RunSnapshot, event: Envelope, ctx: EngineTransitionContext, emitIdx: { n: number }): HandlerResult {
@@ -1576,9 +1596,9 @@ function applyRunningNodeTimedOut(snapshot: RunSnapshot, event: Envelope, ctx: E
       attempts: { ...snapshot.attempts, [aKey]: updatedAttempt },
       chargedAttempts: { ...snapshot.chargedAttempts, [nKey]: (snapshot.chargedAttempts[nKey] ?? 0) + 1 },
     };
-    const { envelope, snapshot: dispatched } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, cur.attempt + 1, event.eventId, emitIdx);
+    const { envelope, snapshot: dispatched, action } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, cur.attempt + 1, event.eventId, emitIdx);
     working = dispatched;
-    return ok(working, [envelope]);
+    return ok(working, [envelope], [action]);
   }
 
   // N-15: a timed-out Node Execution's own terminal state is TIMED_OUT, not FAILED.
@@ -1604,9 +1624,9 @@ function applyRunningDispatchFailed(snapshot: RunSnapshot, event: Envelope, ctx:
       attempts: { ...snapshot.attempts, [aKey]: updatedAttempt },
       chargedAttempts: { ...snapshot.chargedAttempts, [nKey]: (snapshot.chargedAttempts[nKey] ?? 0) + 1 },
     };
-    const { envelope, snapshot: dispatched } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, cur.attempt + 1, event.eventId, emitIdx);
+    const { envelope, snapshot: dispatched, action } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, cur.attempt + 1, event.eventId, emitIdx);
     working = dispatched;
-    return ok(working, [envelope]);
+    return ok(working, [envelope], [action]);
   }
 
   return finishNodeWithFailure(snapshot, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "dispatch_failed", event.eventId, emitIdx, existingNode, existingAttempt, null, "FAILED", "FAILED", "dispatch-failed");
@@ -1639,9 +1659,9 @@ function applyRunningLeaseExpired(snapshot: RunSnapshot, event: Envelope, ctx: E
   };
 
   if (onInterruptedRetry && canRetry) {
-    const { envelope, snapshot: dispatched } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, cur.attempt + 1, event.eventId, emitIdx);
+    const { envelope, snapshot: dispatched, action } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, cur.attempt + 1, event.eventId, emitIdx);
     working = dispatched;
-    return ok(working, [envelope]);
+    return ok(working, [envelope], [action]);
   }
 
   if (!onInterruptedRetry || !canRetry) {
@@ -1653,7 +1673,7 @@ function applyRunningLeaseExpired(snapshot: RunSnapshot, event: Envelope, ctx: E
       status: "INTERRUPTED",
       interrupted: { nodeId: cur.nodeId, cycleIndex: cur.cycleIndex, attempt: cur.attempt, reason: "attempt_deadline", at: ctx.now },
     };
-    return ok(working, []);
+    return ok(working, [], [waitAction(null)]);
   }
 
   return internal("lease-expired: unreachable branch");
@@ -1730,7 +1750,7 @@ function applyWaitingHuman(snapshot: RunSnapshot, event: Envelope, ctx: EngineTr
     const outcome: Outcome = { state: "CANCELLED", by: "human" };
     const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
     working = applyFinish(working, ctx, outcome, finished.eventId);
-    return ok(working, [synthetic, finished]);
+    return ok(working, [synthetic, finished], [finishAction(outcome)]);
   }
 
   if (decision === "approve") {
@@ -1743,7 +1763,7 @@ function applyWaitingHuman(snapshot: RunSnapshot, event: Envelope, ctx: EngineTr
       const outcome: Outcome = { state: "FAILED", failureReason: "human_rejected", nodeId: cur.nodeId, cycleIndex: cur.cycleIndex };
       const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
       working = applyFinish(working, ctx, outcome, finished.eventId);
-      return ok(working, [synthetic, finished]);
+      return ok(working, [synthetic, finished], [finishAction(outcome)]);
     }
     if (typeof onFailure === "string" && onFailure.startsWith("retry_edge:")) {
       const edgeId = onFailure.slice("retry_edge:".length);
@@ -1754,7 +1774,7 @@ function applyWaitingHuman(snapshot: RunSnapshot, event: Envelope, ctx: EngineTr
         const outcome: Outcome = { state: "MAX_ITERATIONS_EXCEEDED", edgeId: edge.id, traversals, maxIterations: edge.maxIterations };
         const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
         working = applyFinish(working, ctx, outcome, finished.eventId);
-        return ok(working, [synthetic, finished]);
+        return ok(working, [synthetic, finished], [finishAction(outcome)]);
       }
       return traverseRetryEdge(working, ctx, edge, cur.cycleIndex, event.eventId, emitIdx, [synthetic], false);
     }
@@ -1797,7 +1817,7 @@ function applyHumanTimeout(snapshot: RunSnapshot, event: Envelope, ctx: EngineTr
   const outcome: Outcome = { state: "EXPIRED", expiryReason: "human_timeout", nodeId: cur.nodeId };
   const finished = emitRunFinished(working, ctx, outcome, event.eventId, emitIdx);
   working = applyFinish(working, ctx, outcome, finished.eventId);
-  return ok(working, [finished]);
+  return ok(working, [finished], [finishAction(outcome)]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1814,12 +1834,12 @@ function applyWaitingForQuota(snapshot: RunSnapshot, event: Envelope, ctx: Engin
   if (!check.ok) {
     const finished = emitRunFinished(snapshot, ctx, check.outcome, event.eventId, emitIdx);
     const working = applyFinish(snapshot, ctx, check.outcome, finished.eventId);
-    return ok(working, [finished]);
+    return ok(working, [finished], [finishAction(check.outcome)]);
   }
   let working: RunSnapshot = { ...snapshot, quota: null };
-  const { envelope, snapshot: dispatched } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, nextAttempt, event.eventId, emitIdx);
+  const { envelope, snapshot: dispatched, action } = dispatchEnvelope(working, ctx, node, cur.nodeId, cur.cycleIndex, nextAttempt, event.eventId, emitIdx);
   working = dispatched;
-  return ok(working, [envelope]);
+  return ok(working, [envelope], [action]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1839,12 +1859,12 @@ function applyInterrupted(snapshot: RunSnapshot, event: Envelope, ctx: EngineTra
     if (!check.ok) {
       const finished = emitRunFinished(snapshot, ctx, check.outcome, event.eventId, emitIdx);
       const working = applyFinish(snapshot, ctx, check.outcome, finished.eventId);
-      return ok(working, [finished]);
+      return ok(working, [finished], [finishAction(check.outcome)]);
     }
     let working: RunSnapshot = { ...snapshot, interrupted: null };
-    const { envelope, snapshot: dispatched } = dispatchEnvelope(working, ctx, node, interrupted.nodeId, interrupted.cycleIndex, interrupted.attempt + 1, event.eventId, emitIdx);
+    const { envelope, snapshot: dispatched, action } = dispatchEnvelope(working, ctx, node, interrupted.nodeId, interrupted.cycleIndex, interrupted.attempt + 1, event.eventId, emitIdx);
     working = dispatched;
-    return ok(working, [envelope]);
+    return ok(working, [envelope], [action]);
   }
 
   if (decision === "skip") {
@@ -1852,7 +1872,7 @@ function applyInterrupted(snapshot: RunSnapshot, event: Envelope, ctx: EngineTra
       const outcome: Outcome = { state: "FAILED", failureReason: "interrupted_abandoned", nodeId: interrupted.nodeId, cycleIndex: interrupted.cycleIndex };
       const finished = emitRunFinished(snapshot, ctx, outcome, event.eventId, emitIdx);
       const working = applyFinish(snapshot, ctx, outcome, finished.eventId);
-      return ok(working, [finished]);
+      return ok(working, [finished], [finishAction(outcome)]);
     }
     const nKey = nodeKey(interrupted.cycleIndex, interrupted.nodeId);
     const existingNode = snapshot.nodes[nKey];
@@ -1882,7 +1902,7 @@ function applyInterrupted(snapshot: RunSnapshot, event: Envelope, ctx: EngineTra
     const outcome: Outcome = { state: "FAILED", failureReason: "interrupted_abandoned", nodeId: interrupted.nodeId, cycleIndex: interrupted.cycleIndex };
     const finished = emitRunFinished(snapshot, ctx, outcome, event.eventId, emitIdx);
     const working = applyFinish(snapshot, ctx, outcome, finished.eventId);
-    return ok(working, [finished]);
+    return ok(working, [finished], [finishAction(outcome)]);
   }
 
   return internal(`resumed: unrecognised decision ${JSON.stringify(decision)}`);

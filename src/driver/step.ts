@@ -11,12 +11,13 @@
 
 import { parseRfc3339 } from "../util/time.ts";
 import { LoopmillError } from "../util/errors.ts";
-import { DEFAULT_POLICY_FULL, transition, type EngineTransitionContext, type EnginePolicyFull } from "../engine/index.ts";
+import { DEFAULT_POLICY_FULL, isTerminalRun, transition, type EngineTransitionContext, type EnginePolicyFull } from "../engine/index.ts";
 import type { Envelope } from "../types/envelope.ts";
 import type { TransitionResult } from "../types/state.ts";
 import type { RunContext, Clock } from "./context.ts";
 import { runSweep, type SweepOutcome } from "./sweep.ts";
 import { newlyTerminalAttempts } from "./attempts.ts";
+import { writeRunReport } from "./report.ts";
 
 export interface ApplyStepInput {
   ctx: RunContext;
@@ -147,6 +148,22 @@ export function applyStep(input: ApplyStepInput): ApplyStepOutput {
     // run's only writer, so this branch is store-level defence in depth for them, not a case
     // they are expected to hit.
     return { exitCode: 3, result, ...(sweep !== undefined ? { sweep } : {}) };
+  }
+
+  // Item 6: the run report is written on every terminal path, not only the one `continueRun`
+  // (`run.ts`) happens to drive — a bare `loopmill step` that itself lands the terminal event
+  // (e.g. re-ingesting an exported envelope, or a test driving the state machine one event at a
+  // time) must produce the same `.loopmill/reports/<runId>.md`/`.json` a full `run`/`approve`/
+  // `reject` would. `applied` only (never `ignored-stale`, which cannot itself cause a fresh
+  // terminal transition — R-53 already refuses any event addressed to an already-terminal Run
+  // before `transition()` ever reaches this point). Best-effort: a report that could not be
+  // written must never turn an otherwise-successful step into a failure.
+  if (result.kind === "applied" && isTerminalRun(result.snapshot.status)) {
+    try {
+      writeRunReport({ layout: ctx.layout, store: ctx.store, loop: ctx.loop, runId: input.envelope.runId, snapshot: result.snapshot });
+    } catch {
+      // best-effort, see above.
+    }
   }
 
   return { exitCode: 0, result, ...(sweep !== undefined ? { sweep } : {}) };

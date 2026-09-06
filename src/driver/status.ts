@@ -18,6 +18,14 @@ function sweepFirst(ctx: RunContext, policy: EnginePolicyFull): void {
   runSweep({ store: ctx.store, clock: ctx.clock, loops: (loopId) => (loopId === ctx.loop.slug ? ctx.loop : null), policy });
 }
 
+/** `<layout.logs>/<runId>/<cycle>-<nodeId>-<attempt>.plan.json` — item 5: the dispatch plan
+ * `run.ts`'s dispatch loop persists right before `dispatch()` (`DispatchPlan` + the resolved
+ * inputs, redacted), alongside that same attempt's `.out`/`.err` captured streams. Exported so
+ * `run.ts` (the writer) and `logsOf`, below (the reader), share one path convention. */
+export function dispatchPlanPath(logsDir: string, runId: string, cycleIndex: number, nodeId: string, attempt: number): string {
+  return join(logsDir, runId, `${cycleIndex}-${nodeId}-${attempt}.plan.json`);
+}
+
 // ---------------------------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------------------------
@@ -157,6 +165,20 @@ export function listRunsView(ctx: RunContext, opts: ListRunsOptions = {}, policy
 // logs
 // ---------------------------------------------------------------------------------------------
 
+/** The dispatch plan `run.ts` persisted right before this attempt was dispatched (item 5) — `null`
+ * for an attempt that never reached a real dispatcher (a control-plane-local completion, or one
+ * whose plan file could not be read: an older run predating this feature, or a `dispatch-failed`
+ * for a missing dispatcher, which never built a plan in the first place). */
+export interface LogsPlanView {
+  inputs: Record<string, unknown>;
+  argv: string[];
+  cwd: string;
+  /** `env denied: ...` / `env injected: ...` (`LocalDispatcher.describe`'s own notes), plus any
+   * other note the dispatcher recorded — never the resolved env values themselves. */
+  notes: string[];
+  timeoutMs: number | null;
+}
+
 export interface LogsAttemptView {
   attempt: number;
   state: string;
@@ -167,6 +189,7 @@ export interface LogsAttemptView {
   stderrPath: string;
   stdoutTail: string | null;
   stderrTail: string | null;
+  plan: LogsPlanView | null;
 }
 
 export interface LogsNodeView {
@@ -182,6 +205,21 @@ export interface LogsNodeView {
 function readTail(path: string, bytes: number): string | null {
   try {
     return tail(readFileSync(path, "utf8"), bytes);
+  } catch {
+    return null;
+  }
+}
+
+function readPlan(path: string): LogsPlanView | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<LogsPlanView>;
+    return {
+      inputs: parsed.inputs ?? {},
+      argv: parsed.argv ?? [],
+      cwd: parsed.cwd ?? "",
+      notes: parsed.notes ?? [],
+      timeoutMs: parsed.timeoutMs ?? null,
+    };
   } catch {
     return null;
   }
@@ -210,6 +248,7 @@ export function logsOf(
         .map((a): LogsAttemptView => {
           const stdoutPath = join(ctx.layout.logs, runId, `${n.cycleIndex}-${n.nodeId}-${a.attempt}.out`);
           const stderrPath = join(ctx.layout.logs, runId, `${n.cycleIndex}-${n.nodeId}-${a.attempt}.err`);
+          const planPath = dispatchPlanPath(ctx.layout.logs, runId, n.cycleIndex, n.nodeId, a.attempt);
           return {
             attempt: a.attempt,
             state: a.state,
@@ -220,6 +259,7 @@ export function logsOf(
             stderrPath,
             stdoutTail: readTail(stdoutPath, 2000),
             stderrTail: readTail(stderrPath, 2000),
+            plan: readPlan(planPath),
           };
         });
       return {

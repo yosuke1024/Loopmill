@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drive, runRequested, nodeCompleted, humanDecided, fullUsage, wireUsage, type Step } from "../../fixtures/engine/helpers.ts";
+import { drive, runRequested, nodeCompleted, humanDecided, fullUsage, wireUsage, assertActions, type Step } from "../../fixtures/engine/helpers.ts";
 import { NODES, RETRY_EDGE_ID } from "../../fixtures/engine/reference-loop.ts";
 import type { Envelope } from "../../../src/types/envelope.ts";
 
@@ -35,6 +35,7 @@ test("13.1 happy path: review-content -> needs-issue(then) -> create-issue -> im
     assert.equal(r1.snapshot.current?.attempt, 1);
     assert.equal(r1.snapshot.cycleIndex, 0);
     assert.deepEqual(r1.snapshot.traversals, { [RETRY_EDGE_ID]: 0 });
+    assertActions(r1.results[r1.results.length - 1]!, "hop 1: run-requested -> RUNNING, review-content dispatched");
   }
 
   // 5-7 (per the spec's numbering; here, review-content's own completion): node SUCCEEDED,
@@ -58,6 +59,7 @@ test("13.1 happy path: review-content -> needs-issue(then) -> create-issue -> im
     assert.equal(r.snapshot.current?.nodeId, NODES.createIssue);
     assert.equal(r.snapshot.budget.measuredExecutions, 1);
     assert.equal(r.snapshot.budget.unmeasuredExecutions, 0);
+    assertActions(r.results[r.results.length - 1]!, "hop 2: review-content completes -> create-issue dispatched");
   }
 
   // 8. create-issue completes, artifactRefs += issue#42.
@@ -84,6 +86,7 @@ test("13.1 happy path: review-content -> needs-issue(then) -> create-issue -> im
     assert.equal(r.snapshot.current?.cycleIndex, 1);
     const lastResult = r.results[r.results.length - 1]!;
     assert.equal(lastResult.kind, "applied");
+    assertActions(lastResult, "hop 3: create-issue completes -> implement dispatched (cycle 1)");
     if (lastResult.kind === "applied") {
       assert.deepEqual(
         lastResult.emitted.map((e) => e.eventType),
@@ -112,6 +115,7 @@ test("13.1 happy path: review-content -> needs-issue(then) -> create-issue -> im
     assert.ok(r.snapshot.changeFingerprints["1:implement"]);
     assert.equal(r.snapshot.budget.measuredExecutions, 2);
     assert.equal(r.snapshot.current?.nodeId, NODES.runTests);
+    assertActions(r.results[r.results.length - 1]!, "hop 4: implement completes -> run-tests dispatched");
   }
 
   // 11. run-tests exit 0 -> SUCCEEDED, no usage (command node).
@@ -120,6 +124,7 @@ test("13.1 happy path: review-content -> needs-issue(then) -> create-issue -> im
     const r = drive(steps);
     assert.equal(r.snapshot.nodes["1:run-tests"]?.state, "SUCCEEDED");
     assert.equal(r.snapshot.current?.nodeId, NODES.reviewChanges);
+    assertActions(r.results[r.results.length - 1]!, "hop 5: run-tests completes -> review-changes dispatched");
   }
 
   // 12. review-changes {approved: true} -> SUCCEEDED, verdictFingerprints touched.
@@ -153,6 +158,7 @@ test("13.1 happy path: review-content -> needs-issue(then) -> create-issue -> im
     assert.equal(r.snapshot.pendingApproval!.subject.kind, "diff");
     approvePrDigest = r.snapshot.pendingApproval!.subject.digest;
     assert.match(approvePrDigest, /^sha256:[0-9a-f]{64}$/);
+    assertActions(r.results[r.results.length - 1]!, "hop 6: review-changes approved -> WAITING_HUMAN, approve-pr requested");
   }
 
   // 15. human-decided approve, matching digest -> RUNNING, approvals recorded, node SUCCEEDED.
@@ -163,6 +169,7 @@ test("13.1 happy path: review-content -> needs-issue(then) -> create-issue -> im
     assert.equal(r.snapshot.nodes["0:approve-pr"]?.state, "SUCCEEDED");
     assert.equal(Object.keys(r.snapshot.approvals).length, 1);
     assert.equal(r.snapshot.current?.nodeId, NODES.createPr);
+    assertActions(r.results[r.results.length - 1]!, "hop 7: human-decided approve -> RUNNING, create-pr dispatched");
   }
 
   // 16. create-pr completes, artifactRefs += pr#77.
@@ -201,6 +208,7 @@ test("13.1 happy path: review-content -> needs-issue(then) -> create-issue -> im
   const artifactKinds = final.snapshot.artifactRefs.map((r) => r.kind);
   void artifactKinds; // artifactRefs accumulation is a `run-finished`-time concern (see below)
   const lastResult = final.results[final.results.length - 1] as Extract<import("../../../src/types/state.ts").TransitionResult, { kind: "applied" }>;
+  assertActions(lastResult, "hop 8: create-pr completes -> run-finished(SUCCEEDED)");
   const runFinished = lastResult.emitted.find((e: Envelope) => e.eventType === "run-finished");
   assert.ok(runFinished);
   assert.equal(runFinished!.outcome?.state, "SUCCEEDED");
