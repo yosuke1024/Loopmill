@@ -459,6 +459,10 @@ Notes that the table cannot carry:
   Retry Edge whose `to` is a condition, human or end node is rejected rather than discovered at 03:00.
 * **`fake` is a first-class MVP deliverable**, not a test detail: the whole reference loop must run green
   against it in CI with no network, no subscription and no tokens (acceptance criterion A31).
+* **`observed` is not in the MVP.** The column stays as the record of a designed shape, but SPIKE-2's live
+  runs (2026-09-06) showed the diff never leaves the vendor UI without a click and that a `GITHUB_TOKEN`
+  cannot author the trigger `[V]`; the maintainer dropped the backend (section 20.1,
+  `docs/spikes/README.md` §4).
 * **`quotaSignal: classified` understates `claude-code` 2.1.263.** Its `stream-json` output carries a
   structured `rate_limit_event` (per-window utilization and reset time, `isUsingOverage`) `[V]`, but the
   shape at an actual refusal is unobserved `[U]`, so the backend capability stays `classified` until a
@@ -1039,12 +1043,12 @@ The loop of section 5.3, executed for real. Time zone: `Asia/Tokyo`; the schedul
 
 | # | Node | Kind | Runtime | Backend | Auth | Cycle | Fallback if its spike fails |
 |---|---|---|---|---|---|---|---|
-| 1 | `review-content` | agent | `codex` | `observed` | `subscription-login` (vendor-side) `[S]` SPIKE-2 | 0 | → `codex` on `github-actions` (SPIKE-2b); if that fails too → `claude-code` with a different model, and the loop is single-vendor (STOP (b)) |
+| 1 | `review-content` | agent | `codex` | ~~`observed`~~ → `github-actions` | `subscription-login` — SPIKE-2 NO-GO 2026-09-06 `[V]`, fallback engaged | 0 | `codex` on `github-actions` pending SPIKE-2b; if that fails too → `claude-code` with a different model, and the loop is single-vendor (STOP (b)) |
 | 2 | `needs-issue` | condition | — | `control-plane` | — | 0 | — |
 | 3 | `create-issue` | command | — | `github-actions` | `GITHUB_TOKEN` (`issues: write`) | 0 | — |
 | 4 | `implement` | agent | `claude-code` | `github-actions` | `subscription-oauth` `[S]` SPIKE-1 | 1..4 | none — this is STOP (a) |
 | 5 | `run-tests` | command | — | `github-actions` | none | 1..4 | — |
-| 6 | `review-changes` | agent | `codex` | `observed` | `subscription-login` (vendor-side) `[S]` SPIKE-2 | 1..4 | as node 1 |
+| 6 | `review-changes` | agent | `codex` | ~~`observed`~~ → `github-actions` | `subscription-login` — SPIKE-2 NO-GO 2026-09-06 `[V]`, fallback engaged | 1..4 | as node 1 |
 | 7 | `review-verdict` | condition | — | `control-plane` | — | 1..4 | — |
 | 8 | `approve-pr` | human | — | `control-plane` (GitHub Environment) | reviewer identity | 0 | — |
 | 9 | `create-pr` | command | — | `github-actions` | `GITHUB_TOKEN` (`pull-requests: write`) | 0 | — |
@@ -1226,7 +1230,7 @@ its own product; and it does not resell or intermediate anyone's usage.
 |---|---|
 | `github-actions` + `claude-code` + `subscription-oauth` | Baseline. SPIKE-1 passed on 2026-09-06 (C1-C4 and C7 PASS on a GitHub-hosted runner, claude-code 2.1.263) `[V]`; STOP (a) not triggered |
 | `github-actions` + `codex` + `subscription-login` | **EXPERIMENTAL**, behind a flag, until SPIKE-2b proves refresh-token survival on ephemeral runners |
-| `observed` (Codex Cloud via `@codex` comment; `codex cloud exec` where a credential exists) | Gated on SPIKE-2 R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8). SPIKE-2's own recommendation is *degraded-GO at best*: usage is `unavailable` and there is no per-task quota predicate `[V]`, so it ships labelled experimental |
+| `observed` (Codex Cloud via `@codex` comment; `codex cloud exec` where a credential exists) | **Dropped — SPIKE-2 NO-GO on 2026-09-06** (maintainer decision): R4 failed (the diff never leaves the vendor UI without a human click `[V]`) and R8 failed (a `GITHUB_TOKEN`-authored mention starts no task `[V]`). Codex stays reachable through `codex exec` on `local` and, pending SPIKE-2b, on `github-actions` |
 | `local` (manual and debug) | In scope, no scheduler, no reconcile |
 | `fake` | In scope, ships in the package |
 | `api-key` | Opt-in only, per section 6.5 |
@@ -1237,7 +1241,7 @@ its own product; and it does not resell or intermediate anyone's usage.
 |---|---:|---|---|
 | **m0 — Spikes and contract freeze** | 2 | SPIKE-1, SPIKE-2 R-runs, SPIKE-2b, SPIKE-3 on real GitHub; freeze the loop-file schema, envelope schema, state machine, usage record and capability model; write v0.5 and the companion specs | Contracts frozen; nothing in m1 starts before they are written down |
 | **m1 — Core** | 5 | Loop file + validator; `step` + `transition`; git-branch and local-dir state stores; `run-node` for `github-actions` and `local`; `claude-code` and `codex` adapters; `fake` backend; envelope; exit codes; terminal-first `status` / `runs` / `logs` | First end-to-end run that lands a PR, driven from the command line |
-| **m2 — Cross-vendor unattended** | 3 | `observed` backend; human gates via Environments; sweep, `resume --due`, lease/`INTERRUPTED` recovery; budget and coverage; dedupe/`SKIPPED`; run report | **Dogfood cut-line:** seven consecutive unattended nights of the reference loop |
+| **m2 — Cross-vendor unattended** | 3 | `codex` on `github-actions` behind its flag (if SPIKE-2b passes; otherwise the loop is Claude-only cross-role); human gates via Environments; sweep, `resume --due`, lease/`INTERRUPTED` recovery; budget and coverage; dedupe/`SKIPPED`; run report | **Dogfood cut-line:** seven consecutive unattended nights of the reference loop |
 | **m3 — Observable and installable** | 3 | Read-only UI over the SQLite read model; `sync`, `gc`, `backends`, `doctor --json`; npm package; docs; policy page | **MVP cut-line** |
 | *post-MVP* | — | Visual builder (lossless round-trip), notifications, additional backends, session resume, parallelism | — |
 
@@ -1372,7 +1376,7 @@ Not in the MVP, and each for a stated reason:
 | Spike | Question | Decides |
 |---|---|---|
 | **SPIKE-1** | Does `claude -p` with `CLAUDE_CODE_OAUTH_TOKEN` run headless on a hosted runner, with usage JSON and structured output, never `--bare`? | The `github-actions` backend's primary runtime. Failure → STOP (a). **Passed 2026-09-06** (run 34024962852: C1-C4 and C7 PASS, claude-code 2.1.263) `[V]`; findings in `docs/spikes/README.md` §3 |
-| **SPIKE-2** | Codex Cloud R-runs: R1 task creation from a non-interactive process on subscription auth; R4 the result reaching GitHub without a click; R5 a schema-conforming JSON artifact ≥ 4/5; R7 `ready`/`error` distinguishable and bounded; R3 or R8 a trigger Loopmill can own | The `observed` backend. GO requires R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8) |
+| **SPIKE-2** | Codex Cloud R-runs: R1 task creation from a non-interactive process on subscription auth; R4 the result reaching GitHub without a click; R5 a schema-conforming JSON artifact ≥ 4/5; R7 `ready`/`error` distinguishable and bounded; R3 or R8 a trigger Loopmill can own | The `observed` backend. GO requires R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8). **NO-GO 2026-09-06** `[V]`: R1 PASS; R4 FAIL — the diff stays inside the task and the UI's "Create PR" click is the only exit; R8 FAIL — a `GITHUB_TOKEN`-authored `@codex` comment is refused ("create a Codex account and connect to github"), a maintainer-authored one starts a task whose reply is a comment, never a push. `observed` dropped (section 20.1) |
 | **SPIKE-2b** | Does a seeded `auth.json` survive refresh-token rotation on ephemeral runners (R11 terms)? | `codex` on `github-actions`. Failure keeps it flag-gated or removes it |
 | **SPIKE-3** | On real GitHub: CAS on the state branch, duplicate and concurrent delivery, an interrupted job, `GITHUB_TOKEN` dispatch chaining, the `repository_dispatch` default-branch restriction, per-step runner overhead | Sections 7-9. Local harness green (20/20) and 22 hosted runs on 2026-09-06 confirming chaining, the default-branch requirement and per-step overhead `[V]`; a forced CAS conflict, an interrupted job, a 32 KiB envelope and the concurrency group's one-pending-run behaviour measured 2026-09-06 `[V]`; `repository_dispatch` still open `[S]`. Failure changes the mechanism, not the positioning |
 
@@ -1382,7 +1386,9 @@ Not in the MVP, and each for a stated reason:
 * **(b)** No cross-vendor path exists under subscriptions, and the only working shape is "GitHub Actions +
   API keys" — which `claude-code-action` and `codex-action` already provide. Then Loopmill is Claude-only
   cross-role, "cross-vendor" is deferred, and D2 must be withdrawn from the positioning rather than
-  quietly weakened.
+  quietly weakened. *Evaluation 2026-09-06:* not triggered yet — `observed` is out, but `codex exec` runs
+  under a subscription login on `local` today and on `github-actions` pending SPIKE-2b; if SPIKE-2b
+  fails, (b) is met.
 * **(c)** Vendor terms, once read verbatim from primary sources, forbid the single-user unattended use
   Loopmill relies on.
 

@@ -33,7 +33,7 @@ finding.
 | ID | Question | Status | Gate it retires | Owner |
 |---|---|---|---|---|
 | SPIKE-1 | Does `claude -p` run headless on a GitHub-hosted runner authenticated only with `CLAUDE_CODE_OAUTH_TOKEN`, with usable usage JSON and structured output? | **Measured — PASS** (hosted run 34024962852, 2026-09-06, claude-code 2.1.263: C1-C4 and C7 PASS); C6 SIGTERM measured on a C6-only re-run (34026065026): exit 143, no result | STOP (a) **not triggered**; `github-actions` keeps Claude Code as its primary runtime (decision sheet §4, §11) | Maintainer (needs a `claude setup-token` from their own subscription, stored as a repository secret) |
-| SPIKE-2 | Can Loopmill drive a Codex node on OpenAI's cloud under a ChatGPT subscription, get a machine-readable result onto GitHub, and re-trigger it, without an API key? | Documentary research done; R0-R11 user run plan not yet executed | Decides the `observed` backend (decision sheet §4, §11); feeds STOP (b) | Maintainer (needs a real ChatGPT Plus/Pro account and manual web-UI steps) |
+| SPIKE-2 | Can Loopmill drive a Codex node on OpenAI's cloud under a ChatGPT subscription, get a machine-readable result onto GitHub, and re-trigger it, without an API key? | **Measured — NO-GO** (user runs R0, R1, R4, R8 on 2026-09-06: R1 PASS, R4 FAIL, R8 FAIL with `GITHUB_TOKEN`); the `observed` backend is dropped by maintainer decision | Decided the `observed` backend (decision sheet §4, §11): out. STOP (b) now hinges on SPIKE-2b | Maintainer (real ChatGPT Plus account, manual web-UI steps) |
 | SPIKE-2b | Does a seeded Codex ChatGPT `auth.json` survive refresh-token rotation on an ephemeral GitHub-hosted runner? | Documentary groundwork done (status table item 4d); not yet run | Decides whether `codex` on `github-actions` can leave EXPERIMENTAL status (decision sheet §11) | Maintainer (needs a real ChatGPT login to seed `auth.json` once) |
 | SPIKE-3 | Can `loopmill step` be a non-resident, event-sourced process that stays correct under duplicate, concurrent, and interrupted delivery, chained purely by GitHub Actions? | Measured — 21/21 local tests, 44 hosted workflow runs in two batches (chains and duplicates; then a forced CAS storm, envelope sizes, the concurrency group's pending-run behaviour, an interrupted job and an `always-fail` chain) | Confirms/adjusts decision sheet §6 (control-plane algorithm, exit codes) and §8 (state persistence); does not change positioning. One mechanism change: no per-run concurrency group for `step` (design §7.5) | Automated — a simulated backend, no vendor credentials required |
 
@@ -218,18 +218,18 @@ decidable with a live ChatGPT subscription.
 | 1a | Cloud tasks run under ChatGPT-plan auth only; API key env vars are structurally rejected | VERIFIED | Enforced by OpenAI itself — matches Loopmill's `subscription-login` auth mode and its environment deny list with no extra work. |
 | 1b | Base URL locked to `chatgpt.com`/`chat.openai.com`/`chatgpt-staging.com` | VERIFIED | No self-hosting; "observed" always means OpenAI's own cloud. |
 | 1c | Cloud tasks share the same 5h/weekly plan windows as local Codex and ChatGPT Work | LIKELY | A cloud loop and a local loop compete for one budget — concurrency defaults matter more, not less. |
-| 1d | Codex Cloud is Plus/Pro/Business/Enterprise only | LIKELY | Loopmill must detect plan type (`account/rateLimits/read` → `planType`) before offering the backend. |
+| 1d | Codex Cloud is Plus/Pro/Business/Enterprise only | VERIFIED (Plus) | Cloud tasks ran on a Plus account on 2026-09-06 (R0/R1). Loopmill must still detect plan type (`account/rateLimits/read` → `planType`) before offering anything. |
 | 1e | Separate daily/run cap on cloud tasks | UNVERIFIED / NEEDS-USER-RUN | No cap constant found anywhere; must be measured (R6). |
 | 2a | Two automation shapes exist: standalone (reports to the app's Triage inbox) and thread automations | LIKELY | A standalone automation does **not** land on GitHub unless its prompt explicitly uses the GitHub connector. |
 | 2b | Typed scheduled-task schema is `Hourly`\|`Daily`\|`Weekdays`\|`Weekly`, with IANA timezone | VERIFIED (typed schema) | Hourly is the minimum first-party interval — fine for nightly loops, too coarse for a fast retry loop. |
 | 2c | UI may also offer minute intervals and custom cron for thread automations | LIKELY | Not in any reachable typed schema; verify with run R2 before designing around it. |
 | 2d | GitHub PR-activity event triggers exist (added 2026-08-25), Plus/Pro+ only, web/mobile-configured only, cannot combine with a schedule | LIKELY | The single most important row: a plan-backed GitHub-event trigger exists, but Loopmill cannot create, version, or observe it. |
 | 3a | A cloud task's repo comes from a Codex Cloud "environment" bound via the GitHub App | VERIFIED | Loopmill needs one `env_…` id per repo, created out-of-band in the Codex web UI; `codex cloud exec --env` accepts an id or label. |
-| 3b | The backend models linked pull requests | VERIFIED | ...but the CLI never surfaces those fields — a PR link must come from `gh`, not `codex cloud`. |
-| 3c | Default sink may be a task-local diff, not a GitHub object; PR creation may need an explicit prompt | LIKELY / NEEDS-USER-RUN | The decisive open question for the whole backend — settled by run R4. |
+| 3b | The backend models linked pull requests | VERIFIED | ...but the CLI never surfaces those fields, and on 2026-09-06 no task ever linked one — a PR link must come from `gh`, not `codex cloud`. |
+| 3c | Default sink is a task-local diff, not a GitHub object; PR creation needs a human click | **VERIFIED (R4, negative)** | Two prompt formulations (default; "Open a pull request… Do not require any human interaction") both ended `ready` with the diff inside the task, no branch, no PR, no push event. The agent's own summary: the `make_pr` tool is unavailable and the sandbox has no remote or GitHub authentication. The web UI offers a "Create PR" button — a click. Primary doc: "When the agent finishes, it shows its answer and a diff of any files it changed. You can open a PR or ask follow-up questions." |
 | 3d | GitHub connector exposes issue read/comment/create_pull_request, not create_issue | LIKELY | A cloud task cannot open an Issue, only comment on one. |
-| 3e | `@codex`/`@codex review` PR or issue comments dispatch a cloud task; `@codex review` posts a real review | LIKELY | A working external trigger reachable from an Actions job with only `GITHUB_TOKEN`. |
-| 4a | `codex cloud exec --env` creates a real task from a non-interactive process | VERIFIED | The single biggest positive finding: cloud tasks can be dispatched with no daemon and no API key. |
+| 3e | `@codex <instruction>` on a PR dispatches a cloud task and the reply lands on the PR as a bot comment | VERIFIED (R8, user-authored) | Mention at 10:50:36 → task `GitHub Mention: …` (`is_review: true` in `list --json`) → `chatgpt-codex-connector[bot]` summary comment at 10:52:00 (84 s), with a "View task" link. The **change was not pushed** ("A remote and authenticated GitHub session were not available in this checkout"). Only the agent's final message reaches GitHub, never the diff. |
+| 4a | `codex cloud exec --env` creates a real task from a non-interactive process | VERIFIED (R1, live) | `codex cloud exec --env <id> "…" </dev/null`: exit 0, one URL on stdout, empty stderr, no prompt; task `pending` → `ready` in 2 min 46 s with the expected one-line diff. No daemon, no API key. |
 | 4b | Underlying endpoint is private/undocumented (`POST .../wham/tasks`) | VERIFIED | Loopmill must call the CLI, never this endpoint directly. |
 | 4c | No public REST API, webhook, MCP tool, or app-server method for cloud tasks | VERIFIED (absence) | `codex cloud exec`, a GitHub comment, or a web-UI automation are the only entry points — no HTTP "fire" equivalent. |
 | 4d | CI/CD auth for a Codex account requires seeding `auth.json`, with OpenAI recommending a persistent self-hosted runner | LIKELY | Ephemeral GitHub-hosted runners are a poor fit for this — exactly what SPIKE-2b tests. |
@@ -240,7 +240,7 @@ decidable with a live ChatGPT subscription.
 | 6a | No structured-output/JSON-schema option for cloud tasks | VERIFIED (absence) | The Structured Output field would be empty for every cloud node. |
 | 6b | Workaround: have the prompt write a JSON file into the diff/PR | LIKELY / NEEDS-USER-RUN | The viable design shape — "the artifact is a file in the diff" — measured by R5. |
 | 7a | Every task has a stable id and a browser URL; `codex cloud exec` prints exactly that URL | VERIFIED | Clean run-identifier story: the printed URL is the run handle. |
-| 7b | `codex cloud list --json` gives a machine-readable four-state enum (pending/ready/applied/error) | VERIFIED | This is the completion signal to poll. |
+| 7b | `codex cloud list --json` gives a machine-readable four-state enum (pending/ready/applied/error) | VERIFIED (live: `pending` → `ready` observed) | This is the completion signal to poll; mention-triggered tasks appear there too (`is_review: true`). The `error` state was not exercised. |
 | 7c | `codex cloud status` is text-only, no `--json`, and exits 1 for anything but `ready` | VERIFIED | A trap: pending, error, and already-applied all collapse to exit 1 — must poll `list --json` instead. |
 | 7d | No push notification, webhook, or completion callback | VERIFIED (absence) | Polling only; fine for a daemonless design, but costs a process spawn plus a round trip per poll. |
 | 8a | Token usage is not exposed anywhere in the `codex cloud` CLI | VERIFIED (absence) | A direct hit on Loopmill's loop-observability differentiator — cloud nodes record `usage: unavailable` and lower the Run's usage coverage. |
@@ -250,8 +250,8 @@ decidable with a live ChatGPT subscription.
 | 9b | Account-level reset time IS exposed via `account/rateLimits/read` | VERIFIED | The design answer: read the account, not the task — `usedPercent`/`resetsAt` works for cloud and local alike. |
 | 9c | Reported behaviour at the plan wall mid-task is destructive (quota burned, work reverted, silent failures) | UNVERIFIED / NEEDS-USER-RUN | Must be probed directly (R6) before trusting the backend with real work. |
 | 10a | Automations can trigger on PR commit updates | LIKELY | Shipped, plan-backed, but web-UI-only — not scriptable. |
-| 10b | Cleanest re-trigger: an Actions job on `pull_request: [synchronize]` posting `@codex review` | LIKELY | Subscription-backed execution, output on the PR, zero ChatGPT credential on the runner. |
-| 11a | Primary OpenAI terms/limits pages | BLOCKED (re-attempted, still 403) | No public compliance claim can be made from this environment; must be re-verified with unrestricted network. |
+| 10b | An Actions job posting `@codex …` with `GITHUB_TOKEN` re-triggers Codex | **REFUTED (R8)** | A comment authored by `github-actions[bot]` got, 7 s later, the connector's reply "To use Codex here, create a Codex account and connect to github" and started no task. The mention must be authored by a GitHub user linked to Codex. The only automatable shape left is a maintainer-owned PAT in the Actions job (R8b, not attempted). |
+| 11a | Primary OpenAI terms/limits pages | PARTLY READ | Reachable from the maintainer's machine on 2026-09-06 (`learn.chatgpt.com/docs/...`): the cloud-environment, internet-access, GitHub-integration and cloud overview pages were read. The terms-of-use and CI/CD-auth pages are still not archived (R11 open). |
 | 11b | ChatGPT Terms of Use prohibit programmatic data extraction and "powering a third-party service" | LIKELY | The clause to stay clear of; the framing that Loopmill drives a user's own CLI for their own repo must be explicit in docs, not assumed. |
 | 11c | OpenAI documents (and discourages) "Maintain Codex account auth in CI/CD (advanced)" | LIKELY (strongest available signal) | The closest thing to permission that exists; quote its caveat verbatim rather than claiming blanket approval. |
 | 11d | Unattended scheduled Codex on a ChatGPT plan (Automations) is a first-party, shipped product | VERIFIED (product exists) | Unattended subscription-backed Codex is something OpenAI itself sells; the residual risk is about who does the scheduling. |
@@ -336,19 +336,49 @@ ever graduate out of that status, or whether it must stay pinned to a
 self-hosted-runner deployment shape, or to `api-key` auth mode only. Needs the
 same real ChatGPT account as SPIKE-2; not yet run.
 
-### Current verdict and fallbacks
+### User runs, 2026-09-06 (R0, R1, R4, R8)
 
-**Verdict: viable with caveats, not MVP.** Ship the `observed` Codex Cloud backend
-as a post-MVP, explicitly experimental adapter. `codex cloud exec` genuinely works
-unattended and needs no API key, which is better than expected — but four things
-block it from the MVP: the CLI surface is `[EXPERIMENTAL]` and missing basic
-plumbing (no `--json` status, no wait, no re-run, no PR link); token
-observability — the headline differentiator — goes fully dark for cloud nodes;
-`WAITING_FOR_QUOTA` is undetectable per-task and the reported failure mode at the
-wall is destructive; and the GitHub-event-triggered scheduler Loopmill would
-actually want exists only as an unversioned, unobservable web-UI automation.
+Account: ChatGPT **Plus**. CLI: `codex-cli 0.144.6` (older than the 0.153.4 the documentary
+research used; the `cloud exec/list/status/diff/apply` surface matched). Environment
+`loopmill-codex-spike` bound to `yosuke1024/Loopmill`, agent internet access **off**, no
+secrets, no environment variables. `OPENAI_API_KEY`/`CODEX_API_KEY` unset.
 
-Fallbacks, ranked:
+| Run | Result | Evidence |
+|---|---|---|
+| R0 | PASS | environment id present, `list --json` valid JSON, plan type Plus |
+| R1 | PASS | exit 0, one task URL, empty stderr, stdin from `/dev/null`; `pending` → `ready` in 2 min 46 s; diff = one new file |
+| R4 | **FAIL** | two formulations, both `ready` with a task-local diff; repository branches, PRs and events unchanged; the agent reports no `make_pr` tool and no remote/GitHub auth; the UI's "Create PR" button is the only exit |
+| R7 | partial | the success side is bounded and machine-readable (`list --json`); the `error` side was not exercised |
+| R8 | **FAIL** (strict) | a `GITHUB_TOKEN`-authored `@codex` comment is refused by the connector ("create a Codex account and connect to github"); a maintainer-authored mention does start a task and gets a reply comment in 84 s — but the change stays unpushed |
+| R2, R3, R5, R6, R9, R10, R11 | not run | superseded by the decision below, except R11 |
+
+**Two variants were considered and not run.** (1) A GitHub token in the Codex environment:
+as a *secret* it cannot work — the primary page states secrets are "only available to setup
+scripts. For security reasons, secrets are removed before the agent phase starts"; as a plain
+*environment variable* with agent internet access switched on it probably would, but it puts
+a repository-write credential inside the vendor's sandbox with the prompt-injection and
+exfiltration exposure OpenAI's own internet-access page warns about, and it makes acceptance
+criterion A19 unprovable for that backend. (2) A maintainer-owned fine-grained PAT in the
+Actions job so the mention is authored by a Codex-linked user (R8b): a job secret in the
+place design §13 already allows, but it only ever yields a *comment*, never a pushed change.
+
+### Verdict and the decision
+
+**Verdict: NO-GO** by the GO rule (R1 ∧ **R4** ∧ R5 ∧ R7 ∧ (R3 ∨ R8)): the diff never leaves
+OpenAI's UI without a human click, and the one trigger that starts a task requires a
+Codex-linked human identity, not a runner token. What *does* work unattended — dispatch
+from a non-interactive process, a bounded completion signal, and the agent's final message
+posted back to the PR — would support a review-only node (verdict JSON in a comment), which
+is exactly how the reference loop used `observed`. The maintainer nevertheless decided on
+2026-09-06 to **drop the `observed` backend from the design** rather than carry an
+`[EXPERIMENTAL]` surface with no per-task usage, no quota predicate, no pushable result and a
+trigger that must impersonate a human. Design §20.1, §22 and ADR-001 record the decision.
+
+The earlier documentary verdict ("viable with caveats, not MVP") stands as history: `codex
+cloud exec` does work unattended and needs no API key; what the live runs added is that the
+result cannot reach GitHub as a change, and that `GITHUB_TOKEN` cannot own the trigger.
+
+Fallbacks, ranked (unchanged, now the plan of record):
 
 1. **Codex local (`codex exec`) under Loopmill's own scheduler** — the design's
    existing plan and still the best: full observability, subscription-native,
@@ -654,20 +684,22 @@ node spikes/spike-3-control-plane/step.mjs rebuild-snapshot \
 | Gate | Question | Status (2026-09-06) | Evidence |
 |---|---|---|---|
 | G1 | SPIKE-1: `claude-code` headless on a hosted runner with subscription OAuth only | **green** | run 34024962852, C1-C4 and C7 PASS (§3) |
-| G2 | SPIKE-2: Codex Cloud as an `observed` backend, GO = R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8) | **open** — user runs R0-R11 not yet executed | documentary research only (§4) |
+| G2 | SPIKE-2: Codex Cloud as an `observed` backend, GO = R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8) | **red — NO-GO**; `observed` dropped by maintainer decision (2026-09-06) | R4 FAIL, R8 FAIL with `GITHUB_TOKEN` (§4) |
 | G3 | SPIKE-2b: seeded `auth.json` survives ephemeral runners | **open** — not run | — |
 | G4 | SPIKE-3: non-resident, event-sourced `step` on real GitHub | **green** | 21/21 local, 44 hosted runs (§5); `repository_dispatch` deferred to the default branch |
 | G5 | STOP (c): vendor terms read verbatim from primary sources | **open** — R11 not done | design §19 rows still `[L]` for OpenAI |
 
-STOP conditions: **(a) not triggered** (G1); **(b) undecided** until G2, with the
-Claude-only cross-role fallback already written down in design §22; **(c)
+STOP conditions: **(a) not triggered** (G1); **(b) not triggered yet** — G2 is red, but a
+cross-vendor path under subscriptions still exists through `codex exec` (`local` today;
+`github-actions` pending G3), so (b) is met only if SPIKE-2b also fails, in which case the
+Claude-only cross-role fallback in design §22 applies and D2 is withdrawn; **(c)
 undecided** until R11.
 
-1. **Execute the SPIKE-2 R0-R11 user run plan** against a real ChatGPT Plus/Pro
-   account and a throwaway repo (recommended order R0 → R1 → R4 → R7 → R5 → R8 →
-   R3 → R2 → R6 → R9 → R10, R11 any time), evaluate GO/NO-GO/Degraded-GO honestly,
-   and separately run SPIKE-2b to settle whether `codex` on `github-actions` can
-   leave EXPERIMENTAL status.
+1. **Run SPIKE-2b** (seeded `auth.json` survival on an ephemeral GitHub-hosted runner):
+   it is now the gate for cross-vendor and for STOP (b). Needs the maintainer's ChatGPT
+   login once to seed `auth.json`; OpenAI documents the recipe as "advanced" and discourages
+   it, so the README must quote that caveat verbatim. Then delete the SPIKE-2 leftovers:
+   PR `#1`, branch `spike2/r8-mention`, and the `loopmill-codex-spike` environment.
 2. **SPIKE-1 follow-ups:** re-run the harness at every claude-code
    version bump and diff the result shape against `claude-recorded-*.json`; record
    the `rate_limit_event` refusal shape the first time a run actually hits a
