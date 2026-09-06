@@ -1,10 +1,12 @@
 # Loopmill state machine specification
 
-Status: normative for v0.5. This document is what the engine is built from.
+Status: normative for v0.6; frozen at m0 on 2026-09-06 (`docs/design/m0-contract-freeze.md`). This document is what the engine is built from.
 
 Binding input: the v0.5 decision sheet (positioning brief 2026-09-06). Where this document and any
 older document disagree, the decision sheet wins; where the decision sheet is silent, this document
-decides and marks the decision explicitly as **Decision (not in sheet)**.
+decides and marks the decision explicitly as **Decision (not in sheet)**. v0.6: where ADR-002 and
+`docs/design/mvp-design.md` supersede the sheet, they win (`CHANGELOG-v0.6.md` §4); reconciling the sheet is
+the maintainer's task.
 
 Shape: the control plane's routing decision is a single pure function over the folded run state — no
 resident loop, no closure state, no clock reads inside a guard. Error classes are ranked rather than

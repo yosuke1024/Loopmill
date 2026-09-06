@@ -1,13 +1,14 @@
 # Loopmill spec: token usage normalization, coverage and budget
 
-Status: normative for v0.5. Date: 2026-09-06.
+Status: normative for v0.6; frozen at m0 on 2026-09-06 (`docs/design/m0-contract-freeze.md`). Date: 2026-09-06.
 
 This document is bound by the v0.5 decision sheet, in particular its sections 2 (domain model), 4
 (backends and capabilities), 10 (usage, coverage, budget) and 11 (MVP scope). Where this document and
 any older document disagree, the decision sheet wins and this document is the implementation contract
 derived from it. Where the sheet is silent, a decision is recorded inline and marked
 `Decision (not in sheet)`. Where the sheet states two things that both apply to one condition, the
-resolution is marked `Reconciliation (both in sheet)`.
+resolution is marked `Reconciliation (both in sheet)`. v0.6: where ADR-002 and `docs/design/mvp-design.md`
+supersede the sheet, they win (`CHANGELOG-v0.6.md` §4); reconciling the sheet is the maintainer's task.
 
 Conformance language: MUST, MUST NOT, SHOULD, MAY.
 

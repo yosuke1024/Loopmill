@@ -1,7 +1,7 @@
 # Loopmill Envelope specification
 
 Envelope schema version: **1.0.0**
-Status: **normative for the MVP**. Binding companion files: [`envelope.schema.json`](./envelope.schema.json)
+Status: **normative for the MVP**; frozen at m0 on 2026-09-06 (`docs/design/m0-contract-freeze.md`). Binding companion files: [`envelope.schema.json`](./envelope.schema.json)
 (JSON Schema draft 2020-12) and [`envelope-examples/`](./envelope-examples/).
 Date: 2026-09-06.
 

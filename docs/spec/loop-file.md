@@ -1,6 +1,6 @@
 # Loop file specification
 
-Version 0.6 · schema `https://loopmill.dev/schema/loop-file/0.6.json` · 2026-09-06
+Version 0.6 · schema `https://loopmill.dev/schema/loop-file/0.6.json` · 2026-09-06 · frozen at m0 on 2026-09-06 (`docs/design/m0-contract-freeze.md`)
 
 The **Loop file** is the source of truth for a Loopmill Loop: a bounded, versioned
 definition of an AI engineering loop that may span several vendors and several

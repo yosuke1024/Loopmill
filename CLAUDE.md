@@ -14,5 +14,7 @@
   user-managed host, see `docs/adr/ADR-002-local-self-hosted-execution.md`), decisions under `docs/adr/`,
   contracts under `docs/spec/`, spike plans and results under `docs/spikes/`.
 - `spikes/` holds throwaway prototypes and harnesses; they are not the product and may be deleted once their question is answered.
-- No product code exists yet. Do not start implementing the engine before the m0 contract freeze in
-  `docs/design/mvp-design.md` §20.2 is done; SPIKE-4 (`docs/spikes/README.md`) is part of m0.
+- No product code exists yet. The m0 contract freeze is recorded in `docs/design/m0-contract-freeze.md`
+  (2026-09-06; SPIKE-4 and R11 are closed). m1 implementation starts against the frozen contracts only
+  after the maintainer confirms the five decisions in that file's section 4; until then, do not start
+  implementing the engine. Amendments to a frozen contract follow section 1 of that file.

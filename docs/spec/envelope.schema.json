@@ -406,7 +406,7 @@
     "backendId": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
-      "description": "Execution backend id. MVP: github-actions, observed, local, fake."
+      "description": "Execution backend id. MVP: local, fake. github-actions and observed are reserved ids kept in the enum and rejected by validation (ADR-002 D4)."
     },
     "runtimeId": {
       "type": "string",

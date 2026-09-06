@@ -2,7 +2,7 @@
   "$comment": "Machine-readable form of docs/spec/state-machine.md. The two files are asserted to agree (invariant I-30). Row ids match the R-/N-/A- ids in section 4 of the specification.",
   "schemaVersion": "1.0.0",
   "spec": "docs/spec/state-machine.md",
-  "specVersion": "v0.5",
+  "specVersion": "v0.6",
   "updatedAt": "2026-09-06",
 
   "policyDefaults": {
