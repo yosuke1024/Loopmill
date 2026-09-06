@@ -1,0 +1,248 @@
+# Loopmill SPIKE-3 - one GitHub Actions job == one `loopmill step` == one event.
+#
+# The control plane is NOT resident: every event starts a fresh job, the job reads
+# state from the `loopmill/state-spike` branch, applies exactly one event, persists
+# one commit, dispatches the next event, and exits.
+#
+# ---------------------------------------------------------------------------
+# Trigger notes (verified as far as the sandbox allowed - see
+# spikes/spike-3-control-plane/README.md, "Open items for the GitHub run")
+#
+# 1. `repository_dispatch` ALWAYS runs the workflow file from the repository's
+#    DEFAULT branch and gives no way to select a ref. A chain living on a feature
+#    branch therefore cannot use it: use `workflow_dispatch` with an explicit
+#    `ref` instead, which runs the workflow file as it exists on that ref.
+#    It is still declared here so the same entry point works once this is merged.
+#
+# 2. `workflow_dispatch` has a weaker but related restriction: the workflow file
+#    must exist on the default branch for the event to be dispatchable at all.
+#    Once it does, `ref: <feature-branch>` runs the feature branch's version.
+#
+# 3. GitHub docs state that events triggered with the automatic GITHUB_TOKEN do
+#    not create new workflow runs, WITH AN EXPLICIT EXCEPTION for
+#    `workflow_dispatch` and `repository_dispatch` (changed 2022-09-08). That is
+#    exactly why this chain uses workflow_dispatch and not, say, a push trigger:
+#    a push to the state branch made with GITHUB_TOKEN would NOT re-trigger.
+#    docs.github.com was unreachable from the build sandbox, so this claim is
+#    carried from the GitHub Docs "GITHUB_TOKEN" page and the 2022-09-08
+#    changelog entry via search results only - the real run must confirm it.
+# ---------------------------------------------------------------------------
+
+name: SPIKE-3 loopmill step
+
+on:
+  workflow_dispatch:
+    inputs:
+      event:
+        description: 'One Loopmill Envelope event as a JSON string. Leave the default to start a fresh run.'
+        required: false
+        default: '{"schemaVersion":1,"eventId":"AUTO","loopId":"spike3-review-loop","runId":"gha-auto","cycle":null,"nodeId":null,"attempt":null,"eventType":"run-started","result":null,"artifactRefs":[],"usage":null,"producer":"github-actions","causationId":null,"params":{"schedule":"retry-then-pass"}}'
+      run_id:
+        # Only used for the concurrency group. `concurrency.group` is evaluated
+        # before the job starts and cannot depend on job output; parsing the
+        # event JSON there (fromJSON(inputs.event).runId) works but breaks the
+        # moment the input is absent, as it is for repository_dispatch. A plain
+        # string input is the robust option.
+        description: 'Run id, used only for the concurrency group. Filled in automatically by the chain.'
+        required: false
+        default: ''
+      step_no:
+        description: 'Position in the chain. Safety net: the chain stops at MAX_CHAIN_STEPS.'
+        required: false
+        default: '1'
+  repository_dispatch:
+    types: [loopmill-step]
+
+permissions:
+  contents: write   # push the event log / snapshot to the state branch
+  actions: write    # dispatch the next step of the chain
+
+# One in-flight step per run. `cancel-in-progress: false` because a step that is
+# already applying an event must never be killed halfway.
+# NOTE: with cancel-in-progress false GitHub keeps at most ONE pending run per
+# group and cancels older pending ones - see the open items in the README.
+concurrency:
+  group: loopmill-${{ github.event.inputs.run_id || github.event.client_payload.runId || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  STATE_BRANCH: loopmill/state-spike
+  MAX_CHAIN_STEPS: 12
+  SPIKE_DIR: spikes/spike-3-control-plane
+
+jobs:
+  step:
+    name: loopmill step
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout the workflow ref (for step.mjs, not for state)
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Resolve the inbound event
+        id: inbound
+        env:
+          RAW_EVENT: ${{ github.event.inputs.event }}
+          CLIENT_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+          STEP_NO_IN: ${{ github.event.inputs.step_no }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            # repository_dispatch carries the envelope in client_payload.event
+            EVENT=$(printf '%s' "$CLIENT_PAYLOAD" | jq -c '.event')
+            STEP_NO=$(printf '%s' "$CLIENT_PAYLOAD" | jq -r '.step_no // 1')
+          else
+            EVENT=$(printf '%s' "$RAW_EVENT" | jq -c '.')
+            STEP_NO="${STEP_NO_IN:-1}"
+          fi
+
+          # The default input is a template: mint a real run for this chain.
+          if [ "$(printf '%s' "$EVENT" | jq -r '.runId')" = "gha-auto" ]; then
+            EVENT=$(node "$SPIKE_DIR/step.mjs" started-event \
+              --run-id "gha-${GITHUB_RUN_ID}" \
+              --schedule "$(printf '%s' "$EVENT" | jq -r '.params.schedule // "retry-then-pass"')")
+            echo "minted a fresh started event for run gha-${GITHUB_RUN_ID}"
+          fi
+
+          RUN_ID=$(printf '%s' "$EVENT" | jq -r '.runId')
+          {
+            echo "event<<LOOPMILL_EOF"
+            printf '%s\n' "$EVENT"
+            echo "LOOPMILL_EOF"
+            echo "run_id=$RUN_ID"
+            echo "step_no=$STEP_NO"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure git credentials for the state branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global \
+            url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+      - name: Run one control plane step
+        id: step
+        env:
+          INBOUND: ${{ steps.inbound.outputs.event }}
+        run: |
+          set -uo pipefail
+          # The git store creates the orphan state branch on its first push.
+          set +e
+          node "$SPIKE_DIR/step.mjs" step \
+            --store git \
+            --remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --branch "$STATE_BRANCH" \
+            --workdir "${RUNNER_TEMP}/loopmill-state" \
+            --event "$INBOUND" \
+            > "${RUNNER_TEMP}/step-result.json" 2> "${RUNNER_TEMP}/step-log.txt"
+          CODE=$?
+          set -e
+          cat "${RUNNER_TEMP}/step-log.txt"
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+
+          # 0/10/11/12 = the loop behaved; 20/21/22 = deliberate no-ops.
+          # >= 30 means the control plane itself failed.
+          if [ "$CODE" -ge 30 ]; then
+            echo "::error::loopmill step failed with exit code $CODE"
+            cat "${RUNNER_TEMP}/step-result.json" || true
+            exit "$CODE"
+          fi
+
+          jq -r '"classification=\(.classification)"'      "${RUNNER_TEMP}/step-result.json" >> "$GITHUB_OUTPUT"
+          jq -r '"outcome=\(.outcome // "")"'              "${RUNNER_TEMP}/step-result.json" >> "$GITHUB_OUTPUT"
+          jq -r '"terminal=\(.terminal)"'                  "${RUNNER_TEMP}/step-result.json" >> "$GITHUB_OUTPUT"
+          jq -r '"push_attempts=\(.pushAttempts)"'         "${RUNNER_TEMP}/step-result.json" >> "$GITHUB_OUTPUT"
+          jq -r '"conflicts=\(.conflicts)"'                "${RUNNER_TEMP}/step-result.json" >> "$GITHUB_OUTPUT"
+          jq -r '"duration_ms=\(.durationMs)"'             "${RUNNER_TEMP}/step-result.json" >> "$GITHUB_OUTPUT"
+          jq -r '"head=\(.head // "")"'                    "${RUNNER_TEMP}/step-result.json" >> "$GITHUB_OUTPUT"
+
+      - name: Prove the snapshot is a pure fold of the event log
+        id: verify
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          node "$SPIKE_DIR/step.mjs" rebuild-snapshot \
+            --store git \
+            --remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --branch "$STATE_BRANCH" \
+            --workdir "${RUNNER_TEMP}/loopmill-verify" \
+            --run-id "${{ steps.inbound.outputs.run_id }}" \
+            > "${RUNNER_TEMP}/rebuild.json" 2>&1 || true
+          EQ=$(jq -r '.equal // "unknown"' "${RUNNER_TEMP}/rebuild.json" 2>/dev/null || echo unknown)
+          echo "equal=$EQ" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch the next step of the chain
+        id: chain
+        if: steps.step.outputs.terminal == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ steps.inbound.outputs.run_id }}
+          STEP_NO: ${{ steps.inbound.outputs.step_no }}
+        run: |
+          set -euo pipefail
+          NEXT=$(jq -c '.nextEvent' "${RUNNER_TEMP}/step-result.json")
+          if [ "$NEXT" = "null" ]; then
+            echo "no next event - the chain ends here"
+            echo "dispatched=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          NEXT_NO=$((STEP_NO + 1))
+          if [ "$NEXT_NO" -gt "$MAX_CHAIN_STEPS" ]; then
+            echo "::warning::chain step cap ($MAX_CHAIN_STEPS) reached for run $RUN_ID - stopping"
+            echo "dispatched=capped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # workflow_dispatch on the SAME ref, so a feature branch keeps running
+          # its own version of this workflow. Inputs must be strings, so the
+          # envelope travels as a JSON string.
+          jq -n \
+            --arg ref "$GITHUB_REF_NAME" \
+            --arg event "$NEXT" \
+            --arg run_id "$RUN_ID" \
+            --arg step_no "$NEXT_NO" \
+            '{ref: $ref, inputs: {event: $event, run_id: $run_id, step_no: $step_no}}' \
+          | gh api -X POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/spike-3-step.yml/dispatches" \
+              --input -
+          echo "dispatched step $NEXT_NO for run $RUN_ID on ref $GITHUB_REF_NAME"
+          echo "dispatched=$NEXT_NO" >> "$GITHUB_OUTPUT"
+
+      - name: Step summary
+        if: always()
+        run: |
+          {
+            echo "## Loopmill SPIKE-3 step"
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| run id | \`${{ steps.inbound.outputs.run_id }}\` |"
+            echo "| chain position | ${{ steps.inbound.outputs.step_no }} / ${MAX_CHAIN_STEPS} |"
+            echo "| trigger | \`${{ github.event_name }}\` on \`${GITHUB_REF_NAME}\` |"
+            echo "| classification | ${{ steps.step.outputs.classification }} |"
+            echo "| exit code | ${{ steps.step.outputs.exit_code }} |"
+            echo "| outcome | ${{ steps.step.outputs.outcome }} |"
+            echo "| terminal | ${{ steps.step.outputs.terminal }} |"
+            echo "| push attempts / CAS conflicts | ${{ steps.step.outputs.push_attempts }} / ${{ steps.step.outputs.conflicts }} |"
+            echo "| step duration | ${{ steps.step.outputs.duration_ms }} ms |"
+            echo "| state commit | \`${{ steps.step.outputs.head }}\` |"
+            echo "| snapshot == fold(events) | ${{ steps.verify.outputs.equal }} |"
+            echo "| next step dispatched | ${{ steps.chain.outputs.dispatched || 'no' }} |"
+            echo
+            echo "### Applied event"
+            echo '```json'
+            jq '{eventId, eventType, nodeId, cycle, attempt, result}' <<< '${{ steps.inbound.outputs.event }}' 2>/dev/null || echo '(unavailable)'
+            echo '```'
+            echo "### Step result"
+            echo '```json'
+            jq 'del(.snapshot.seenEventIds, .snapshot.appliedEventIds, .snapshot.emittedEventIds)' "${RUNNER_TEMP}/step-result.json" 2>/dev/null || echo '(no result)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
