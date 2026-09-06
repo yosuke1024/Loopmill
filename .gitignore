@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+# Loopmill's own state for this repository when dogfooding; loop files under .loopmill/ stay committed
+.loopmill/state.sqlite*
+.loopmill/worktrees/
+.loopmill/reports/
+.loopmill/logs/
+.loopmill/archive/
