@@ -24,6 +24,6 @@ export interface BackendCapabilities {
   structuredOutput: boolean;
   retryable: boolean; // may sit in, or be the target of, a Retry Edge body
   cancellable: boolean;
-  isolation: "ephemeral" | "worktree" | "shared";
+  isolation: "ephemeral" | "worktree" | "shared" | "n/a"; // `n/a`: control-plane (mvp-design.md §6.2 table)
   credentialLocation: "job-secret" | "vendor-side" | "user-machine" | "none"; // `none`: fake, control-plane (mvp-design.md §6.2 table)
 }

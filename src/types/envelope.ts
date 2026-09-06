@@ -116,12 +116,18 @@ export interface HumanPayload {
 }
 
 /**
- * envelope.md §4.9; envelope.schema.json `$defs.outcome`. Decision (not in sheet): this does
- * NOT re-export `state.ts`'s `Outcome` — the shapes do not coincide. `state.ts`'s `Outcome` is
- * a discriminated union with a distinct payload per Run state (`label`, `by`, `edgeId`, ...);
- * the wire form is a single flatter object with every field optional except `state`, matching
- * the schema's `allOf` conditionals (`SUCCEEDED` requires `endLabel`, `FAILED` requires
- * `failureReason`) rather than TypeScript's discriminated-union narrowing.
+ * envelope.md §4.9; envelope.schema.json `$defs.outcome` (schema 1.1.0). Decision (not in
+ * sheet): this does NOT re-export `state.ts`'s `Outcome` — the shapes do not coincide.
+ * `state.ts`'s `Outcome` is a discriminated union with a distinct payload per Run state
+ * (`label`, `by`, `edgeId`, ...); the wire form is a single flatter object with every field
+ * optional except `state`, matching the schema's `allOf` conditionals (`SUCCEEDED` requires
+ * `endLabel`, `FAILED` requires `failureReason`, and so on per state) rather than TypeScript's
+ * discriminated-union narrowing.
+ *
+ * Amendment (m0+), schema 1.1.0: `nodeId` through `ref` below are additive — `$defs.outcome`
+ * gained them so a `run-finished` envelope can carry `state.ts`'s `Outcome` in full (envelope.md
+ * §4.9, §12). A schema-1.0.0 record (`state`/`endLabel`/`failureReason`/`cycles`/`summary` only)
+ * is still valid.
  */
 export interface OutcomePayload {
   state:
@@ -136,6 +142,32 @@ export interface OutcomePayload {
   failureReason?: FailureReason;
   cycles?: number;
   summary?: string;
+  /** FAILED: the node the failure is attributed to, where known. */
+  nodeId?: string;
+  /** FAILED: the cycle the failure is attributed to, where known. */
+  cycleIndex?: number;
+  /** CANCELLED: who or what cancelled the Run. */
+  by?: "human" | "platform" | "timeout-escalation";
+  /** CANCELLED: the authenticated identity that cancelled the Run, where one applies. */
+  actor?: string;
+  /** MAX_ITERATIONS_EXCEEDED: the Retry Edge that exhausted its budget. */
+  edgeId?: string;
+  /** MAX_ITERATIONS_EXCEEDED: the edge's budget-consuming traversal count. */
+  traversals?: number;
+  /** MAX_ITERATIONS_EXCEEDED: the edge's configured iteration budget. */
+  maxIterations?: number;
+  /** BUDGET_EXCEEDED: which budget was exhausted. */
+  budgetKey?: "maxMeasuredTokens" | "maxUnmeasuredExecutions" | "maxStepsPerRun";
+  /** BUDGET_EXCEEDED: the configured limit of `budgetKey`. */
+  limit?: number;
+  /** BUDGET_EXCEEDED: the observed value that exceeded `limit`. */
+  observed?: number;
+  /** EXPIRED: which deadline elapsed. */
+  expiryReason?: "max_runtime" | "human_timeout";
+  /** SKIPPED: why the Run was skipped without dispatching anything. */
+  skipReason?: "dedupe" | "min_interval" | "runs_per_window";
+  /** SKIPPED: a reference for `skipReason`, e.g. the `dedupeKey` or the open change it matched. */
+  ref?: string;
 }
 
 /** envelope.md §4.11; envelope.schema.json `$defs.matcher`. Reserved, unreachable in the MVP

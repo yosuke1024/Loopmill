@@ -1,0 +1,32 @@
+# expect: LM-VAL-016
+schemaVersion: "0.6.0"
+slug: lm-val-016
+name: Accessor not available from the referenced node's kind
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+# `step` is a `command` node, so `structured.*` is never available from it (only an `agent` node
+# that declares `structuredOutput` produces it).
+nodes:
+  step:
+    kind: command
+    argv: [echo, hi]
+    next: use-it
+  use-it:
+    kind: agent
+    inputs:
+      x: nodes.step.structured.result
+    prompt: Use ${x}.
+    next: done
+  done:
+    kind: end
+    outcome: success

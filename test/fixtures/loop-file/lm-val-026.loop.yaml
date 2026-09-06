@@ -1,0 +1,29 @@
+# expect: LM-VAL-026
+schemaVersion: "0.6.0"
+slug: lm-val-026
+name: Schedule fires more often than budget.minInterval
+
+trigger:
+  kind: schedule
+  cron: "*/5 * * * *"
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+budget:
+  minInterval: PT1H
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success

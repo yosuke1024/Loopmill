@@ -1,0 +1,47 @@
+# expect: LM-VAL-014
+schemaVersion: "0.6.0"
+slug: lm-val-014
+name: Referenced node does not dominate the referencing node
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+# `join` is reachable from both `branch-a` and `branch-b`, but its input references
+# `nodes.branch-a...`, which does not run on the `branch-b` path -- `branch-a` does not dominate
+# `join`.
+nodes:
+  gate:
+    kind: condition
+    inputs: { flag: trigger.flag }
+    expr: flag == true
+    then: branch-a
+    else: branch-b
+  branch-a:
+    kind: agent
+    prompt: A.
+    structuredOutput:
+      type: object
+      properties: { note: { type: string } }
+      required: [note]
+    next: join
+  branch-b:
+    kind: agent
+    prompt: B.
+    next: join
+  join:
+    kind: agent
+    inputs:
+      note: nodes.branch-a.structured.note
+    prompt: Use ${note}.
+    next: done
+  done:
+    kind: end
+    outcome: success

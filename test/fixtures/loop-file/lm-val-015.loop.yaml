@@ -1,0 +1,24 @@
+# expect: LM-VAL-015
+schemaVersion: "0.6.0"
+slug: lm-val-015
+name: Undeclared template placeholder
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    prompt: Reference ${undeclared_name} here.
+    next: done
+  done:
+    kind: end
+    outcome: success

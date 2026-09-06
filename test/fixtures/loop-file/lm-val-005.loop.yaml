@@ -1,0 +1,30 @@
+# expect: LM-VAL-005
+schemaVersion: "0.6.0"
+slug: lm-val-005
+name: Ambiguous entry node
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+# Neither step-a nor step-b has an incoming forward edge, and `entry` is omitted: two candidates,
+# zero of them chosen -- LM-VAL-005.
+nodes:
+  step-a:
+    kind: agent
+    prompt: Do thing A.
+    next: done
+  step-b:
+    kind: agent
+    prompt: Do thing B.
+    next: done
+  done:
+    kind: end
+    outcome: success

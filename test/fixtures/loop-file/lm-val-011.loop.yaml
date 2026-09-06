@@ -1,0 +1,32 @@
+# expect: LM-VAL-011
+schemaVersion: "0.6.0"
+slug: lm-val-011
+name: Node unreachable from entry
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+# `entry` is explicit so `orphan` is unreachable rather than an ambiguous second root
+# (LM-VAL-005): nothing routes to it, and it is not part of any Retry Edge either.
+entry: step
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success
+  orphan:
+    kind: agent
+    prompt: Never reached from `step`.
+    next: done

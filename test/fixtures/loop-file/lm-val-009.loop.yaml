@@ -1,0 +1,42 @@
+# expect: LM-VAL-009
+#
+# Structurally this ALSO fires LM-VAL-007 (`to` is a condition node, so it alone is enough to
+# fail the retryable check) -- and it is a logical consequence of loop-file.md §12.2 that it
+# cannot do otherwise: the Retry Edge body always includes `to` (the body is "the set of nodes on
+# a forward path from `to` to `from`, inclusive"), so a body with zero retryable nodes always has
+# a non-retryable `to`, and LM-VAL-007 fires right alongside it. This fixture is the minimal case
+# where NEITHER node in the two-node cycle is retryable, so LM-VAL-009 has something to catch
+# beyond what LM-VAL-007 already reports.
+schemaVersion: "0.6.0"
+slug: lm-val-009
+name: Retry edge body has no retryable node
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+nodes:
+  gate-a:
+    kind: condition
+    inputs: { x: trigger.x }
+    expr: x == true
+    then: done
+    else: gate-b
+  gate-b:
+    kind: condition
+    inputs: { x: trigger.x }
+    expr: x == false
+    then: retry-a
+    else: done
+  done:
+    kind: end
+    outcome: success
+
+edges:
+  - id: retry-a
+    from: gate-b
+    to: gate-a
+    maxIterations: 1

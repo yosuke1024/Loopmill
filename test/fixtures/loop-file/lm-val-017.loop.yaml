@@ -1,0 +1,37 @@
+# expect: LM-VAL-017
+schemaVersion: "0.6.0"
+slug: lm-val-017
+name: Expression operand not a declared input
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    structuredOutput:
+      type: object
+      properties: { ok: { type: boolean } }
+      required: [ok]
+    next: verdict
+  verdict:
+    kind: condition
+    inputs: { ok: nodes.step.structured.ok }
+    expr: not_declared == true
+    then: done-a
+    else: done-b
+  done-a:
+    kind: end
+    outcome: success
+  done-b:
+    kind: end
+    outcome: no_change

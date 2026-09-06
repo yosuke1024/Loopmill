@@ -1,0 +1,21 @@
+# expect: LM-VAL-023
+schemaVersion: "0.6.0"
+slug: lm-val-023
+name: External effect with no human gate
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+nodes:
+  step:
+    kind: command
+    argv: [gh, issue, create]
+    effects: external
+    next: done
+  done:
+    kind: end
+    outcome: success

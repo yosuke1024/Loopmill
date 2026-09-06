@@ -1,0 +1,53 @@
+# expect: LM-VAL-008
+schemaVersion: "0.6.0"
+slug: lm-val-008
+name: Retry edge does not close a cycle
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  backend: local
+  runtime: claude-code
+  authMode: subscription-oauth
+
+# `entry` is explicit so that `unrelated` (a second, disconnected branch) is a deliberate target
+# for a Retry Edge that never closes a cycle back to `verdict`, rather than an ambiguous second
+# root (which would trip LM-VAL-005 instead).
+entry: step-a
+
+nodes:
+  step-a:
+    kind: agent
+    prompt: Do the thing.
+    structuredOutput:
+      type: object
+      properties: { ok: { type: boolean } }
+      required: [ok]
+    next: verdict
+  unrelated:
+    kind: agent
+    prompt: Unrelated work; not on any forward path from `verdict` back to itself.
+    next: done
+  verdict:
+    kind: condition
+    inputs: { ok: nodes.step-a.structured.ok }
+    expr: ok == true
+    then: done
+    else: retry-a
+  done:
+    kind: end
+    outcome: success
+
+# `to: unrelated` runs on a retryable backend (so LM-VAL-007 does not fire), but `verdict` is not
+# forward-reachable from it: the edge never closes a cycle.
+edges:
+  - id: retry-a
+    from: verdict
+    to: unrelated
+    when: ok == false
+    maxIterations: 1

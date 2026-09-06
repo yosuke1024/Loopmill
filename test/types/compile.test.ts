@@ -205,6 +205,9 @@ test("RunSnapshot compiles: one node, one attempt, in flight", () => {
         filesChanged: 0,
         changeFingerprint: null,
         artifactRefs: [],
+        structured: null,
+        stdout: null,
+        exitCode: null,
       },
     },
     attempts: {

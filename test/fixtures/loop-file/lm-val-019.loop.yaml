@@ -1,0 +1,27 @@
+# expect: LM-VAL-019
+schemaVersion: "0.6.0"
+slug: lm-val-019
+name: Unsupported runtime x backend x auth combination
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  backend: local
+
+# local x codex only allows subscription-login or api-key (loop-file.md §13); subscription-oauth
+# is the claude-code credential, not codex's.
+nodes:
+  step:
+    kind: agent
+    runtime: codex
+    auth: subscription-oauth
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success

@@ -1,0 +1,35 @@
+# expect: LM-VAL-021
+#
+# `sessionPolicy` other than `fresh` is ALSO rejected by the schema itself
+# (loop-file.schema.json `agentNode.properties.sessionPolicy.enum` is `["fresh"]` only), so this
+# file cannot reach the semantic LM-VAL-021 check the way LM-VAL-022/024/027 still reach their
+# shadow rule alongside LM-VAL-001: there is no schema-valid document that carries a non-"fresh"
+# `sessionPolicy` in this schemaVersion. It reports LM-VAL-001 today; see the report for this
+# finding. `validate.ts`'s LM-VAL-021 check is kept -- ported faithfully from
+# docs/spec/validate-examples.mjs -- for the day the schema's enum widens, exactly as
+# loop-file.md §8.1 keeps LM-VAL-018 "for a future backend" whose capability record does not yet
+# exist either.
+schemaVersion: "0.6.0"
+slug: lm-val-021
+name: sessionPolicy other than fresh
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    sessionPolicy: resumed
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success

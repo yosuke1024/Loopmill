@@ -1,0 +1,25 @@
+# expect: LM-VAL-004
+schemaVersion: "0.6.0"
+slug: lm-val-004
+name: Node id echo mismatch
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    id: not-step
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success

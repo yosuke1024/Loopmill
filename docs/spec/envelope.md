@@ -1,6 +1,6 @@
 # Loopmill Envelope specification
 
-Envelope schema version: **1.0.0**
+Envelope schema version: **1.1.0**
 Status: **normative for the MVP**; frozen at m0 on 2026-09-06 (`docs/design/m0-contract-freeze.md`). Binding companion files: [`envelope.schema.json`](./envelope.schema.json)
 (JSON Schema draft 2020-12) and [`envelope-examples/`](./envelope-examples/).
 Date: 2026-09-06.
@@ -305,13 +305,34 @@ identity for `cli`. `decision ∈ approve | reject | cancel` — the three the s
 
 ### 4.9 `outcome`
 
-`{ state, endLabel?, failureReason?, cycles?, summary? }` with
+`{ state, endLabel?, failureReason?, cycles?, summary?, nodeId?, cycleIndex?, by?, actor?, edgeId?,
+traversals?, maxIterations?, budgetKey?, limit?, observed?, expiryReason?, skipReason?, ref? }` with
 `state ∈ SUCCEEDED | FAILED | CANCELLED | MAX_ITERATIONS_EXCEEDED | BUDGET_EXCEEDED | EXPIRED | SKIPPED`.
-`SUCCEEDED` requires `endLabel` (reported as `SUCCEEDED(end:<label>)`) and forbids `failureReason`;
-`FAILED` requires `failureReason`. `MAX_ITERATIONS_EXCEEDED` and `BUDGET_EXCEEDED` are outcomes, not
-failures, and carry no `failureReason`.
-Totals (tokens, durations, coverage) are **not** carried here: they are folded from the event log, and
-an envelope that asserted them could disagree with the log it is part of.
+This is the wire form of the engine's `Outcome` (`state-machine.md` §2.2), written once into the single
+`run-finished` event: every field the engine's discriminated union carries per state has a matching
+optional property here, and the schema's `allOf` makes each one required exactly on the state that
+carries it, in the same shape TypeScript's discriminated union enforces at the type level.
+
+| `state` | Required alongside it | Meaning |
+|---|---|---|
+| `SUCCEEDED` | `endLabel` (reported as `SUCCEEDED(end:<label>)`); forbids `failureReason` | The end node's outcome label. |
+| `FAILED` | `failureReason`; optionally `nodeId`, `cycleIndex` | Why the Run failed, and where, when known. |
+| `CANCELLED` | `by` (`human` \| `platform` \| `timeout-escalation`); optionally `actor` | Who or what cancelled the Run. |
+| `MAX_ITERATIONS_EXCEEDED` | `edgeId`, `traversals`, `maxIterations` | The Retry Edge that exhausted its budget, and by how much. Not a failure: carries no `failureReason`. |
+| `BUDGET_EXCEEDED` | `budgetKey`, `limit`, `observed` | Which budget was exhausted, its configured limit, and the observed value. Not a failure. |
+| `EXPIRED` | `expiryReason` (`max_runtime` \| `human_timeout`); optionally `nodeId` | Which deadline elapsed. |
+| `SKIPPED` | `skipReason` (`dedupe` \| `min_interval` \| `runs_per_window`); optionally `ref` | Why the Run was skipped without dispatching anything. |
+
+`cycles` and `summary` are legal on every state: `cycles` is the highest cycle index reached, `summary`
+is the short human paragraph. Totals (tokens, durations, coverage) are **not** carried here: they are
+folded from the event log, and an envelope that asserted them could disagree with the log it is part of.
+
+*Amendment (m0+):* everything past `endLabel`/`failureReason`/`cycles`/`summary` in this section — the
+per-state fields above (`nodeId`, `cycleIndex`, `by`, `actor`, `edgeId`, `traversals`, `maxIterations`,
+`budgetKey`, `limit`, `observed`, `expiryReason`, `skipReason`, `ref`) — was added in schema 1.1.0. The
+schema-1.0.0 shape (`state`, `endLabel`, `failureReason`, `cycles`, `summary` only) could not carry the
+engine's `Outcome` in full; this amendment is purely additive (§12) and a 1.0.0 `run-finished` record is
+still a valid 1.1.0 one.
 
 ### 4.10 `reason` and `quotaResetsAt`
 
@@ -907,6 +928,9 @@ Receiver rules:
 - The published schema file is versioned alongside this document; historic versions stay readable so an
   old event log can still be validated years later.
 
+*Amendment (m0+):* 1.1.0 is additive over 1.0.0 (`$defs.outcome` gained the per-state fields of §4.9) —
+a 1.0.0 record is valid 1.1.0.
+
 ---
 
 ## 13. Test vectors
@@ -937,7 +961,7 @@ seed        = "loopmill/ingest/1 issue_comment 3310042117 2026-09-06T09:04:11Z"
 sha256(seed)= 4b5e057e07f0266729b8cb3f402568e311c50280b0d9196ffedb63748621e8b3
 entropy     = 4b5e057e07f0266729b8                      (first 10 bytes)
 timestamp   = 1788685451000                             (2026-09-06T09:04:11Z)
-eventId     = 06G7BXFYZ09DF0AZG7Y0K6EADR
+eventId     = 01M1TZBZQR9DF0AZG7Y0K6EADR
 ```
 
 Deriving twice from the same delivery must give the same 26 characters; changing any byte of the seed

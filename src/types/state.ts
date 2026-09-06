@@ -6,7 +6,7 @@
 
 import type { RuntimeId } from "./capabilities.ts";
 import type { ArtifactRef, Envelope, ErrorPayload } from "./envelope.ts";
-import type { ResolvedLoop } from "./loop.ts";
+import type { JsonValue, ResolvedLoop } from "./loop.ts";
 import type { UsageRecord } from "./usage.ts";
 
 // ---------------------------------------------------------------------------------------------
@@ -264,6 +264,15 @@ export interface NodeExecutionRecord {
   /** §6.6 `changeFingerprint(cycle, nodeId)`; null before the node has ever completed. */
   changeFingerprint: string | null;
   artifactRefs: ArtifactRef[];
+  /** The outputs a later node may reference (loop-file.md §9.1), copied from the terminal
+   *  `node-completed`: `result.structured` for agent and control-plane nodes; for `command` nodes
+   *  the executor reports stdout as `result.structured.stdout` (redacted, capped at the envelope's
+   *  8 KiB) and the exit code as `result.exitCode` — Decision (not in sheet), m1: a command's
+   *  stdout travels inside `structured` because the Envelope has no other slot for it, and the
+   *  full stream stays in `.loopmill/logs` behind an `artifactRefs` entry of kind `file`. */
+  structured: JsonValue | null;
+  stdout: string | null;
+  exitCode: number | null;
 }
 
 /**

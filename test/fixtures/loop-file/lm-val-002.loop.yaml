@@ -1,0 +1,24 @@
+# expect: LM-VAL-002
+schemaVersion: "0.6.0"
+slug: mismatched-slug-002
+name: Slug does not match file name
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success

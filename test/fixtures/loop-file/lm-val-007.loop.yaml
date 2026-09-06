@@ -1,0 +1,67 @@
+# expect: LM-VAL-007
+#
+# The same mistake as docs/spec/examples/invalid-retry-edge.loop.yaml, the worked example of
+# loop-file.md §15.3: the Retry Edge is pointed at the condition that guards the implementation
+# node instead of at the implementation node itself.
+schemaVersion: "0.6.0"
+slug: lm-val-007
+name: Retry edge targets non-retryable backend
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  backend: local
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  implement:
+    kind: agent
+    prompt: Fix the failing tests in this repository.
+    structuredOutput:
+      type: object
+      properties: { changed: { type: boolean } }
+      required: [changed]
+    next: has-diff
+
+  has-diff:
+    kind: condition
+    inputs:
+      changed: nodes.implement.structured.changed
+    expr: changed == true
+    then: run-tests
+    else: end-no-change
+
+  run-tests:
+    kind: command
+    argv: [npm, test]
+    onFailure: continue
+    next: verdict
+
+  verdict:
+    kind: condition
+    inputs:
+      tests_exit: nodes.run-tests.exitCode
+    expr: tests_exit == 0
+    then: end-ok
+    else: retry-implementation
+
+  end-ok:
+    kind: end
+    outcome: success
+
+  end-no-change:
+    kind: end
+    outcome: no_change
+
+edges:
+  - id: retry-implementation
+    from: verdict
+    to: has-diff # should be `implement`
+    when: tests_exit != 0
+    maxIterations: 3

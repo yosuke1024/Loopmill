@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/yosuke1024/Loopmill/main/docs/spec/envelope.schema.json",
   "title": "Loopmill Envelope",
-  "description": "The single machine-readable record exchanged between the Loopmill control plane, execution backends, humans and GitHub. One envelope describes exactly one thing that happened. Envelope schema version 1.0.0.",
+  "description": "The single machine-readable record exchanged between the Loopmill control plane, execution backends, humans and GitHub. One envelope describes exactly one thing that happened. Envelope schema version 1.1.0.",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -826,6 +826,7 @@
       }
     },
     "outcome": {
+      "$comment": "Amendment (m0+), envelope schema 1.1.0: per-state fields of state-machine.md §2.2's Outcome, added additively so a 1.0.0 run-finished record stays valid 1.1.0.",
       "type": "object",
       "additionalProperties": false,
       "required": ["state"],
@@ -855,7 +856,66 @@
           "minimum": 0,
           "description": "Highest cycle index reached."
         },
-        "summary": { "$ref": "#/$defs/summaryText" }
+        "summary": { "$ref": "#/$defs/summaryText" },
+        "nodeId": {
+          "$ref": "#/$defs/nodeId",
+          "description": "FAILED: the node the failure is attributed to, where known."
+        },
+        "cycleIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "FAILED: the cycle the failure is attributed to, where known."
+        },
+        "by": {
+          "enum": ["human", "platform", "timeout-escalation"],
+          "description": "CANCELLED: who or what cancelled the Run."
+        },
+        "actor": {
+          "type": "string",
+          "maxLength": 128,
+          "$ref": "#/$defs/secretFree",
+          "description": "CANCELLED: the authenticated identity that cancelled the Run, where one applies."
+        },
+        "edgeId": {
+          "$ref": "#/$defs/nodeId",
+          "description": "MAX_ITERATIONS_EXCEEDED: the Retry Edge that exhausted its budget."
+        },
+        "traversals": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "MAX_ITERATIONS_EXCEEDED: the edge's budget-consuming traversal count."
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "MAX_ITERATIONS_EXCEEDED: the edge's configured iteration budget."
+        },
+        "budgetKey": {
+          "enum": ["maxMeasuredTokens", "maxUnmeasuredExecutions", "maxStepsPerRun"],
+          "description": "BUDGET_EXCEEDED: which budget was exhausted."
+        },
+        "limit": {
+          "type": "number",
+          "description": "BUDGET_EXCEEDED: the configured limit of budgetKey."
+        },
+        "observed": {
+          "type": "number",
+          "description": "BUDGET_EXCEEDED: the observed value that exceeded limit."
+        },
+        "expiryReason": {
+          "enum": ["max_runtime", "human_timeout"],
+          "description": "EXPIRED: which deadline elapsed."
+        },
+        "skipReason": {
+          "enum": ["dedupe", "min_interval", "runs_per_window"],
+          "description": "SKIPPED: why the Run was skipped without dispatching anything."
+        },
+        "ref": {
+          "type": "string",
+          "maxLength": 256,
+          "$ref": "#/$defs/secretFree",
+          "description": "SKIPPED: a reference for skipReason, e.g. the dedupeKey or the open change it matched."
+        }
       },
       "allOf": [
         {
@@ -874,6 +934,46 @@
             "properties": { "state": { "const": "FAILED" } }
           },
           "then": { "required": ["failureReason"] }
+        },
+        {
+          "$comment": "Amendment (m0+): CANCELLED carries who cancelled the Run.",
+          "if": {
+            "required": ["state"],
+            "properties": { "state": { "const": "CANCELLED" } }
+          },
+          "then": { "required": ["by"] }
+        },
+        {
+          "$comment": "Amendment (m0+): MAX_ITERATIONS_EXCEEDED carries the exhausted edge's budget.",
+          "if": {
+            "required": ["state"],
+            "properties": { "state": { "const": "MAX_ITERATIONS_EXCEEDED" } }
+          },
+          "then": { "required": ["edgeId", "traversals", "maxIterations"] }
+        },
+        {
+          "$comment": "Amendment (m0+): BUDGET_EXCEEDED carries which budget and by how much.",
+          "if": {
+            "required": ["state"],
+            "properties": { "state": { "const": "BUDGET_EXCEEDED" } }
+          },
+          "then": { "required": ["budgetKey", "limit", "observed"] }
+        },
+        {
+          "$comment": "Amendment (m0+): EXPIRED carries which deadline elapsed.",
+          "if": {
+            "required": ["state"],
+            "properties": { "state": { "const": "EXPIRED" } }
+          },
+          "then": { "required": ["expiryReason"] }
+        },
+        {
+          "$comment": "Amendment (m0+): SKIPPED carries why nothing was dispatched.",
+          "if": {
+            "required": ["state"],
+            "properties": { "state": { "const": "SKIPPED" } }
+          },
+          "then": { "required": ["skipReason"] }
         }
       ]
     }
