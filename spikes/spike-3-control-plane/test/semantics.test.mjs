@@ -189,6 +189,17 @@ test('invalid envelopes are rejected without touching state (exit 30)', () => {
   assert.equal(snapshotText(dir, 'run-h'), before, 'invalid events leave the snapshot untouched');
 });
 
+test('an unknown simulated schedule is rejected (exit 30), never silently defaulted', () => {
+  const dir = path.join(mkTmp(), 'state');
+  const S = localArgs(dir);
+  const started = { ...startedEvent('run-k', 'retry-then-pass'), params: { schedule: 'exhaust' } };
+  const r = step(S, started);
+  assert.equal(r.code, EXIT.ERR_INVALID_EVENT);
+  assert.equal(r.json.classification, 'INVALID');
+  assert.equal(r.json.reason, 'UNKNOWN_SCHEDULE');
+  assert.deepEqual(listEvents(dir, 'run-k'), [], 'nothing is written for a rejected run-started');
+});
+
 test('snapshot.json is exactly the fold of the event log (rebuild-snapshot)', () => {
   const dir = path.join(mkTmp(), 'state');
   const S = localArgs(dir);

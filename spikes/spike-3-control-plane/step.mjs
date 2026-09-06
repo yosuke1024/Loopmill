@@ -177,6 +177,14 @@ export function validateEnvelope(env) {
   if (!EVENT_TYPES.has(env.eventType)) return { ok: false, reason: 'UNKNOWN_EVENT_TYPE' };
   if (!INBOUND_TYPES.has(env.eventType)) return { ok: false, reason: 'NOT_AN_INBOUND_EVENT' };
   if (env.loopId !== LOOP.loopId) return { ok: false, reason: 'UNKNOWN_LOOP' };
+  if (env.eventType === 'run-started') {
+    // A schedule name the simulator does not know must fail loudly. Silently
+    // falling back to the default schedule hid a mis-named hosted run once.
+    const schedule = env.params && env.params.schedule;
+    if (schedule !== undefined && schedule !== null && !SCHEDULES[schedule]) {
+      return { ok: false, reason: 'UNKNOWN_SCHEDULE' };
+    }
+  }
   if (env.eventType === 'node-completed') {
     if (!LOOP.nodes[env.nodeId]) return { ok: false, reason: 'UNKNOWN_NODE' };
     if (!Number.isInteger(env.cycle) || env.cycle < 1) return { ok: false, reason: 'BAD_CYCLE' };
@@ -311,7 +319,8 @@ export function isTerminal(snap) {
  * Simulated backend
  * ------------------------------------------------------------------ */
 export function simulateBackend(dispatchEnv, scheduleId) {
-  const table = SCHEDULES[scheduleId] || SCHEDULES[DEFAULT_SCHEDULE];
+  const table = SCHEDULES[scheduleId];
+  if (!table) throw new Error(`simulateBackend: unknown schedule '${scheduleId}' (validation should have rejected it)`);
   const key = `${dispatchEnv.nodeId}:${dispatchEnv.cycle}:${dispatchEnv.attempt}`;
   const status = table[key] || 'pass';
   const seed = sha256hex(key + '|' + dispatchEnv.runId);
@@ -686,6 +695,7 @@ async function waitForBarrier(file, timeoutMs = 20000) {
 export async function executeStep(store, envelope, opts = {}) {
   const t0 = Date.now();
   const maxPushRetries = opts.maxPushRetries ?? 5;
+  const holdMs = opts.holdMs ? Number(opts.holdMs) : 0;
   let conflicts = 0;
   let pushAttempts = 0;
   let lastDetail = null;
@@ -704,6 +714,12 @@ export async function executeStep(store, envelope, opts = {}) {
       process.exit(98);
     }
     if (opts.barrierFile && attempt === 1) await waitForBarrier(opts.barrierFile);
+    if (holdMs > 0 && attempt === 1) {
+      // Fault injection: widen the window between reading the base sha and
+      // pushing, so that hosted runs can be made to collide on purpose.
+      process.stderr.write(`[fault-injection] holding ${holdMs} ms between read and push\n`);
+      await sleep(holdMs);
+    }
 
     pushAttempts += 1;
     const res = await store.publish(view, plan.commitMessage, opts);
@@ -812,6 +828,7 @@ function stepOpts(args) {
     maxPushRetries: args.maxPushRetries ? Number(args.maxPushRetries) : 5,
     crashPoint: args.crashPoint || process.env.LOOPMILL_CRASH_POINT || null,
     barrierFile: args.barrierFile || process.env.LOOPMILL_BARRIER_FILE || null,
+    holdMs: args.holdMs || process.env.LOOPMILL_HOLD_MS || null,
   };
 }
 
@@ -925,6 +942,7 @@ Store selection:
   --store git   --remote <url> --branch <branch> --workdir <path>
 
 Fault injection (tests): --crash-point after-stage|after-commit  --barrier-file <path>
+                         --hold-ms <n>   (or LOOPMILL_CRASH_POINT / LOOPMILL_BARRIER_FILE / LOOPMILL_HOLD_MS)
 
 Exit codes: 0 continue | 10 completed | 11 max-iterations | 12 run-failed
             20 duplicate | 21 stale | 22 terminal
