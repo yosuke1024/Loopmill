@@ -1,13 +1,15 @@
 # ADR-001: Event-driven, non-resident control plane with pluggable execution backends
 
-- **Status:** Proposed, 2026-09-06
+- **Status:** Superseded by ADR-002 (2026-09-06) for D2, D4, D5, D6, D7 and D8; D1 and D3 remain in
+  force. Kept unchanged below as the record of the v0.5 topology and its context.
 - **Supersedes:** the MVP Design v0.4 for everything in the appendix mapping; the v0.5 rewrite of it is
   `docs/design/mvp-design.md`, and `docs/design/CHANGELOG-v0.5.md` records the rewrite section by section
 - **Binding input:** the v0.5 decision sheet (2026-09-06). Where this ADR and the sheet disagree, the sheet wins.
   Decisions this ADR had to make because the sheet is silent are labelled **Decision (not in sheet)** so the
   maintainer can reconcile them.
-- **Gated by:** SPIKE-1, SPIKE-2 / SPIKE-2b, SPIKE-3 (decision sheet §13). A spike failure may overturn parts of
-  this ADR; the "Risks" table names which part.
+- **Gated by:** SPIKE-1, SPIKE-2 / SPIKE-2b, SPIKE-3 (decision sheet §13); the spikes have since been run,
+  with results in `docs/spikes/README.md`. A spike failure may overturn parts of this ADR; the "Risks"
+  table names which part.
 
 ---
 

@@ -1,6 +1,6 @@
 # Loop file specification
 
-Version 0.5 · schema `https://loopmill.dev/schema/loop-file/0.5.json` · 2026-09-06
+Version 0.6 · schema `https://loopmill.dev/schema/loop-file/0.6.json` · 2026-09-06
 
 The **Loop file** is the source of truth for a Loopmill Loop: a bounded, versioned
 definition of an AI engineering loop that may span several vendors and several
@@ -128,7 +128,7 @@ Consequences, all of them intended:
 ## 4. Document structure
 
 ```yaml
-schemaVersion: "0.5.0"       # required
+schemaVersion: "0.6.0"       # required
 slug: daily-content-improvement   # required
 name: Daily Content Improvement   # required
 description: ...             # optional
@@ -155,7 +155,7 @@ to a runtime rather than interprets (see [§8.1](#81-agent-node)).
 
 | Field | Type | Default | Semantics |
 |---|---|---|---|
-| `schemaVersion` | semver string | — | Loop file format version. The MVP engine accepts `0.5.x` and refuses a major it does not know. |
+| `schemaVersion` | semver string | — | Loop file format version. The MVP engine accepts `0.6.x` and refuses a major it does not know. `0.6.0` removes the `observed` backend and the `artifact` field / `captured.*` accessor, and adds `human.target`; `github-actions` and `trigger.kind: event` remain in the schema as reserved ids, rejected by validation (LM-VAL-028, LM-VAL-029) rather than removed outright. |
 | `slug` | `^[a-z][a-z0-9-]{1,63}$` | — | `loopId`. MUST match the file name (LM-VAL-002). |
 | `name` | string, 1–120 | — | Human title shown in `loopmill runs`, the job summary and the read-only UI. |
 | `description` | string, ≤4000 | — | What the Loop is for. Never sent to a runtime unless a prompt references it. |
@@ -220,16 +220,16 @@ trigger:
 
 ```yaml
 trigger:
-  kind: event
-  source: github        # the only source in the MVP
+  kind: event             # reserved: rejected by validation in this version (LM-VAL-029)
+  source: github
   types: [issues.opened, pull_request.synchronize]
 ```
 
 | Field | Semantics |
 |---|---|
-| `schedule.cron` | Evaluated in `tz`. Loopmill is never resident: an external scheduler (a GitHub Actions `schedule:`, or the maintainer's own scheduler for `local`) invokes the control plane, which decides whether a Run is due. |
+| `schedule.cron` | Evaluated in `tz`. Loopmill is never resident: the OS scheduler — `launchd` on macOS, a `systemd` timer or `cron` on Linux — invokes `loopmill run <loop>` directly; there is no Loopmill-owned daemon deciding whether a Run is due ahead of time. |
 | `schedule.tz` | **Decision (not in sheet):** an IANA time zone name, default `UTC`. A named zone rather than a fixed offset, because a Loop that must run at 06:00 local must keep doing so across a DST transition. |
-| `event.types` | GitHub event name, optionally narrowed by action. A Loop is never started by an unmediated webhook: GitHub-native events are ingested by an `ingest` workflow that converts them into Envelopes, so that a Run always begins from a validated Envelope with an `eventId`. |
+| `event.types` | The schema keeps the `event` trigger shape for forward compatibility, but `trigger.kind: event` is **reserved**: `loopmill validate` rejects any file that declares it (LM-VAL-029). GitHub is a repository Loopmill polls from its own nodes and human gates, not a source wired to start a Run. |
 
 A schedule that can fire more often than `budget.minInterval` is a validation error
 (LM-VAL-026): a Loop whose schedule contradicts its own rate limit is a
@@ -263,11 +263,11 @@ restriction is a validation rule that can be lifted without a format change.
 
 ```yaml
 defaults:
-  backend: github-actions
+  backend: local
   runtime: claude-code
   authMode: subscription-oauth
   permissionProfile: workspace
-  isolation: ephemeral
+  isolation: worktree
 ```
 
 Every value is inherited by nodes that do not set it. **Decision (not in sheet):**
@@ -279,7 +279,10 @@ declares for itself is the strictest that applies.
 `runtime`, `authMode` and `permissionProfile` are meaningful only for `agent` nodes;
 `backend` for `agent` and `command` nodes. `condition`, `human` and `end` nodes run
 on the control plane and MUST NOT declare any of them (the schema rejects the
-fields outright).
+fields outright). `backend` defaults to `local` and `isolation` defaults to
+`worktree` when neither a node nor `defaults` sets them; `runtime` and `authMode`
+have no such fallback, so one of a node or `defaults` MUST still declare each of
+them before that node can run (LM-VAL-019).
 
 ### 6.3 Env policy
 
@@ -349,7 +352,6 @@ budget:
   maxIterations: 3
   maxRuntime: PT4H
   maxMeasuredTokens: 2000000
-  maxUnmeasuredExecutions: 8
   maxRunsPerWindow: { count: 1, window: PT5H }
   minInterval: PT1H
 ```
@@ -360,7 +362,7 @@ budget:
 | `maxIterations` | integer ≥ 1 | none | Loop | **Cap** on every Retry Edge's own `maxIterations` (LM-VAL-025). |
 | `maxRuntime` | ISO-8601 duration | `PT4H` | Run | Wall clock, **excluding** time spent in `WAITING_HUMAN`. A gate that waits overnight must not consume the runtime budget. Breach → `EXPIRED`. |
 | `maxMeasuredTokens` | integer ≥ 1 | none | Run | Checked against **measured** tokens only — usage whose provenance is `reported` or `derived`. `estimated` and `unavailable` never count towards it, so the budget can never be satisfied by numbers Loopmill did not actually observe. |
-| `maxUnmeasuredExecutions` | integer ≥ 0 | derived | Run | Agent Node Executions that are **not measured** — usage provenance `unavailable` or `estimated` (`usage-normalization.md` §6.1). Whenever usage coverage is below 100% this, not the token budget, is the binding guard. |
+| `maxUnmeasuredExecutions` | integer ≥ 0 | `0` | Run | Agent Node Executions that are **not measured** — usage provenance `unavailable` or `estimated` (`usage-normalization.md` §6.1). No MVP backend declares `usage: none`, so the default of `0` never fires in this version; the field stays for a future backend that does, and is the binding guard whenever usage coverage is below 100%. |
 | `maxRunsPerWindow` | `{count, window}` | `{count: 1, window: PT5H}` | Loop | Rolling-window rate limit, aligned with the vendors' own rolling usage windows. |
 | `minInterval` | ISO-8601 duration | `PT1H` | Loop | Minimum wall-clock distance between the starts of two Runs. |
 
@@ -377,19 +379,15 @@ the behaviour never disagree. `edges[].maxIterations` remains required.
 
 ### 7.2 Default for `maxUnmeasuredExecutions`
 
-**Decision (not in sheet):** the default is
-
-```
-max(1, observedAgentNodes × (1 + maxEdgeIterations))
-```
-
-where `observedAgentNodes` counts `agent` nodes whose resolved backend has
-`usage: none`, and `maxEdgeIterations` is the largest `maxIterations` over all Retry
-Edges (0 when there are none). The decision sheet writes this as "number of observed
-nodes × maxIterations"; that undercounts by exactly one pass, because a Retry Edge
-body executes once *before* any traversal (see [§12](#12-retry-edges)). The `+ 1`
-makes the default equal to the worst case a correct Loop can actually reach, so the
-default never terminates a Run that stayed inside its own iteration budget.
+The default is `0`: no MVP backend an agent node can select (`local`, `fake`, or the
+reserved `github-actions`) declares `usage: none` — that was `observed`, removed in
+`schemaVersion` `0.6.0` — so in a healthy Run every agent execution is measured. An
+unmeasured execution can still occur when an attempt is killed, times out or is
+interrupted (`docs/spec/usage-normalization.md` §2.5, §6.2); with the default of `0`
+such a Run is stopped before its next dispatch rather than allowed to continue
+unaccounted, which is the conservative reading of "measured means measured". Raise
+the value deliberately in loops that tolerate it. The field stays in the schema for a
+future backend that does declare `usage: none` ([§14](#14-backend-capabilities)).
 
 ### 7.3 Duration format
 
@@ -397,8 +395,8 @@ Every duration in a Loop file is an ISO-8601 duration restricted to days, hours,
 minutes and seconds: `PT30M`, `PT4H`, `P1DT12H`, `PT90S`. Years, months and weeks
 are rejected because they are not a fixed number of seconds and a budget that
 changes length depending on the month is not a budget. This applies to
-`budget.maxRuntime`, `budget.minInterval`, `budget.maxRunsPerWindow.window`, every
-node `timeout` and `artifact.deadline`.
+`budget.maxRuntime`, `budget.minInterval`, `budget.maxRunsPerWindow.window`, and
+every node `timeout`.
 
 ---
 
@@ -414,7 +412,7 @@ Common fields, and where each kind accepts them:
 | `kind` | ● | ● | ● | ● | ● | Required discriminator. |
 | `id` | ○ | ○ | ○ | ○ | ○ | Optional echo of the map key (LM-VAL-004). |
 | `runtime` | ○ | — | — | — | — | `claude-code` \| `codex`. |
-| `backend` | ○ | ○ | — | — | — | `github-actions` \| `observed` \| `local` \| `fake`. |
+| `backend` | ○ | ○ | — | — | — | `local` \| `fake` \| `github-actions` (reserved). |
 | `auth` | ○ | — | — | — | — | `subscription-oauth` \| `subscription-login` \| `api-key`. |
 | `inputs` | ○ | ○ | ● | — | — | [§9](#9-inputs-and-references). Required and non-empty for `condition`. |
 | `timeout` | ○ | ○ | — | ○ | — | ISO-8601 duration. |
@@ -429,24 +427,22 @@ Common fields, and where each kind accepts them:
 **`effects`.** **Decision (not in sheet):** `external` means the node creates or
 changes something outside the Loop's working branch that a human or a third party
 sees as the Loop's product — an Issue, a pull request, a release, a deployment, a
-message. Loopmill's own coordination traffic (the dispatch that triggers an
-`observed` node, the fenced `loopmill` blocks it reads back, the state branch) is
-**not** an external effect: it is the control plane talking to itself, it is never
-addressed to a human, and treating it as external would require a human gate before
-every cross-vendor handoff, which would defeat the purpose of the product. The
-distinction is load-bearing for security: only an `effects: external` node's job
-receives `issues: write` / `pull-requests: write` and `GH_TOKEN`.
+message. Loopmill's own coordination traffic (dispatching a node, appending to the
+local event journal, polling GitHub for a human decision) is **not** an external
+effect: it is the control plane talking to itself, it is never addressed to a human
+on its own, and treating it as external would require a human gate before every
+internal step, which would defeat the purpose of the product. The distinction is
+load-bearing for security: only an `effects: external` node's subprocess is allowed
+to see `GH_TOKEN` in its environment ([§6.3](#63-env-policy)).
 
 **`onFailure`.** `fail_run` makes the Run `FAILED` with the node's failure reason.
 `continue` follows `next` anyway, which is how a red test suite becomes *evidence*
 for a later condition rather than the end of the Run. `retry_edge:<edgeId>` routes
 the failure into a Retry Edge.
 
-**`timeout`.** Loopmill enforces the timeout itself, by killing the subprocess or
-cancelling the job — it does not rely on the runtime having a timeout flag, because
-`codex exec` has none. A timed-out node execution is `TIMED_OUT` and is then handled
-by `onFailure`. For a node on the `observed` backend, `artifact.deadline` is the
-operative limit; `timeout` is ignored there.
+**`timeout`.** Loopmill enforces the timeout itself, by killing the subprocess — it
+does not rely on the runtime having a timeout flag, because `codex exec` has none.
+A timed-out node execution is `TIMED_OUT` and is then handled by `onFailure`.
 
 **`next`.** MVP execution is sequential: `next` is one target, never a list.
 
@@ -456,7 +452,7 @@ operative limit; `timeout` is ignored there.
 implement:
   kind: agent
   runtime: claude-code
-  backend: github-actions
+  backend: local
   auth: subscription-oauth
   model: sonnet
   permissionProfile: workspace
@@ -484,7 +480,6 @@ implement:
 | `model` | string | runtime default | Passed through verbatim. Loopmill never translates a model name between vendors: `sonnet` means something to `claude-code` and nothing to `codex`, and silently mapping it would be a lie about which model was billed. |
 | `permissionProfile` | `readonly` \| `workspace` \| `full` | `workspace` | Mapped by the runtime adapter to that CLI's own permission flags. |
 | `sessionPolicy` | `fresh` | `fresh` | MVP supports `fresh` only (LM-VAL-021): every Attempt is a new CLI process with no resumed session, so an Attempt is reproducible from the pinned `loopVersion` plus its resolved inputs. |
-| `artifact` | matcher object | — | Required on an `observed` backend, rejected elsewhere (LM-VAL-020). See [§8.6](#86-artifact-matcher). |
 
 **`structuredOutput`** is the one place the schema allows unknown keywords, because
 it is a foreign JSON Schema document that Loopmill hands to the runtime rather than
@@ -496,9 +491,17 @@ interprets. Its top-level `type` MUST be `object`. It maps to:
   document.
 
 Declaring `structuredOutput` on a backend that declares `structuredOutput: false` is
-an error (LM-VAL-018) — the `observed` backend cannot pass a schema to a vendor
-cloud it does not control, so an observed node reports its answer through an
-artifact matcher instead, read with `captured.*` rather than `structured.*`.
+an error (LM-VAL-018). Every backend an agent node can select in this version
+(`local`, `fake`, and the reserved `github-actions`) declares `structuredOutput:
+true`; the rule exists for a future backend that cannot pass a schema through to its
+runtime.
+
+**Reserved.** The `artifact` field and the `captured.*` accessor existed in an
+earlier version for a backend that reported its result as a file or a comment
+watched on a vendor's own cloud. That backend is not part of this version:
+`artifact` is not a legal node field and `captured.*` is not a legal reference; both
+names are reserved for a future artifact-matcher backend. See
+[§8.6](#86-artifact-matcher).
 
 ### 8.2 Command node
 
@@ -509,8 +512,8 @@ create-issue:
   cwd: .
   env: [CI]
   inputs:
-    title: nodes.review-content.captured.title
-    body: nodes.review-content.captured.summary
+    title: nodes.review-content.structured.title
+    body: nodes.review-content.structured.summary
   effects: external
   timeout: PT5M
   next: implement
@@ -531,7 +534,7 @@ has no `runtime` and no `auth`: it holds no vendor credential.
 review-verdict:
   kind: condition
   inputs:
-    approved: nodes.review-changes.captured.approved
+    approved: nodes.review-changes.structured.approved
     tests_exit: nodes.run-tests.exitCode
   expr: approved == true && tests_exit == 0
   then: approve-pr
@@ -552,7 +555,8 @@ node — never a silent `false` ([§11](#11-condition-expressions)).
 ```yaml
 approve-pr:
   kind: human
-  mode: environment-reviewers
+  mode: label
+  target: nodes.create-issue
   subject: nodes.implement
   timeout: PT12H
   next: create-pr
@@ -560,12 +564,16 @@ approve-pr:
 
 | Field | Type | Semantics |
 |---|---|---|
-| `mode` | `environment-reviewers` \| `pull-request-review` \| `label` | How the approval is asked for. `environment-reviewers`: a GitHub Environment with required reviewers gates the *next* job before it starts. `pull-request-review`: an approving review on the pull request. `label`: removal of the `loopmill:hold` label approves, adding `loopmill:reject` rejects. |
+| `mode` | `cli` \| `label` \| `pull-request-review` | How the approval is asked for and ingested. `cli`: `loopmill approve <runId>` / `loopmill reject <runId> [--reason]` on the host writes `human-decided` directly and continues the Run in the same process. `label`: adding `loopmill:approve` or `loopmill:reject` to the `target` node's Issue or PR; ingested when `resume --due` next polls `gh`. `pull-request-review`: an approving review on the pull request the Run produced; ingested the same way. |
+| `target` | `nodes.<id>` | Optional. The node whose Issue or pull request carries the label or review. Defaults to the Run's most recent Issue or PR. Meaningless for `mode: cli`, which names no GitHub artefact. |
 | `subject` | `nodes.<id>` | The Node Execution whose **artifact digest** is being approved. The digest is recorded in the `human-requested` event; a retry changes the digest and therefore invalidates prior approvals. |
 | `timeout` | duration | Optional. On expiry the node is `TIMED_OUT` and the Run ends `EXPIRED` with `expiryReason: human_timeout` — never `FAILED`, and `onFailure` does not apply (`state-machine.md` §8.4, D-01). |
 
 The Run enters `WAITING_HUMAN`. Nothing of Loopmill's is resident while it waits, and
-the wait is excluded from `budget.maxRuntime`.
+the wait is excluded from `budget.maxRuntime`. The decision reaches the Run only on a
+later entrypoint: `resume --due` (run by hand or on a schedule, alongside the loop's
+own) for `label` and `pull-request-review`, or the `cli` approve/reject command
+itself, which continues the Run immediately.
 
 **Decision (not in sheet):** a *rejection* is routed by the node's own `onFailure` —
 `fail_run` (the default) ends the Run `FAILED` with `failureReason: human_rejected`,
@@ -593,26 +601,14 @@ Reaching an end node is always a **success**: `FAILED`, `MAX_ITERATIONS_EXCEEDED
 
 ### 8.6 Artifact matcher
 
-For a node on the `observed` backend, Loopmill only (a) emits the trigger and
-(b) watches for an artifact. The matcher says what to watch for.
-
-```yaml
-artifact:
-  kind: file-in-diff             # comment-fenced-block | file-in-diff | pr-body
-  path: .loopmill/review.json    # required for file-in-diff, rejected otherwise
-  deadline: PT30M
-```
-
-| `kind` | What Loopmill looks for |
-|---|---|
-| `comment-fenced-block` | A fenced ` ```loopmill ` block containing one JSON object, in an Issue or pull request comment. Free text around the block is ignored; the block is parsed strictly. |
-| `file-in-diff` | A JSON file at `path` in the task's diff. |
-| `pr-body` | A fenced ` ```loopmill ` block in the pull request body. |
-
-`deadline` is how long the Node Execution stays in `OBSERVING`. On expiry the node is
-`TIMED_OUT`. A matched artifact that is not a JSON object fails the node with reason
-`artifact_invalid`. The object's top-level scalar members are what later nodes read
-through `captured.<name>`.
+`artifact` and the `captured.*` accessor existed in an earlier version so that a node
+executing on a vendor's own cloud could report its result as a file in a diff or a
+fenced comment block, watched by Loopmill until a deadline rather than returned
+directly. That backend is not part of this version: `artifact` is rejected as an
+unknown node field (`additionalProperties: false`) and `captured.*` does not match
+the `reference` grammar ([§9.1](#91-reference-grammar)). Both names are reserved for
+a future artifact-matcher backend, and the schema and this spec keep no further
+detail about their prior shape here.
 
 ---
 
@@ -642,20 +638,21 @@ reference   = "nodes." node-id "." accessor
             | "cycle.index"
             | "trigger." path
 accessor    = "structured." dotted-path
-            | "captured." name
             | "stdout" | "exitCode" | "filesChanged"
 ```
 
 | Accessor | Available from | Type |
 |---|---|---|
 | `structured.<path>` | an `agent` node that declares `structuredOutput` | the JSON value at that path |
-| `captured.<name>` | an `agent` node on an `observed` backend | a top-level scalar of the matched artifact |
 | `stdout` | a `command` node | the captured standard output, redacted |
 | `exitCode` | a `command` node | integer |
 | `filesChanged` | an `agent` or `command` node | integer, see below |
 | `run.id` `run.loop` `run.version` `run.trigger` | always | string |
 | `cycle.index` | always | integer, see [§12](#12-retry-edges) |
 | `trigger.<path>` | always | the trigger payload |
+
+`captured.<name>` is reserved for a future artifact-matcher backend
+([§8.6](#86-artifact-matcher)) and is not a legal accessor in this version.
 
 Using an accessor a node cannot produce is an error (LM-VAL-016), and referencing a
 node that does not exist is an error (LM-VAL-013).
@@ -900,7 +897,7 @@ message names the actual mistake rather than a `oneOf` failure.
 | Code | Rule |
 |---|---|
 | `LM-VAL-005` | entry node cannot be determined: `entry` names an unknown node, or it is omitted and zero or several nodes have no incoming forward edge |
-| `LM-VAL-006` | unknown target in `next`, `then`, `else`, `onFailure`, `human.subject`, `edges[].from` or `edges[].to` |
+| `LM-VAL-006` | unknown target in `next`, `then`, `else`, `onFailure`, `human.subject`, `human.target`, `edges[].from` or `edges[].to` |
 | `LM-VAL-007` | **retry edge targets non-retryable backend** |
 | `LM-VAL-008` | retry edge does not close a cycle: `from` is not forward-reachable from `to` |
 | `LM-VAL-009` | retry edge body contains no node on a retryable backend |
@@ -915,7 +912,7 @@ message names the actual mistake rather than a `oneOf` failure.
 | `LM-VAL-013` | input reference names a node that does not exist |
 | `LM-VAL-014` | referenced node does not run on every path from the entry node to the referencing node |
 | `LM-VAL-015` | `${...}` placeholder names something that is not a declared input of that node, or is unterminated |
-| `LM-VAL-016` | accessor is not available from the referenced node's kind or backend (`structured.*` without `structuredOutput`; `captured.*` from a non-observed node; `stdout`/`exitCode` from a non-command node) |
+| `LM-VAL-016` | accessor is not available from the referenced node's kind (`structured.*` without `structuredOutput`; `stdout`/`exitCode` from a non-command node; `filesChanged` from a node that is not `agent` or `command`) |
 | `LM-VAL-017` | expression operand is not a declared input of the node (for `edges[].when`, of the edge's `from` node), or the expression is not well-formed |
 
 ### Capability
@@ -923,10 +920,12 @@ message names the actual mistake rather than a `oneOf` failure.
 | Code | Rule |
 |---|---|
 | `LM-VAL-018` | node sets `structuredOutput` but its backend declares `structuredOutput: false` |
-| `LM-VAL-019` | unsupported Runtime × Backend × Auth combination, or a required one of the three is neither declared nor defaulted |
-| `LM-VAL-020` | `artifact` matcher missing on an `observed` node, or present on a node that is not `observed` |
+| `LM-VAL-019` | unsupported Runtime × Backend × Auth combination, or `runtime`/`authMode` is neither declared on the node nor defaulted (`backend` always resolves: node, then `defaults.backend`, then `local`) |
+| `LM-VAL-020` | *(retired)* — was the `observed`-backend artifact-matcher requirement; `observed` and `artifact` were removed in `schemaVersion` `0.6.0` |
 | `LM-VAL-021` | `sessionPolicy` other than `fresh` (MVP) |
 | `LM-VAL-022` | more than one entry in `repos` (MVP) |
+| `LM-VAL-028` | node or `defaults.backend` names the reserved backend `github-actions` |
+| `LM-VAL-029` | `trigger.kind` is `event`, which is reserved in this version |
 
 ### Policy and budget
 
@@ -942,15 +941,15 @@ message names the actual mistake rather than a `oneOf` failure.
 
 | Backend | Runtime | Allowed `auth` |
 |---|---|---|
-| `github-actions` | `claude-code` | `subscription-oauth`, `api-key` |
-| `github-actions` | `codex` | `subscription-login` (EXPERIMENTAL, behind a flag until seeded-credential survival on ephemeral runners is proven), `api-key` |
 | `local` | `claude-code` | `subscription-oauth`, `api-key` |
 | `local` | `codex` | `subscription-login`, `api-key` |
-| `observed` | `codex` | `subscription-login` |
 | `fake` | any | any |
 
-`observed` has no `claude-code` instance in the MVP. `api-key` is never a default and
-never silent: a node that uses it is shown as metered in every report.
+`github-actions` is a reserved backend id (LM-VAL-028): naming it on a node or in
+`defaults.backend`, for any runtime or auth mode, fails validation with the message
+*"backend github-actions is reserved and not supported in this version"* rather than
+the generic combination error above. `api-key` is never a default and never silent:
+a node that uses it is shown as metered in every report.
 
 ---
 
@@ -959,49 +958,45 @@ never silent: a node that uses it is shown as metered in every report.
 Each backend declares this record in code; `loopmill backends --json` echoes it.
 Validation reads it, so a Loop file never has to restate it.
 
-| Capability | `github-actions` | `observed` | `local` | `fake` | `control-plane` |
-|---|---|---|---|---|---|
-| `invocation` | on-demand | event or on-demand | on-demand | on-demand | on-demand |
-| `result` | returned (+ streamed log) | observed | returned | returned | returned |
-| `usage` | full | none | full | full | none |
-| `quotaSignal` | classified | none | classified | classified | none |
-| `structuredOutput` | true | false | true | true | false |
-| `retryable` | true | true | true | true | **false** |
-| `cancellable` | true (job cancel) | false | true | true | true |
-| `isolation` | ephemeral | vendor-side | worktree | ephemeral | n/a |
-| `credentialLocation` | job-secret | vendor-side | user-machine | none | none |
+| Capability | `local` | `fake` | `control-plane` | `github-actions` (reserved) |
+|---|---|---|---|---|
+| `invocation` | on-demand | on-demand | on-demand | on-demand |
+| `result` | returned (+ streamed log) | returned | returned | returned (+ streamed log) |
+| `usage` | full | full (deterministic) | none | full |
+| `quotaSignal` | classified | classified | none | classified |
+| `structuredOutput` | true | true | false | true |
+| `retryable` | true | true | **false** | true |
+| `cancellable` | true (SIGINT, then grace, then SIGKILL) | true | true | true (job cancel) |
+| `isolation` | worktree | ephemeral | n/a | ephemeral |
+| `credentialLocation` | user-machine | none | none | job-secret |
 
-**`github-actions`** — Loopmill's own node executor runs inside a GitHub Actions job
-and invokes the runtime CLI directly, never through a vendor-supplied action,
-because usage, structured output and exit codes have to be captured by Loopmill
-itself rather than inferred from someone else's logs. `claude-code` authenticates
-with `CLAUDE_CODE_OAUTH_TOKEN`; `codex` with a seeded credential file under
-`CODEX_HOME` (EXPERIMENTAL) or, explicitly opted in, an API key.
-
-**`observed`** — the node executes on a vendor's own cloud. Loopmill emits the
-trigger and watches for an artifact until the deadline; it holds no credential for
-the execution. This is the only shape in which a ChatGPT subscription can do
-unattended work today, and its price is written into the capability record: no
-usage (every such execution is unmeasured and counts against
-`budget.maxUnmeasuredExecutions`), no quota signal, no structured output, and no
-cancellation. Completion is detected by the artifact matcher; the deadline yields
-`TIMED_OUT`, a malformed artifact yields `FAILED` with reason `artifact_invalid`.
-
-**`local`** — the same node executor on the maintainer's machine, for manual runs and
-debugging. No OS scheduler integration in the MVP.
+**`local`** — Loopmill's own node executor invokes the runtime CLI directly, as a
+subprocess of `loopmill run`, in the Run's dedicated git worktree under
+`.loopmill/worktrees/<runId>` (cut from `repos[].defaultBase`). This is the MVP's
+primary and default backend: `defaults.backend` defaults to `local`, and the
+credential is whatever the CLI's own login already holds on that host — `claude`
+logged in, or `CLAUDE_CODE_OAUTH_TOKEN`; `codex login`. Loopmill never reads, copies
+or forwards it.
 
 **`fake`** — a fixture-replaying backend shipped in the package for tests and CI.
 Deterministic; its usage records carry provenance `estimated`, which is never summed
 with `reported` or `derived` in a headline figure.
 
 **Decision (not in sheet):** `control-plane` is added as a pseudo-backend covering
-`condition`, `human` and `end` nodes. They are decided by `loopmill step` itself and
+`condition`, `human` and `end` nodes. They are decided by `loopmill run` itself and
 never dispatched, so they have no credential, no usage and no isolation — and, most
 importantly, `retryable: false`, which is what gives LM-VAL-007 something to catch in
 an MVP where every real backend is retryable ([§12.3](#123-why-to-must-be-retryable)).
 `credentialLocation: none` is likewise added for `control-plane` and `fake`, because
 recording "user-machine" for a backend that needs no credential would be a lie in
 the one table an auditor reads first.
+
+**`github-actions` (reserved)** — the same node executor running inside a GitHub
+Actions job instead of on the host, measured viable for `claude-code` and for a
+non-resident control plane chained through Actions, but not an execution path this
+version builds: naming it on a node or in `defaults.backend` fails validation
+(LM-VAL-028, [§13](#13-validation-rules)). The capability record is kept so this
+table stays true if that integration is built later.
 
 ---
 
@@ -1013,43 +1008,44 @@ the one table an auditor reads first.
 with the reasoning for every Runtime × Backend × Auth choice in comments.
 
 ```
-06:00 Asia/Tokyo (schedule)
+06:00 Asia/Tokyo (launchd / systemd starts `loopmill run daily-content-improvement`)
   │
-  ├─ review-content     agent · codex · observed · subscription-login
-  │                     artifact: file-in-diff .loopmill/review-content.json
-  ├─ needs-issue        condition · needs_issue == true
+  ├─ review-content     agent · codex · local · subscription-login          cycle 0
+  ├─ needs-issue        condition · needs_issue == true                    cycle 0
   │      ├─ false ─────────────────────────────► end-no-change (no_change)
   │      └─ true
-  ├─ create-issue       command · gh issue create · effects: external
-  │                     pre-approved by name in approval.nodes
-  ├─ implement          agent · claude-code · github-actions · subscription-oauth
-  │                     structuredOutput {changed, summary}
-  ├─ run-tests          command · npm test · onFailure: continue
-  ├─ review-changes     agent · codex · observed · subscription-login
-  │                     artifact: comment-fenced-block
-  ├─ review-verdict     condition · approved == true && tests_exit == 0
+  ├─ create-issue       command · gh issue create · external (pre-approved) cycle 0
+  │
+  ├─ implement          agent · claude-code · local · subscription-oauth   ┐
+  ├─ run-tests          command · npm test · onFailure: continue           │ cycles
+  ├─ review-changes     agent · codex · local                              │ 1..4
+  ├─ review-verdict     condition · approved && tests_exit == 0            ┘
   │      ├─ false ──► retry-implementation ──► implement   (maxIterations 3)
   │      └─ true
-  ├─ approve-pr         human · environment-reviewers · subject nodes.implement
-  ├─ create-pr          command · gh pr create · effects: external (gated)
+  ├─ approve-pr         human · label on the Issue · subject nodes.implement   (the process exits here)
+  ├─ create-pr          command · gh pr create · external (gated)               (`resume --due` continues)
   └─ end-shipped        end (success)
 ```
 
 What each part of the spec is doing there:
 
-* **Two vendors, two backends, one loop.** The reviewer is Codex on Codex Cloud; the
-  implementer is Claude Code on GitHub Actions. The review is not the implementer
-  marking its own homework, and neither leg needs an API key.
-* **The cost of `observed` is visible.** Both Codex nodes report no usage, so they
-  are counted by `budget.maxUnmeasuredExecutions: 8` (2 observed nodes × (1 + 3
-  traversals)) rather than by the token budget, and every report of this Loop shows
-  its usage coverage rather than a confident total.
+* **Two vendors, one backend, one loop.** `review-content`, `review-changes` and
+  `implement` all run on `local`, each invoking its own CLI directly in the Run's
+  worktree; the reviewer is Codex, the implementer is Claude Code, so the review is
+  not the implementer marking its own homework, and neither leg needs an API key.
+* **Everything here is measured.** `local` reports full usage for every node, so
+  `budget.maxUnmeasuredExecutions` stays at its default of `0` and no report of this
+  Loop ever has to qualify a token figure as a lower bound.
 * **`onFailure: continue` on `run-tests`.** A red test suite is evidence, not a
   failure: `review-verdict` reads `nodes.run-tests.exitCode` and decides.
 * **One Retry Edge, one counter.** `review-verdict.else` routes into
-  `retry-implementation`, whose `to` is `implement` — an agent node on
-  `github-actions`, which is retryable. Body = {implement, run-tests, review-changes,
-  review-verdict}, executed as cycles 1..4.
+  `retry-implementation`, whose `to` is `implement` — an agent node on `local`, which
+  is retryable. Body = {implement, run-tests, review-changes, review-verdict},
+  executed as cycles 1..4.
+* **The human gate names its own Issue.** `approve-pr` is `mode: label` with
+  `target: nodes.create-issue`, so the approval lives on the Issue this Loop already
+  opened, rather than defaulting to whichever GitHub artefact the Run touched most
+  recently.
 * **Two external effects, two different policies.** `create-issue` is pre-approved by
   name with a written reason; `create-pr` is gated by `approve-pr` on every path.
   Nothing merges.
@@ -1068,7 +1064,7 @@ no budget block — the defaults still bind, which is the point: a Loopmill loop
 bounded even when its author writes nothing about bounds.
 
 ```yaml
-schemaVersion: "0.5.0"
+schemaVersion: "0.6.0"
 slug: tidy-changelog
 name: Tidy the changelog
 
@@ -1177,7 +1173,6 @@ Choices this spec makes where the v0.5 decision sheet is silent.
 | 6.3 | `env.inject` values are literal strings; no templating, no secret references. |
 | 6.4 | `approval.nodes` narrows `policy: auto` to named nodes so a Loop need not choose between gating everything and gating nothing. |
 | 7.1 | `budget.maxIterations` is a loop-wide **cap** on per-edge values, and an edge exceeding it is rejected, not clamped. |
-| 7.2 | `maxUnmeasuredExecutions` defaults to `observedAgentNodes × (1 + maxEdgeIterations)`; the sheet's formula undercounts the first body pass. |
 | 7.3 | All durations are ISO-8601 restricted to D/H/M/S. |
 | 8.0 | `effects: external` covers artifacts a human or third party sees; Loopmill's own coordination traffic is not external. |
 | 8.4 | A human rejection is a node failure governed by `onFailure`; no separate `onReject` field. |
@@ -1204,7 +1199,7 @@ genuinely open and what is now closed.
 | Nodes drawn as boxes; no file, no ids, no schema. | `.loopmill/<slug>.loop.yaml`, id-keyed `nodes` map, published JSON Schema, `additionalProperties: false` everywhere so a typo is an error. |
 | No Loop identity or versioning. | `loopId` = `slug`; `loopVersion` = sha256 over a defined canonical form ([§3](#3-identity-slug-and-loopversion)); a Run pins the version it started with. |
 | "Agent Node · Runtime · Prompt · Working Directory · Timeout · Expected Structured Output" as a settings list. | Runtime, Backend and Auth are **three separate axes**, declared per node, with a validated compatibility matrix (LM-VAL-019) and a backend capability table that validation actually reads. v0.4 had no concept of an execution backend at all. |
-| "Expected Structured Output" with no mechanism. | `structuredOutput` is a JSON Schema mapped to `--json-schema` / `--output-schema`, permitted only on backends that declare the capability (LM-VAL-018), and read back through `nodes.<id>.structured.<path>`. Backends that cannot do it (`observed`) use an artifact matcher and `captured.<name>` instead — a distinction v0.4 could not express, and the one that decides whether a cross-vendor loop is possible at all. |
+| "Expected Structured Output" with no mechanism. | `structuredOutput` is a JSON Schema mapped to `--json-schema` / `--output-schema`, permitted only on backends that declare the capability (LM-VAL-018), and read back through `nodes.<id>.structured.<path>`. A backend that cannot do it would use an artifact matcher and `captured.<name>` instead — a distinction v0.4 could not express; that backend (`observed`) and its accessor are reserved as of `schemaVersion` `0.6.0` ([§8.6](#86-artifact-matcher)), and every MVP backend an agent node can select supports `structuredOutput` directly. |
 | "Condition Node evaluates the previous node's structured output", example `needs_issue == true`. | An explicit grammar ([§11](#11-condition-expressions)) with typed operands, no coercion, no truthiness, and a hard rule that a missing or non-conforming input is an **error**, never a silent `false`. Inputs are declared, so `loopmill validate` checks the operands. |
 | "Command Node executes a local shell command", examples written as shell strings. | `argv: string[]` executed with `shell: false`, on the backend that owns the working tree, never in the control-plane job, with a binding rule that guarantees one placeholder cannot become two arguments ([§10.1](#101-the-argv-binding-rule)). |
 | "Human Approval Node · Approve / Reject". | `mode` (how the approval is asked for), `subject` (the artifact digest being approved, so a retry invalidates a stale approval), `timeout`, and rejection routed through `onFailure`. The rule that external effects **require** a gate on every path is now checkable (LM-VAL-023), with a narrowable escape hatch that must carry a written reason. |
@@ -1213,4 +1208,4 @@ genuinely open and what is now closed.
 | "Safety Limits" as prose. | A `budget` block whose every field has a scope, a default and a defined breach outcome, checked before dispatch, with the token budget counting only measured tokens and `maxUnmeasuredExecutions` binding whenever coverage is below 100% ([§7](#7-budget)). |
 | Environment and secrets not mentioned in the loop definition. | An `env` policy of deny / preserve / inject layered over a built-in vendor-auth deny list, so a subscription run cannot be silently converted into a metered API run by an inherited variable ([§6.3](#63-env-policy)). |
 | Trigger types listed, never specified. | `manual` / `schedule {cron, tz}` / `event {source, types}`, with named time zones, ingestion of GitHub events into Envelopes rather than reliance on incidental webhook chaining, and a check that a schedule cannot contradict its own rate limit (LM-VAL-026). |
-| Validation not mentioned. | 27 numbered rules with stable codes, run by `loopmill validate` and again at the start of every `loopmill step`, so no Run ever dispatches against a file that has not just been checked. |
+| Validation not mentioned. | Numbered rules with stable codes (up to `LM-VAL-029`, with `LM-VAL-020` retired in `0.6.0`), run by `loopmill validate` and again at the start of every `loopmill step`, so no Run ever dispatches against a file that has not just been checked. |

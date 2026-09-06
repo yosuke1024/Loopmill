@@ -1,5 +1,11 @@
 # SPIKE-1: Claude Code on a GitHub-hosted runner, subscription OAuth only
 
+> **Reading under design v0.6 (ADR-002).** The MVP executes on a machine the operator manages, not on
+> GitHub-hosted runners. This spike's result stands as the measured contract of the Claude Code CLI
+> itself — `is_error`/`terminal_reason`, `modelUsage`, thinking tokens, SIGINT/SIGTERM, the
+> `rate_limit_event` — which is independent of the runner; the hosted-runner half is the record for the
+> reserved `github-actions` integration. Results: `docs/spikes/README.md` §3.
+
 ## Purpose
 
 Loopmill's design assumes it can drive the official Claude Code CLI (`claude

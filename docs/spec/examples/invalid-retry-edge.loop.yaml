@@ -17,7 +17,7 @@
 #
 # The fix is one word: `to: implement`.
 
-schemaVersion: "0.5.0"
+schemaVersion: "0.6.0"
 slug: invalid-retry-edge
 name: Invalid retry edge (negative fixture)
 description: Retry edge pointed at a condition node instead of the agent node it guards.
@@ -31,7 +31,7 @@ repos:
     defaultBase: main
 
 defaults:
-  backend: github-actions
+  backend: local
   runtime: claude-code
   authMode: subscription-oauth
 

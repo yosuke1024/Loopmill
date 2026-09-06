@@ -33,7 +33,7 @@ two files must agree; a test asserts it (invariant I-30).
 9. [Observed backends](#9-observed-backends)
 10. [Lease and interruption](#10-lease-and-interruption)
 11. [Budget checks](#11-budget-checks)
-12. [Exit codes and the job summary](#12-exit-codes-and-the-job-summary)
+12. [Exit codes and the run report](#12-exit-codes-and-the-run-report)
 13. [Worked traces](#13-worked-traces)
 14. [Invariants](#14-invariants)
 15. [Index of decisions not in the sheet](#15-index-of-decisions-not-in-the-sheet)
@@ -108,9 +108,13 @@ Nesting rules, all normative:
 ### 1.4 Where the machines run
 
 Every transition is computed by the pure function `transition()` inside one `loopmill step`
-invocation. No process is resident between events. The sweep (`loopmill sweep`, also run at the head
-of `resume`, `status` and every scheduled control-plane job) synthesises the time-driven events
-(`lease-expired`, `node-timed-out`) that no backend will ever send; it does not itself hold state.
+invocation, run on the operator's host inside `loopmill run <loop>` — the non-resident driver that
+composes `step` in a loop over one process (`docs/design/mvp-design.md` §7). `loopmill step` survives
+as the single-transition primitive, used directly by tests and by `resume --due` / `loopmill ingest`
+when they apply one polled envelope. No process is resident between events. The sweep — run at the
+head of every entrypoint (`run`, `resume`, `status`, `runs`, `doctor`; section 10.2) rather than as a
+scheduled job of its own — synthesises the time-driven events (`lease-expired`, `node-timed-out`) that
+no backend will ever send; it does not itself hold state.
 
 ---
 
@@ -236,7 +240,7 @@ fields; the table lists what each type adds.
 | 7 | `node-timed-out` | `backend:<id>`, `control-plane` (sweep) | `cycle`, `nodeId`, `attempt`, `error{code: 'node_timeout'\|'observe_deadline'\|'human_timeout'}` | Run, Node, Attempt |
 | 8 | `node-observed` | `backend:observed` | `cycle`, `nodeId`, `attempt`, `matcher{kind: 'comment-block'\|'file-in-diff'\|'cloud-status', ref, outcome: 'found_valid'\|'found_invalid'}`, `artifactRefs[]` (≥ 1); `result` when `found_valid` | Run, Node, Attempt |
 | 9 | `human-requested` | `control-plane` | `cycle`, `nodeId`, `attempt` (0, D-13), `human{mode, subjectDigest, deadline}` | Run, Node |
-| 10 | `human-decided` | `human` (via the `ingest` workflow) | `cycle`, `nodeId`, `attempt` (0), `human{decision: 'approve'\|'reject'\|'cancel', subjectDigest, decidedBy}` | Run, Node |
+| 10 | `human-decided` | `human` (via polling with `gh`, or `loopmill approve`/`reject` on the host) | `cycle`, `nodeId`, `attempt` (0), `human{decision: 'approve'\|'reject'\|'cancel', subjectDigest, decidedBy}` | Run, Node |
 | 11 | `quota-parked` | `control-plane` | `cycle`, `nodeId`, `attempt`, `quotaResetsAt`, `reason` | Run |
 | 12 | `retry-edge-taken` | `control-plane` | `cycle` (the cycle entered), `retryEdge{edgeId, fromNodeId, toNodeId, fromCycle, toCycle, maxIterations, traversals, budgetConsumed}` | Run |
 | 13 | `run-finished` | `control-plane` | `outcome` (section 2.2), `artifactRefs[]` | Run |
@@ -261,16 +265,17 @@ consequences worth stating:
 - A backend can never emit `node-dispatched`, `retry-edge-taken`, `run-finished`, `quota-parked` or
   `ignored-stale`. Only the control plane mints control-flow facts. This is what makes
   duplicate-dispatch detection and the stale-attempt rule sound (section 5.5).
-- A `human` producer can emit only `human-decided` and `resumed`. Human intent reaches the machine
-  through the `ingest` workflow, which converts a GitHub review / label / environment approval into a
-  signed envelope; free text is never parsed as control flow (decision sheet §7).
+- A `human` producer can emit only `human-decided` and `resumed`. Human intent reaches the machine by
+  polling — `resume --due` or `loopmill ingest` converts a GitHub review or label into an envelope with
+  the operator's own `gh` login — or directly, when `loopmill approve`/`reject` writes it on the host;
+  free text is never parsed as control flow (decision sheet §7).
 
 ### 3.3 Inbound versus emitted
 
 **Inbound** (may arrive from outside one `step`): `run-requested`, `node-started`, `node-completed`,
 `node-failed`, `node-timed-out`, `node-observed`, `human-decided`, `resumed`, `lease-expired`.
 
-**Emitted** (produced by `transition()` inside a step and persisted in the same commit): `run-started`,
+**Emitted** (produced by `transition()` inside a step and persisted in the same transaction): `run-started`,
 `node-dispatched`, `human-requested`, `quota-parked`, `retry-edge-taken`, `run-finished`,
 `ignored-stale`, `dispatch-failed`.
 
@@ -309,7 +314,7 @@ Notation used in all three tables:
 - `*` — any state of that machine.
 - **Guard** — a boolean over `(snapshot, event, loop, ctx.now, policy)` only. Guards never read a wall
   clock directly and never read `event.occurredAt` (invariant I-11).
-- **Emits** — envelopes appended in the same commit, in the listed order.
+- **Emits** — envelopes appended in the same transaction, in the listed order.
 - **Side effects** — actions returned to the impure shell: `dispatch(backend, node, attempt)`,
   `request-approval(mode, subject)`, `observe(matcher, deadline)`, `wait(until)`, `finish(outcome)`.
   `transition()` performs none of them; it only describes them.
@@ -597,8 +602,8 @@ type Action =
 ```
 
 `transition()` returns a *description* of the side effects. Performing them — calling the dispatcher,
-posting the comment, writing the commit — belongs to the impure shell of `loopmill step` (decision
-sheet §6, steps 5–6).
+posting the comment, persisting the transaction — belongs to the impure shell of `loopmill step`
+(decision sheet §6, steps 5–6).
 
 ### 5.2 Properties
 
@@ -609,7 +614,7 @@ sheet §6, steps 5–6).
 **P-2 — Deterministic.** Given identical `(snapshot, event, ctx)` the result is byte-identical,
 including the key order of every emitted envelope and of the new snapshot. Canonical JSON
 (recursively key-sorted, 2-space indent, trailing newline) is the serialisation for both — the same
-rule the state store uses for its commits (decision sheet §8).
+rule the store uses for its transactions (decision sheet §8).
 
 Deterministic identifiers: emitted envelopes must carry ULIDs (decision sheet §7) yet may not consume
 randomness. **Decision (not in sheet) D-16:** an emitted envelope's `eventId` is a *deterministic ULID*
@@ -641,13 +646,14 @@ re-emit `run-started` for a stalled `PENDING` run (R-52 / D-22) knowing a second
 **P-4 — Idempotent under duplicate `eventId`.** If `event.eventId ∈ snapshot.appliedEventIds ∪
 snapshot.ignoredEventIds ∪ snapshot.emittedEventIds`, the result is `duplicate`: the snapshot is
 returned unchanged, nothing is emitted, no action is described, and `loopmill step` exits 0 having
-written **no commit** (decision sheet §6: "exit 0 with `duplicate`"). This makes at-least-once delivery
-safe end to end.
+persisted **no transaction** (decision sheet §6: "exit 0 with `duplicate`"). This makes at-least-once
+delivery safe end to end.
 
 **P-5 — Semantically idempotent.** A *different* `eventId` carrying a `(runId, nodeId, cycle, attempt,
 eventType)` tuple that is already recorded as terminal resolves to
 `ignored-stale(reason: semantic_duplicate)`. This is the second idempotency key from decision sheet §6.
-It catches a backend that reports twice with fresh ids — for example a re-run GitHub job.
+It catches a backend that reports twice with fresh ids — for example a re-dispatched `local` attempt,
+or, under the reserved `github-actions` integration, a re-run GitHub Actions job.
 
 **P-6 — Append-only and monotone.** `snapshot.eventSeq` strictly increases. `appliedEventIds`,
 `ignoredEventIds` and the attempt ledger only grow. No field that records a past fact is ever
@@ -703,8 +709,10 @@ mid-attempt (section 11).
 
 ### 5.5 Ordering rules for stale attempts
 
-Events arrive over `repository_dispatch` / `workflow_dispatch` / comment ingestion with no global order
-and at-least-once delivery. The following rules make ordering irrelevant to correctness.
+Events arrive with no global order and at-least-once delivery — in process from the `local`/`fake`
+dispatcher, over `stdin`/`--event-file`, from a polled GitHub comment or label, or, under the reserved
+`github-actions` integration, over `repository_dispatch`/`workflow_dispatch`. The following rules make
+ordering irrelevant to correctness.
 
 **O-1 — The control plane is the only source of order.** Only `control-plane` may mint
 `node-dispatched`, and `snapshot.current` is written from it. Therefore the expected
@@ -713,8 +721,9 @@ reason to move forward. This is the mechanism decision sheet §6 step 2 requires
 
 **O-2 — Producer clocks are never used for decisions.** `event.occurredAt` is a producer clock. It is
 persisted, displayed, and used as the time component of derived ULIDs, and it participates in **no**
-guard, comparison or ordering rule. All time-based guards read `ctx.now`, which the control-plane job
-supplies. Clock skew on a runner therefore cannot change a single transition (invariant I-11).
+guard, comparison or ordering rule. All time-based guards read `ctx.now`, which the running `loopmill`
+process supplies from its own clock. Clock skew on the host therefore cannot change a single transition
+(invariant I-11).
 
 **O-3 — The stale test, in order.** For a per-node event, with `cur = snapshot.current`:
 
@@ -728,7 +737,8 @@ supplies. Clock skew on a runner therefore cannot change a single transition (in
 **O-4 — Ahead is as wrong as behind.** `future_cycle` and `future_attempt` are `ignored-stale`, not
 errors: a backend can never legitimately run ahead of the control plane, because it only ever runs what
 it was dispatched. Treating them as `invalid` would turn a harmless race (a replayed dispatch, a
-mis-addressed comment) into a red job.
+mis-addressed comment) into a spurious failure — a red job under the reserved `github-actions` backend,
+a nonzero exit under `local`.
 
 **O-5 — Two live attempts are allowed to exist; only one is authoritative.** After a `lease-expired`
 re-dispatch (section 10.4), attempt *n* may still be running somewhere. Its eventual report is
@@ -852,8 +862,9 @@ observation, and analytics must be able to separate "the loop ran out of road" f
 On `MAX_ITERATIONS_EXCEEDED` — and identically on `FAILED`, `EXPIRED`, `BUDGET_EXCEEDED`, `CANCELLED`
 and `INTERRUPTED`-then-abandoned — the engine **records and labels, and never destroys**:
 
-1. Every `artifactRef` accumulated during the Run (working branch, commits, issues, PRs, comments,
-   Actions artifacts) is copied into `run-finished.artifactRefs`.
+1. Every `artifactRef` accumulated during the Run (working branch, commits, issues, PRs, comments, and
+   — reserved, for the `github-actions` backend — uploaded Actions artifacts) is copied into
+   `run-finished.artifactRefs`.
 2. Issues and PRs referenced by the Run are labelled with the outcome:
    `loopmill:max-iterations`, `loopmill:failed`, `loopmill:expired`, `loopmill:budget-exceeded`,
    `loopmill:cancelled`. A comment is posted linking the Run and its summary.
@@ -992,7 +1003,7 @@ is `FAILED`. Concretely `FAILED` swallows: a non-zero exit with no recognised me
 missing or malformed result; `error_max_turns`, `error_max_budget_usd`,
 `error_max_structured_output_retries`; a structured output that violates its schema; `SIGTERM`/exit 143
 with no recorded result (measured on 2.1.263: nothing on stdout at all `[V]`); an unknown signal. **Ambiguity is never a wait** — a run parked forever behind
-a misclassified ordinary failure is worse than a red job.
+a misclassified ordinary failure is worse than a loud, visible failure.
 
 ### 7.3 The quota patterns
 
@@ -1060,8 +1071,8 @@ them. `resumeDueAt = quotaResetsAt + policy.quotaJitterSeconds` (default 60 s, d
 
 **Entry** (R-23, N-13): the Attempt goes `FAILED` with `classification: QUOTA`; the Node Execution goes
 back to `PENDING`; the Run goes `WAITING_FOR_QUOTA`; `quota-parked` is emitted; the **lease is
-released** (`snapshot.lease = null`) so the sweep does not mistake a park for a dead job; the
-`maxRuntime` clock pauses (D-04).
+released** (`snapshot.lease = null`, and the `locks` row's `leaseUntil` with it) so the sweep does not
+mistake a park for a process that died; the `maxRuntime` clock pauses (D-04).
 
 **Decision (not in sheet) D-07 — parks do not consume `maxAttempts`.** A quota park is not an
 infrastructure failure of the attempt, and `maxAttempts` exists for `LOST`/transient retries
@@ -1072,7 +1083,7 @@ is not *charged*: `chargedAttempts` counts only `FAILED`, `TIMEOUT` and `LOST` c
 `FAILED(quota_parks_exhausted)` (R-25). Without it, a genuinely exhausted weekly limit could park,
 resume, park again, forever.
 
-**Exit** (R-40, R-41): `loopmill resume --due` scans the state branch for Runs in `WAITING_FOR_QUOTA`
+**Exit** (R-40, R-41): `loopmill resume --due` scans the store for Runs in `WAITING_FOR_QUOTA`
 whose `resumeDueAt` has passed and emits `resumed{kind: 'due'}` for each. The guard re-checks
 `ctx.now >= quota.resumeDueAt`; a premature delivery is `ignored-stale(not_due)` (R-42) rather than an
 error, because `resume --due` may run on a machine whose clock disagrees with the one that parked.
@@ -1087,16 +1098,18 @@ waits are excluded — see D-04 — but the token budget is still re-checked).
 ### 8.1 The two events
 
 A `human` node produces `human-requested` (control-plane) and waits for `human-decided` (producer
-`human`, minted by the `ingest` workflow from a GitHub environment approval, a PR review, or a label).
+`human`), minted either directly by `loopmill approve`/`reject` on the host, or by polling a PR review
+or a label with the operator's own `gh` login (`resume --due` or `loopmill ingest`, `envelope.md` §8).
 The node is **not dispatched to a backend** and creates no Attempt in the ordinary sense: it is
 recorded with `attempt: 0` like other control-plane-local nodes (D-13). The three `mode` values map to
-the mechanisms of decision sheet §9:
+the mechanisms of ADR-002 D7 (v0.5's decision sheet §9 named a fourth, `environment-reviewers`, which
+no longer exists — there is no job for GitHub to hold):
 
 | `mode` | Mechanism | How `human-decided` is produced |
 |---|---|---|
-| `environment-reviewers` | a job pinned to the `loopmill-agent-external` GitHub Environment with required reviewers; the job waits, nothing is resident | the gated job, once released, dispatches `human-decided` |
-| `pull-request-review` | the PR review on the working branch | the `ingest` workflow converts `pull_request_review` into an envelope |
-| `label` | removing the `loopmill:hold` label approves, adding `loopmill:reject` rejects, or an explicit `workflow_dispatch` releases the gate | the `ingest` workflow converts the label event |
+| `cli` | `loopmill approve <runId>` / `loopmill reject <runId> [--reason]` run on the host | the command writes `human-decided` directly and continues the Run in the same process |
+| `pull-request-review` | an approving review on the PR the Run produced | `resume --due` (or `loopmill ingest`) polls `pull_request_review` with `gh` and converts it into an envelope |
+| `label` | adding `loopmill:approve` or `loopmill:reject` to the target node's Issue or PR | `resume --due` polls the Issue/PR with `gh` and converts the label event |
 
 In all three the Run is `WAITING_HUMAN`, **no lease is held**, and the `maxRuntime` clock is paused
 (decision sheet §10: `maxRuntime` excludes human waits).
@@ -1180,6 +1193,11 @@ event catalogue: while a node is in flight, cancelling the backend job produces
 
 ## 9. Observed backends
 
+**Reserved, unreachable in the MVP.** No MVP backend declares `result: observed`; `observed` was
+removed after SPIKE-2 (NO-GO — a vendor task's result never reaches GitHub as a change without a human
+click, ADR-002 D4). Every state and transition named in this section is kept as the mechanism a future
+artifact-matcher backend would use.
+
 ### 9.1 Dispatch
 
 **Decision (not in sheet) D-21.** For a node whose backend declares `result: observed`, the same
@@ -1237,8 +1255,8 @@ Observed backends declare `retryable: true` ("a new task each time") and `cancel
 
 ### 10.1 Lease fields
 
-The durable lease is the **attempt lease**. It lives on `snapshot.lease` and mirrors the current
-Attempt:
+The durable lease is the **attempt lease**, carried on `node-dispatched` exactly as before and folded
+into `snapshot.lease`, which mirrors the current Attempt:
 
 ```
 lease = {
@@ -1247,9 +1265,17 @@ lease = {
   acquiredAt:  <dispatchedAt>,
   heartbeatAt: <last node-started or backend progress event>,
   expiresAt:   <deadlineAt>,
-  runHandle?:  <GitHub Actions run id, or a local pid+bootId>
+  runHandle?:  <a local pid + host name; a GitHub Actions run id under the reserved backend>
 }
 ```
+
+On the `local` backend this same lease is what the host's `locks` table row materialises
+(`docs/design/mvp-design.md` §9.1): one row per active Run, holding `ownerPid`, `host`, `heartbeatAt`
+and `leaseUntil`. The running `loopmill run` process refreshes `heartbeatAt` every
+`policy.heartbeatSeconds` (default 30 s) and sets `leaseUntil` from the in-flight node's `deadlineAt`
+(D-24 below). This one row does double duty: it is the attempt lease the sweep watches, and it is also
+the Run-level lock a second `run` of the same loop finds live and is refused against
+(`SKIPPED(skipReason: overlapping_run)`, ADR-002 D6).
 
 **Decision (not in sheet) D-24 — the deadline.**
 
@@ -1267,8 +1293,10 @@ terminal state. A `lease-expired` delivered while `lease == null` is
 
 ### 10.2 The sweep
 
-`loopmill sweep` — also run at the head of `resume`, `status` and every scheduled control-plane job —
-scans the state branch and emits, for each Run:
+The sweep is not a scheduled job of its own: it runs at the start of **every** entrypoint — `run`,
+`resume`, `status`, `runs` and `doctor` (`docs/design/mvp-design.md` §7.5, ADR-002 D6) — instead of on
+its own cadence. It scans the store (the `events`/`snapshots` tables and the `locks` row) and emits, for
+each Run:
 
 - `lease-expired{reason: 'attempt_deadline'}` when `lease != null` and `ctx.now >= lease.expiresAt`;
 - `node-timed-out{observe_deadline}` when `observe != null` and `ctx.now >= observe.deadlineAt`;
@@ -1280,13 +1308,15 @@ scans the state branch and emits, for each Run:
 - `run-started` for any Run stuck in `PENDING` beyond `policy.pendingGraceSeconds` (D-22); the
   deterministic eventId makes a redundant emission a `duplicate`.
 
-**Decision (not in sheet) D-12 — lease extension over declaring loss.** Before emitting
-`lease-expired` for a `github-actions` attempt, the sweep may consult the Actions API using
-`lease.runHandle`. If the job is still `queued` or `in_progress`, the sweep emits nothing and the
-control plane extends the lease by `policy.leaseExtensionSeconds` (default 300) on the next
-`node-started`/progress event. A job that is genuinely slow must not be declared lost and
+**Decision (not in sheet) D-12 — lease extension over declaring loss, for the reserved `github-actions`
+backend.** Before emitting `lease-expired` for a `github-actions` attempt, the sweep may consult the
+Actions API using `lease.runHandle`. If the job is still `queued` or `in_progress`, the sweep emits
+nothing and the control plane extends the lease by `policy.leaseExtensionSeconds` (default 300) on the
+next `node-started`/progress event. A job that is genuinely slow must not be declared lost and
 double-dispatched; a job that is gone must not be waited on forever. The API consultation happens in
-the impure shell — `transition()` receives only the resulting event or non-event.
+the impure shell — `transition()` receives only the resulting event or non-event. The `local` backend
+has no equivalent external check to make: the heartbeat the running process itself writes to the
+`locks` row (10.1) *is* the liveness signal, so there is nothing further to consult.
 
 ### 10.3 `INTERRUPTED`
 
@@ -1312,7 +1342,9 @@ else:                                                              Node FAILED(a
 Recovery is explicit: `loopmill resume <runId> --decision retry|skip|fail` emits
 `resumed{kind: 'interrupted', decision}` (R-48, R-49, R-50). `skip` records the node `SKIPPED` and
 moves to `next`; downstream template references to a skipped node are a validation error, never an
-empty string (decision sheet §3).
+empty string (decision sheet §3). On the `local` backend, `--decision retry` also resets the Run's
+worktree to the cycle's last commit before the new attempt starts, so the re-dispatched attempt begins
+from the same tree the lost one did (`docs/design/mvp-design.md` §7.4).
 
 ### 10.4 Re-dispatch and duplicate-dispatch tolerance
 
@@ -1320,16 +1352,20 @@ The engine writes `node-dispatched` **before** calling the dispatcher (decision 
 window between the two is recovered by the lease, and the cost of that recovery is that two backend
 jobs may exist for one Node Execution. The design tolerates it at three layers:
 
-1. **State layer.** Only the newest attempt is `snapshot.current`. The older job's report is
+1. **State layer.** Only the newest attempt is `snapshot.current`. The older attempt's report is
    `ignored-stale(stale_attempt)` (O-5). Control flow is unaffected; its usage is still banked (D-20).
-2. **Backend layer.** `github-actions` uses a per-run `concurrency` group; `observed` embeds the
-   `dedupeKey` in the trigger text so the vendor drops the twin; `local` checks a pid file.
+2. **Backend layer.** `local` resets the Run's worktree to the cycle's last commit before every
+   attempt, so a duplicate re-dispatch starts from the same tree and cannot compound a half-finished
+   change (`docs/design/mvp-design.md` §7.4); `observed` (reserved) embeds the `dedupeKey` in the
+   trigger text so the vendor drops the twin; `github-actions` (reserved) uses a per-run `concurrency`
+   group.
 3. **Node layer.** Nodes with `effects: external` derive `onInterrupted: ask`, so the ambiguous
    case never auto-duplicates a side effect in the first place.
 
 `dispatch-failed` is the other half: written when the dispatcher call itself fails. It charges an
 attempt and retries (R-29) or fails the node (R-30), and `loopmill step` exits **4** so the operator
-can distinguish "the loop broke" from "GitHub refused" (decision sheet §6).
+can distinguish "the loop broke" from "the backend refused the dispatch" — e.g. the runtime CLI could
+not be spawned (decision sheet §6).
 
 ---
 
@@ -1345,7 +1381,7 @@ From decision sheet §10 (loop file `budget:`):
 | `maxIterations` | per Retry Edge | required | `MAX_ITERATIONS_EXCEEDED` |
 | `maxRuntime` | per Run, wall clock **excluding waits** | 4 h | `EXPIRED(max_runtime)` |
 | `maxMeasuredTokens` | per Run, measured tokens only | — | `BUDGET_EXCEEDED(maxMeasuredTokens)` |
-| `maxUnmeasuredExecutions` | per Run | `observed agent nodes × (1 + maxIterations)` (`loop-file.md` §7.2) | `BUDGET_EXCEEDED(maxUnmeasuredExecutions)` |
+| `maxUnmeasuredExecutions` | per Run | `0` — no MVP backend declares `usage: none`; kept for a future backend (`usage-normalization.md` §6.1, `mvp-design.md` §14.4) | `BUDGET_EXCEEDED(maxUnmeasuredExecutions)` |
 | `maxStepsPerRun` | per Run | 200 | `BUDGET_EXCEEDED(maxStepsPerRun)` (D-28) |
 | `maxRunsPerWindow` | per Loop | 1 per 5 h | `SKIPPED(runs_per_window)` at request time |
 | `minInterval` | per Loop | 1 h | `SKIPPED(min_interval)` at request time |
@@ -1410,7 +1446,7 @@ be produced for one breach.
 
 ---
 
-## 12. Exit codes and the job summary
+## 12. Exit codes and the run report
 
 ### 12.1 `loopmill step` (binding — decision sheet §6)
 
@@ -1419,13 +1455,13 @@ be produced for one breach.
 | `0` | Handled: `applied`, `duplicate`, or `ignored-stale`. Details in the stdout JSON (`{classification, reason, runId, status, outcome?}`). |
 | `1` | Unexpected error. |
 | `2` | Invalid envelope or invalid loop file. |
-| `3` | State conflict not resolved after the CAS retries (5, with jitter). Nothing was persisted; redelivering the identical envelope converges. |
+| `3` | State conflict: the Run's lock (the `locks` row) is held by another live process. Nothing was persisted; retrying after that process releases it, or redelivering the identical envelope, converges. |
 | `4` | Backend dispatch failed. The state already records `dispatch-failed`. |
 
 **Terminal Run outcomes are not exit codes of `step`.** A step that finishes a Run as `FAILED` exits
-`0`: the control plane did its job. Outcomes are events, surfaced by `loopmill status` and the job
-summary. This separation is what lets a red GitHub job mean "the control plane is broken" and nothing
-else.
+`0`: the engine did its job. Outcomes are events, surfaced by `loopmill status` and the run report.
+This separation is what lets a nonzero exit — a red job under the reserved `github-actions` backend —
+mean "the engine is broken" and nothing else.
 
 ### 12.2 `loopmill run` (local) — Decision (not in sheet) D-17
 
@@ -1445,10 +1481,10 @@ terminal state or a wait. The sheet is silent on its exit codes; they are define
 | `12` | Run `BUDGET_EXCEEDED` |
 | `13` | Run `EXPIRED` |
 | `14` | Run `CANCELLED` |
-| `15` | Run `SKIPPED` |
+| `15` | Run `SKIPPED` (dedupe, rate limit, or `skipReason: overlapping_run` — a second `run` of the same loop while its `locks` row is live) |
 | `20` | Process exited with the Run in `WAITING_HUMAN` |
 | `21` | … in `WAITING_FOR_QUOTA` |
-| `22` | … in `WAITING_OBSERVED` |
+| `22` | … in `WAITING_OBSERVED` — **reserved, unreachable in the MVP** |
 | `23` | … in `INTERRUPTED` |
 
 Reading rule: `1..4` means the **engine** misbehaved; `>= 10` means the engine worked and the **Run**
@@ -1456,12 +1492,18 @@ has a result; `20..23` means the Run is unfinished and resumable. `--exit-zero-o
 every `>= 10` code to `0` for CI wrappers that should not go red on a
 `MAX_ITERATIONS_EXCEEDED`.
 
-### 12.3 Terminal Run state → job summary
+### 12.3 Terminal Run state → the run report
 
-Every terminal Run emits one `run-finished` whose `summary` block is rendered identically into the
-GitHub Actions job summary, `loopmill status --json`, and the read-only UI.
+Every terminal Run emits one `run-finished` whose `summary` block is rendered identically into the run
+report (`.loopmill/reports/<runId>.md`, `docs/design/mvp-design.md` §17.2), `loopmill status --json`,
+and the read-only UI. The Run's exit code (section 12.2) is what a scheduler's own log (`launchd`,
+`systemd`, `cron`) shows for a scheduled fire.
 
-| Run terminal state | Headline | Job conclusion |
+Every summary shares one small taxonomy for how a wrapper script or a scheduler's log should read the
+outcome — success / failure / neutral / cancelled. This is, not coincidentally, GitHub Actions' own
+job-conclusion vocabulary, which is what the reserved `github-actions` backend maps onto directly.
+
+| Run terminal state | Headline | Exit class |
 |---|---|---|
 | `SUCCEEDED` (`end:success`) | `Succeeded — success` | success |
 | `SUCCEEDED` (`end:no_change`) | `Succeeded — no change` | success |
@@ -1473,8 +1515,8 @@ GitHub Actions job summary, `loopmill status --json`, and the read-only UI.
 | `SKIPPED` | `Skipped — <skipReason>` | **neutral** |
 
 `MAX_ITERATIONS_EXCEEDED`, `BUDGET_EXCEEDED`, `EXPIRED` and `SKIPPED` are **neutral, not failure**: the
-loop behaved exactly as configured. Only `FAILED` is red. This is the visible payoff of keeping the
-terminal vocabulary wide.
+loop behaved exactly as configured. Only `FAILED` reads as a failure. This is the visible payoff of
+keeping the terminal vocabulary wide.
 
 Every summary carries the same body:
 
@@ -1506,19 +1548,24 @@ review-content (agent, codex on observed)              cycle 0
 needs-issue    (condition on review-content.captured)  cycle 0
 end-no-change  (end, label: no_change)                 cycle 0
 create-issue   (command, effects: external)            cycle 0
-implement      (agent, claude-code on github-actions)  cycle 1..N   <- retry edge target
+implement      (agent, claude-code on local)           cycle 1..N   <- retry edge target
 run-tests      (command, npm test)                     cycle 1..N
 review-changes (agent, codex on observed)              cycle 1..N
 review-verdict (condition on review-changes.captured.approved && run-tests.exitCode)  cycle 1..N
-approve-pr     (human, mode: environment-reviewers)    cycle 0
+approve-pr     (human, mode: label)                    cycle 0
 create-pr      (command, effects: external)            cycle 0
 end-shipped    (end, label: success)                   cycle 0
 
 retry edge  retry-implementation:  from review-verdict (else) to implement,  maxIterations: 3
 ```
 
-Both Codex nodes run on the `observed` backend, so their usage is `unavailable` and this loop's
-coverage can never reach 100% (usage-normalization §4).
+**Annotation.** Both Codex nodes run on the `observed` backend here, which the catalogue keeps as
+**reserved** and unreachable in the MVP (SPIKE-2 NO-GO, ADR-002 D4) — the v0.6 reference loop instead
+runs both Codex nodes on `local` with full usage and reaches coverage 9/9 in a full four-cycle run
+(`docs/design/mvp-design.md` §16.1). This shape is kept in the traces below because it is the one that
+exercises `WAITING_OBSERVED` and sub-100% coverage in one place; the mechanics illustrated — idempotency,
+retry edges, quota parks, coverage arithmetic — are backend-agnostic and apply unchanged to the MVP
+loop. Numbers and event sequences below are unchanged.
 
 ### 13.1 Happy path
 
@@ -1587,7 +1634,7 @@ artifactRefs: [ branch loopmill/daily-content-improvement/run_01K..., issue #42,
 
 Side effects on finish: issue #42 labelled `loopmill:max-iterations` and commented with the Run
 summary; the working branch is **kept**; no PR is opened, closed or merged; nothing is deleted
-(section 6.5). Job summary: `Loop budget exhausted — retry-implementation, 3/3`, conclusion **neutral**.
+(section 6.5). Run report: `Loop budget exhausted — retry-implementation, 3/3`, exit class **neutral**.
 `loopmill step` exits `0`; `loopmill run` exits `11`.
 
 ### 13.4 Quota park and resume
@@ -1612,8 +1659,8 @@ Baseline: `current = {implement, 1, 1, DISPATCHED}`.
 
 | # | Delivery | Result | Persisted? | `step` exit |
 |---|---|---|---|---|
-| 1 | `node-completed(implement, 1, 1)` `eventId: E1` | `applied` — node `SUCCEEDED`, `run-tests` dispatched | yes, one commit | 0 |
-| 2 | the identical envelope `E1` again | `duplicate` — snapshot unchanged | **no commit** | 0 |
+| 1 | `node-completed(implement, 1, 1)` `eventId: E1` | `applied` — node `SUCCEEDED`, `run-tests` dispatched | yes, one transaction | 0 |
+| 2 | the identical envelope `E1` again | `duplicate` — snapshot unchanged | **no transaction** | 0 |
 | 3 | a fresh `eventId: E2`, same `(implement, 1, 1, node-completed)` | `ignored-stale(semantic_duplicate)` | yes (the `ignored-stale` event only) | 0 |
 | 4 | `node-completed(implement, 1, 1)` `E3` arriving after the sweep dispatched attempt 2 | `ignored-stale(stale_attempt)`; its `usage` is appended to attempt `1:implement:1`'s ledger (D-20); no control field changes | yes | 0 |
 | 5 | `node-started(test, 1, 1)` before `run-tests` was dispatched | `ignored-stale(no_attempt_in_flight)` | yes | 0 |
@@ -1625,15 +1672,15 @@ Note on 2 versus 3: an exact `eventId` redelivery writes nothing at all, so at-l
 cost nothing; a *semantically* duplicate report with a new id is recorded, because it means a backend
 reported twice and an operator should be able to see that.
 
-### 13.6 Interrupted job
+### 13.6 Interrupted `run` process
 
 | # | Event | Snapshot deltas |
 |---|---|---|
-| 1 | `node-dispatched` `implement` c1 a1 written; the control-plane job is killed **before** the `workflow_dispatch` call | committed state says `DISPATCHED`; nothing is actually running |
+| 1 | `node-dispatched` `implement` c1 a1 written; the `run` process is killed **before** it can spawn the node executor subprocess | committed state says `DISPATCHED`; nothing is actually running |
 | 2 | (time passes; nothing arrives) | `lease.expiresAt` reached |
-| 3 | sweep: Actions API says no run for `lease.runHandle` (D-12) → `lease-expired {reason: attempt_deadline, implement, 1, 1}` | attempt a1 → `LOST`, `usage.provenance: unavailable`, `complete: false`; `chargedAttempts["1:implement"] = 1` |
-| 4 | `implement.effects = none`, `onInterrupted = retry`, `1 < maxAttempts 2` → R-31 | `node-dispatched implement 1 2`; `status` stays `RUNNING` |
-| 5 | (the *original* dispatch had in fact landed and its job now reports) `node-completed(implement, 1, 1)` | `ignored-stale(stale_attempt)`; usage banked on a1; routing untouched (O-5) |
+| 3 | sweep (at the head of the next entrypoint): the `locks` row's heartbeat has gone stale and `leaseUntil` has passed — there is no external API to consult for `local` (D-12) — → `lease-expired {reason: attempt_deadline, implement, 1, 1}` | attempt a1 → `LOST`, `usage.provenance: unavailable`, `complete: false`; `chargedAttempts["1:implement"] = 1` |
+| 4 | `implement.effects = none`, `onInterrupted = retry`, `1 < maxAttempts 2` → R-31 | `node-dispatched implement 1 2` (worktree reset to cycle 1's last commit, `docs/design/mvp-design.md` §7.4); `status` stays `RUNNING` |
+| 5 | (the *original* subprocess had in fact started and its completion now reports) `node-completed(implement, 1, 1)` | `ignored-stale(stale_attempt)`; usage banked on a1; routing untouched (O-5) |
 | 6 | `node-completed(implement, 1, 2)` SUCCESS | applied; run continues |
 
 The external-effects variant, at `create-pr` (`effects: external`, `onInterrupted: ask`):
@@ -1691,7 +1738,7 @@ traces in section 13 are the primary vehicle.
 - **I-13** `transition()` is total: for every (Run state × eventType), (Node state × eventType) and
   (Attempt state × eventType) pair, the function returns one of the four `TransitionResult` kinds and
   never throws.
-- **I-14** Replaying an identical `eventId` yields `kind: 'duplicate'`, writes no commit, and leaves the
+- **I-14** Replaying an identical `eventId` yields `kind: 'duplicate'`, persists no transaction, and leaves the
   snapshot byte-identical.
 - **I-15** Re-running a whole step after a lost CAS push produces byte-identical emitted `eventId`s, so
   the retry collapses to `duplicate` rather than double-dispatching (D-16).
@@ -1775,3 +1822,5 @@ traces in section 13 are the primary vehicle.
 | D-26 | The `loopmill:*` outcome label vocabulary; labelling failure never changes an Outcome | 6.5 |
 | D-27 | A Run cancelled while `WAITING_OBSERVED` records the abandoned vendor task and does not chase it | 9.3 |
 | D-28 | `maxStepsPerRun` breach → `BUDGET_EXCEEDED(maxStepsPerRun)` | 11.1 |
+| D-29 | The sweep runs at the head of every entrypoint (`run`, `resume`, `status`, `runs`, `doctor`) instead of as a scheduled job of its own | 10.2, ADR-002 D6 |
+| D-30 | The attempt lease materialises as the host's `locks` row (owner pid, host, `heartbeatAt`, `leaseUntil`), which doubles as the Run-level overlap lock (`SKIPPED(skipReason: overlapping_run)`) | 10.1, ADR-002 D3/D6 |

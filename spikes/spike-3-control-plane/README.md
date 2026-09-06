@@ -6,6 +6,11 @@ A ~1000-line prototype of Loopmill's control plane, built to answer one question
 > exactly one state transition, and exiting - while keeping the run's state correct
 > under duplicate, out-of-order and concurrent event delivery?
 
+Under `docs/adr/ADR-002-local-self-hosted-execution.md` (v0.6), the MVP control plane runs on the
+operator's own host with a SQLite journal instead of the git-branch store measured here. This prototype
+and its hosted measurements are kept as the reference for the reserved `github-actions` integration, and
+for the concurrency properties the SQLite store must preserve.
+
 The answer this spike produces is **yes, provided state is event-sourced and every
 write is a compare-and-swap**. What that costs and where it breaks is measured below.
 

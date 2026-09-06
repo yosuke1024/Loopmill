@@ -65,26 +65,21 @@ function interop (mod) {
 // echoes it; here it is transcribed so the validator can reason about it.
 
 const BACKENDS = {
-  'github-actions': { retryable: true, structuredOutput: true, usage: 'full', observed: false },
-  observed: { retryable: true, structuredOutput: false, usage: 'none', observed: true },
-  local: { retryable: true, structuredOutput: true, usage: 'full', observed: false },
-  fake: { retryable: true, structuredOutput: true, usage: 'full', observed: false },
+  // Reserved: kept only so retry-edge/dominance checks that resolve to it still
+  // have a capability record. Naming it as a node or defaults.backend fails
+  // validation on its own (LM-VAL-028), regardless of runtime or auth.
+  'github-actions': { retryable: true, structuredOutput: true, usage: 'full' },
+  local: { retryable: true, structuredOutput: true, usage: 'full' },
+  fake: { retryable: true, structuredOutput: true, usage: 'full' },
   // Pseudo-backend for condition / human / end nodes: they are decided by the
   // control plane and never dispatched, so they are not retryable.
-  'control-plane': { retryable: false, structuredOutput: false, usage: 'none', observed: false },
+  'control-plane': { retryable: false, structuredOutput: false, usage: 'none' },
 }
 
 const AUTH_MATRIX = {
-  'github-actions': {
-    'claude-code': ['subscription-oauth', 'api-key'],
-    codex: ['subscription-login', 'api-key'],
-  },
   local: {
     'claude-code': ['subscription-oauth', 'api-key'],
     codex: ['subscription-login', 'api-key'],
-  },
-  observed: {
-    codex: ['subscription-login'],
   },
   fake: {
     'claude-code': ['subscription-oauth', 'subscription-login', 'api-key'],
@@ -105,7 +100,9 @@ class Findings {
 
 function backendOf (node, defaults) {
   if (CONTROL_PLANE_KINDS.has(node.kind)) return 'control-plane'
-  return node.backend ?? defaults.backend ?? null
+  // defaults.backend itself defaults to `local` (ADR-002 D4): unlike runtime and
+  // authMode, a node's backend always resolves to something.
+  return node.backend ?? defaults.backend ?? 'local'
 }
 
 function forwardTargets (node) {
@@ -196,6 +193,11 @@ function semanticRules (doc, file, f) {
   const defaults = doc.defaults ?? {}
   const edgeIds = new Set(edges.map((e) => e.id))
 
+  // LM-VAL-029 trigger.kind: event is reserved in this version.
+  if (doc.trigger?.kind === 'event') {
+    f.add('LM-VAL-029', 'trigger', 'trigger.kind "event" is reserved and not supported in this version')
+  }
+
   // LM-VAL-002 slug must match the file name.
   const base = path.basename(file)
   if (base !== `${doc.slug}.loop.yaml`) {
@@ -247,6 +249,10 @@ function semanticRules (doc, file, f) {
       const target = n.subject.slice('nodes.'.length)
       if (!nodes[target]) f.add('LM-VAL-006', `nodes.${id}.subject`, `subject node "${target}" does not exist`)
     }
+    if (n.kind === 'human' && n.target) {
+      const targetNode = n.target.slice('nodes.'.length)
+      if (!nodes[targetNode]) f.add('LM-VAL-006', `nodes.${id}.target`, `target node "${targetNode}" does not exist`)
+    }
   }
 
   // LM-VAL-005 entry node.
@@ -287,40 +293,39 @@ function semanticRules (doc, file, f) {
   for (const [id, n] of Object.entries(nodes)) {
     const backend = backendOf(n, defaults)
     const cap = BACKENDS[backend]
-    if (!CONTROL_PLANE_KINDS.has(n.kind) && !backend) {
-      f.add('LM-VAL-019', `nodes.${id}`, 'no backend: the node declares none and defaults.backend is unset')
-      continue
+
+    // LM-VAL-028 github-actions is reserved, regardless of runtime or auth.
+    if (!CONTROL_PLANE_KINDS.has(n.kind) && backend === 'github-actions') {
+      f.add('LM-VAL-028', `nodes.${id}`, 'backend github-actions is reserved and not supported in this version')
     }
+
     if (n.kind !== 'agent') continue
 
     // LM-VAL-018 structuredOutput needs the capability.
     if (n.structuredOutput && !cap.structuredOutput) {
       f.add('LM-VAL-018', `nodes.${id}`, `backend "${backend}" declares structuredOutput: false but the node sets structuredOutput`)
     }
-    // LM-VAL-020 artifact matcher exactly on observed backends.
-    if (cap.observed && !n.artifact) {
-      f.add('LM-VAL-020', `nodes.${id}`, `backend "${backend}" returns its result as an observed artifact; an artifact matcher is required`)
-    }
-    if (!cap.observed && n.artifact) {
-      f.add('LM-VAL-020', `nodes.${id}`, `backend "${backend}" returns its result directly; an artifact matcher is meaningless`)
-    }
     // LM-VAL-021 MVP session policy.
     if (n.sessionPolicy && n.sessionPolicy !== 'fresh') {
       f.add('LM-VAL-021', `nodes.${id}`, `sessionPolicy "${n.sessionPolicy}" is not supported in the MVP`)
     }
-    // LM-VAL-019 runtime x backend x auth.
-    const runtime = n.runtime ?? defaults.runtime
-    const auth = n.auth ?? defaults.authMode
-    if (!runtime) {
-      f.add('LM-VAL-019', `nodes.${id}`, 'no runtime: the node declares none and defaults.runtime is unset')
-    } else if (!auth) {
-      f.add('LM-VAL-019', `nodes.${id}`, 'no auth mode: the node declares none and defaults.authMode is unset')
-    } else {
-      const allowed = AUTH_MATRIX[backend]?.[runtime]
-      if (!allowed) {
-        f.add('LM-VAL-019', `nodes.${id}`, `runtime "${runtime}" is not available on backend "${backend}"`)
-      } else if (!allowed.includes(auth)) {
-        f.add('LM-VAL-019', `nodes.${id}`, `auth "${auth}" is not available for ${runtime} on ${backend} (allowed: ${allowed.join(', ')})`)
+    // LM-VAL-019 runtime x backend x auth. The reserved backend already has its
+    // own finding (LM-VAL-028) above; do not also report it as an unsupported
+    // combination here.
+    if (backend !== 'github-actions') {
+      const runtime = n.runtime ?? defaults.runtime
+      const auth = n.auth ?? defaults.authMode
+      if (!runtime) {
+        f.add('LM-VAL-019', `nodes.${id}`, 'no runtime: the node declares none and defaults.runtime is unset')
+      } else if (!auth) {
+        f.add('LM-VAL-019', `nodes.${id}`, 'no auth mode: the node declares none and defaults.authMode is unset')
+      } else {
+        const allowed = AUTH_MATRIX[backend]?.[runtime]
+        if (!allowed) {
+          f.add('LM-VAL-019', `nodes.${id}`, `runtime "${runtime}" is not available on backend "${backend}"`)
+        } else if (!allowed.includes(auth)) {
+          f.add('LM-VAL-019', `nodes.${id}`, `auth "${auth}" is not available for ${runtime} on ${backend} (allowed: ${allowed.join(', ')})`)
+        }
       }
     }
   }
@@ -342,15 +347,9 @@ function semanticRules (doc, file, f) {
         f.add('LM-VAL-013', `nodes.${id}.inputs.${local}`, `reference "${ref}" names an unknown node "${target}"`)
         continue
       }
-      const tBackend = backendOf(t, defaults)
-      const tCap = BACKENDS[tBackend] ?? BACKENDS['control-plane']
       if (accessor.startsWith('structured.')) {
         if (t.kind !== 'agent' || !t.structuredOutput) {
           f.add('LM-VAL-016', `nodes.${id}.inputs.${local}`, `"${target}" declares no structuredOutput, so structured.* is not available`)
-        }
-      } else if (accessor.startsWith('captured.')) {
-        if (t.kind !== 'agent' || !tCap.observed) {
-          f.add('LM-VAL-016', `nodes.${id}.inputs.${local}`, `captured.* is only available from an agent node on an observed backend ("${target}" is ${t.kind}/${tBackend})`)
         }
       } else if (accessor === 'stdout' || accessor === 'exitCode') {
         if (t.kind !== 'command') {

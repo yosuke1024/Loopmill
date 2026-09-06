@@ -198,7 +198,7 @@ The one difference that governs everything: **Anthropic's three input fields are
 OpenAI's cache counts are children of `input_tokens` you must not add up.** A single additive
 renderer applied to both inflates a cache-heavy Codex figure by roughly the cached share, twice over.
 
-### 2.1 `claude-code` (backends `github-actions`, `local`)
+### 2.1 `claude-code` (backend `local`; `github-actions` reserved)
 
 Usage is read from the **terminal `result` message only**, whether the invocation used
 `--output-format json` or `--output-format stream-json` (the stream ends with the same object).
@@ -316,7 +316,7 @@ SIGTERM, measured on the same runner and version: the process ends with exit **1
 exactly the shape `claude-killed.json` was hand-written to describe. SIGKILL is not measured and is
 assumed to be no better than SIGTERM. This is why `cancel` is SIGINT first, grace, then SIGKILL.
 
-### 2.2 `codex` (backends `github-actions`, `local`)
+### 2.2 `codex` (backend `local`; `github-actions` reserved)
 
 Usage is read from `turn.completed.usage` in the `codex exec --json` stream. Two corrections are
 applied, and both are why the provenance is **`derived`**, never `reported`:
@@ -416,10 +416,14 @@ than of work.
 of the Usage record. Quota classification is carried on the `node-failed` event, never on the usage
 record, and never fills a bucket.
 
-### 2.3 `observed` backends
+### 2.3 `observed` backends — reserved
 
-The backend capability record declares `usage: none`. The work happened on a vendor's own cloud and
-Loopmill only emitted a trigger and observed an artifact. Every attempt on an `observed` backend gets:
+**Reserved.** No MVP backend declares `usage: none`: `observed` was removed after SPIKE-2 (NO-GO — a
+vendor task's result never reaches GitHub as a change without a human click, ADR-002 D4). This section
+is retained for a future backend that might declare `usage: none`, and for the reserved
+`github-actions`/`observed` integration. If a backend's capability record does declare `usage: none`,
+the work happens on a vendor's own cloud and Loopmill only emits a trigger and observes an artifact.
+Every attempt on such a backend gets:
 
 ```
 provenance    = "unavailable"
@@ -430,8 +434,9 @@ source        = { runtimeVersion: null, eventKind: "node-observed" }
 ```
 
 This is structural, not a parse failure, and it is independent of the node's outcome: a `SUCCEEDED`
-node execution with `unavailable` usage is normal. Observed nodes are the reason
-`maxUnmeasuredExecutions` exists (section 6).
+node execution with `unavailable` usage is normal. A backend like this is why `maxUnmeasuredExecutions`
+stays in the budget model at all, even though its MVP default is `0` because no MVP backend can produce
+one (section 6).
 
 `Decision (not in sheet)`: a backend whose capability record says `usage: none` MUST NOT produce a
 non-`unavailable` usage record even if some future artifact happens to contain token numbers. Numbers
@@ -459,7 +464,7 @@ label that already carries the "never summed with measured values" rule.
 
 | Case | Detection | Record |
 |---|---|---|
-| Process killed (SIGTERM/SIGKILL, OOM, job cancel, runner eviction) | non-zero exit with a signal, no terminal event on stdout (claude-code SIGTERM: exit 143, empty stdout, measured on 2.1.263 `[V]`) | `unavailable`, `complete: false`, `eventKind: null`, note names the signal |
+| Process killed (SIGTERM/SIGKILL, OOM, an operator-cancelled run, a host reboot mid-attempt) | non-zero exit with a signal, no terminal event on stdout (claude-code SIGTERM: exit 143, empty stdout, measured on 2.1.263 `[V]`) | `unavailable`, `complete: false`, `eventKind: null`, note names the signal |
 | No terminal event (stream ends mid-turn; deadline hit; `codex` turn interrupted) | stream closed without `result` / `turn.completed` | `unavailable`, `complete: false`, `eventKind: null` |
 | `codex` `turn.failed` | `turn.failed` seen, no `turn.completed` on the thread | `unavailable`, `complete: false`, `eventKind: "turn.failed"` |
 | Malformed JSON (a truncated line, a non-JSON line, a schema-invalid usage object, a negative or non-integer field) | parse or validation failure | `unavailable`, `complete: false`, `eventKind` names the line kind, note carries the parse error |
@@ -545,7 +550,7 @@ Measured Tokens        1,171,000+
   record renders that figure with the marker (`claude-recorded-sigint.json`: `928+`, `0/1 (0%)`).
 - A scope at 100% coverage renders with no marker at all. The absence of `+` is a positive claim and
   MUST NOT be produced by rounding.
-- The `+` is not a footnote: it is never dropped in a compact view, a CSV export, a job summary or a
+- The `+` is not a footnote: it is never dropped in a compact view, a CSV export, the run report or a
   chart tooltip. Machine-readable exports carry `{ value, isLowerBound, coverage }` rather than a
   decorated string.
 
@@ -629,13 +634,13 @@ Every view that shows a token sum MUST show these three things together, in this
 Measured Tokens              1,171,000+
 Usage Coverage               7/8 (87%)
 Unmeasured Agent Executions
-  cycle 1  cloud-review   codex   observed backend (usage: none)
+  cycle 2  implement      claude-code   interrupted before completion (SIGINT; aborted_streaming)
 ```
 
 Rules:
 
 1. The three lines travel together. A token sum without its coverage line is a conformance failure —
-   in the terminal, in the read-only UI, in the job summary, in a CSV export, in a chart tooltip.
+   in the terminal, in the read-only UI, in the run report, in a CSV export, in a chart tooltip.
 2. `Measured Tokens` carries the trailing `+` per section 3.3 whenever coverage < 100%.
 3. `Unmeasured Agent Executions` lists **every** unmeasured execution with `(cycleIndex, nodeId,
    runtime, reason)`. The reason is taken verbatim from `provenanceNote`. The list is not truncated
@@ -743,8 +748,8 @@ Rules:
 - Always carries `weightingProfileId` and the literal weights used, next to the number.
 - **Recomputed on read** from the four stored buckets. Never persisted, never overwrites a raw value.
 - Never summed across different profiles.
-- Off by default, behind an explicit toggle, and absent from the default terminal output, the job
-  summary and every headline.
+- Off by default, behind an explicit toggle, and absent from the default terminal output, the run
+  report and every headline.
 - Subject to the same coverage rules as any other sum: a `+` marker and a coverage line below 100%.
 
 Its purpose is diagnostic: raw totals cannot distinguish "the agent re-read a large cached context
@@ -791,7 +796,7 @@ and every one has a default, except `maxIterations`, which the sheet makes requi
 | `maxIterations` | integer ≥ 1 | required | Retry Edge | before dispatching the Retry Edge target | traversals of that edge | Run `MAX_ITERATIONS_EXCEEDED` (never `FAILED`) |
 | `maxRuntime` | duration | `4h` | Run | before every dispatch, and by the sweep | Run wall clock **excluding human waits** (section 6.3) | Run `EXPIRED` |
 | `maxMeasuredTokens` | integer tokens | unset (no cap) | Run | before every dispatch | `totalTokens` of measured records only (section 6.2) | Run `BUDGET_EXCEEDED` |
-| `maxUnmeasuredExecutions` | integer ≥ 0 | computed (section 6.2) | Run | before every dispatch | agent Node Executions with `unavailable` or `estimated` provenance | Run `BUDGET_EXCEEDED(maxUnmeasuredExecutions)` |
+| `maxUnmeasuredExecutions` | integer ≥ 0 | `0` (section 6.2) | Run | before every dispatch | agent Node Executions with `unavailable` or `estimated` provenance | Run `BUDGET_EXCEEDED(maxUnmeasuredExecutions)` |
 | `maxRunsPerWindow` | integer ≥ 1 | `1` per rolling `5h` | Loop | before starting a Run | Run starts in the window (section 6.4) | Run `SKIPPED(runs_per_window)`, recorded before it starts |
 | `minInterval` | duration | `1h` | Loop | before starting a Run | time since the previous Run's start | Run `SKIPPED(min_interval)`, recorded before it starts |
 
@@ -818,24 +823,33 @@ budget, because Loopmill has no measurement to breach it with. Two consequences 
 normative:
 
 1. **Whenever the Run's coverage is below 100%, the token budget is marked `partially observable`** in
-   every report, every job summary, and in the `run-finished` event. The mark names the coverage and
+   every report, the run report, and in the `run-finished` event. The mark names the coverage and
    the count of unmeasured executions. A token budget under incomplete coverage is a floor on spend,
    not a ceiling.
 2. **`maxUnmeasuredExecutions` is the binding guard** under incomplete coverage. It is the only limit
    that can stop a Run whose spend Loopmill cannot see, and it is therefore not optional in practice.
 
-Default for `maxUnmeasuredExecutions` — the sheet says "number of observed nodes × maxIterations",
-which undercounts by one whole pass, because a Retry Edge body executes once *before* any traversal.
-The default is the one `docs/spec/loop-file.md` §7.2 defines, which owns the field:
+**Default for `maxUnmeasuredExecutions` is `0`.** No MVP backend declares `usage: none` — `observed`
+was removed (SPIKE-2 NO-GO, ADR-002 D4) and `local`/`fake` both declare full usage — so there is nothing
+for a nonzero default to buffer against, and a `0` default means the guard trips on the first unmeasured
+execution rather than tolerating any. This is not a vacuous limit even though no MVP backend can
+*declare* `usage: none`: **an interrupted attempt is still an unmeasured execution.** A `LOST` attempt
+(sweep-declared, section 2.5) and a claude-code turn that ends `aborted_streaming` under SIGINT
+(`reported`, `complete: false`, section 2.1) both count against it, so a Run that survives one such
+interruption still needs `maxUnmeasuredExecutions` raised above `0` to keep going past it.
+
+The field, and its old computed value, stay in the model for a future backend that *does* declare
+`usage: none` — `docs/spec/loop-file.md` §7.2 owns the field:
 
 ```
-max( 1, observedAgentNodes × (1 + maxEdgeIterations) )
+max( 1, observedAgentNodes × (1 + maxEdgeIterations) )     # only when observedAgentNodes > 0
 ```
 
-where `observedAgentNodes` counts `agent` nodes whose resolved backend declares `usage: none` and
-`maxEdgeIterations` is the largest `maxIterations` over all Retry Edges (0 when there are none). It is
-evaluated by `loopmill validate` at load time and recorded on the Run header, so that changing the
-Loop file mid-history does not retroactively change a past Run's budget.
+where `observedAgentNodes` counts `agent` nodes whose resolved backend declares `usage: none`
+(`0` for every MVP loop, which is what makes the MVP default `0` rather than the formula's own floor of
+`1`) and `maxEdgeIterations` is the largest `maxIterations` over all Retry Edges (0 when there are
+none). It is evaluated by `loopmill validate` at load time and recorded on the Run header, so that
+changing the Loop file mid-history does not retroactively change a past Run's budget.
 
 ### 6.3 `maxRuntime` excludes human waits
 
@@ -880,7 +894,7 @@ Both are per Loop and both are checked before a Run is created, in `loopmill ste
   `BUDGET_EXCEEDED` and **not** as `FAILED`. A first-class record is what stops a repeating trigger
   from retrying the refusal in a loop, and what lets the user see that the schedule is over budget
   rather than broken; `SKIPPED` is the sheet's own shape for "this Run was refused before it started",
-  and a nightly schedule that correctly declines must not paint the job red.
+  and a nightly schedule that correctly declines must not read as a failure in the scheduler's log.
 
 ### 6.5 Check point and enforcement shape
 
@@ -898,7 +912,7 @@ dispatch phase. Therefore:
 ### 6.6 What is reported when a budget stops a run
 
 The `run-finished` event carries a `budgetReport` block, and the same block is rendered by
-`loopmill status`, the job summary and the UI:
+`loopmill status`, the run report and the UI:
 
 ```json
 {
@@ -910,7 +924,7 @@ The `run-finished` event carries a `budgetReport` block, and the same block is r
   "partiallyObservable": true,
   "coverage": { "measured": 7, "total": 8, "percent": 87 },
   "unmeasuredExecutions": [
-    { "cycleIndex": 1, "nodeId": "cloud-review", "runtime": "codex", "reason": "observed backend (usage: none)" }
+    { "cycleIndex": 2, "nodeId": "implement", "runtime": "claude-code", "reason": "interrupted before completion (SIGINT; aborted_streaming)" }
   ],
   "unmeasuredExecutionCount": 1,
   "maxUnmeasuredExecutions": 3,
@@ -1042,7 +1056,7 @@ matches one of them fails with a named diagnosis rather than a bare inequality.
 | `codex-two-turns-cumulative.json` | thread reuse; the delta rule; the sum-of-deltas identity | two `derived` records, **140,000** and **101,300**, run total **241,300**; must not equal 381,300 |
 | `codex-fresh-thread.json` | fresh thread; subset arithmetic; reasoning as reference | `derived`, fresh = `max(0, 24,763−24,448−0)` = 315, total **25,973**; must not equal 50,421 or 26,913 |
 | `codex-turn-failed.json` | `turn.failed` with no `turn.completed`; quota classification kept off the usage record | `unavailable`, `complete: false`; must not equal 0 |
-| `observed-unavailable.json` | `observed` backend, `usage: none`, node `SUCCEEDED` anyway; budget attribution | `unavailable`; counts 0 toward `maxMeasuredTokens` and 1 toward `maxUnmeasuredExecutions` |
+| `observed-unavailable.json` | `observed` backend (**reserved**, unreachable in the MVP), `usage: none`, node `SUCCEEDED` anyway; budget attribution | `unavailable`; counts 0 toward `maxMeasuredTokens` and 1 toward `maxUnmeasuredExecutions` |
 
 Every fixture also carries `expected.coverage`, so the coverage computation of section 4 is tested by
 the same files as the mapping of section 2.
@@ -1165,7 +1179,9 @@ Decisions taken where the decision sheet is silent, each stated at its point of 
 13. §5.1 — `Wout = 1.0` in the default weighting profile; price-ratio profiles are named
     configuration and do not ship as the default.
 14. §6.1 — `maxAttempts` exhaustion is a node failure, not a run budget breach.
-15. §6.2 — the precise computed default for `maxUnmeasuredExecutions`, pinned on the Run header.
+15. §6.2 — the `maxUnmeasuredExecutions` default is `0` for the MVP (no backend declares
+    `usage: none`); the old computed formula is kept, pinned on the Run header, for a future backend
+    that does.
 16. §6.3 — `WAITING_OBSERVED` counts toward `maxRuntime`; `WAITING_FOR_QUOTA` does not.
 17. §6.4 — a Run refused by `maxRunsPerWindow` or `minInterval` is recorded as a Run in terminal
     `SKIPPED` with a `skipReason`, never `BUDGET_EXCEEDED` and never `FAILED` (the shape

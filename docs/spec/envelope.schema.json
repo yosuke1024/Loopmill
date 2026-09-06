@@ -809,7 +809,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "mode": { "enum": ["environment-reviewers", "pull-request-review", "label"] },
+        "mode": { "enum": ["cli", "pull-request-review", "label"] },
         "subjectDigest": {
           "$ref": "#/$defs/sha256",
           "description": "Digest of exactly what is being approved. A new attempt produces a new digest and invalidates every earlier approval."

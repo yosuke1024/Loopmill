@@ -16,44 +16,55 @@ An **Envelope** is one machine-readable record of one thing that happened in one
 requested, an Attempt was dispatched, a Node completed with usage, a human approved something, a Retry
 Edge was traversed, a Run finished.
 
-Loopmill has no always-on server. Its control plane is a process that starts, applies exactly one event,
-persists the result, dispatches at most one thing, and exits. Everything that survives between those
-processes is either an event log or a snapshot folded from it. The Envelope is the wire format of that
-log, and therefore the only thing that has to be agreed on by parties that never share memory: the
-control plane, the execution backends, the humans acting through GitHub, and GitHub itself.
+Loopmill has no always-on server. `loopmill run <loop>` is a process that starts, applies events one
+journal transaction at a time until the Run is terminal or enters a wait, and exits; internally it
+composes `loopmill step`, the single-transition primitive that applies exactly one event, persists the
+result, dispatches at most one thing, and returns. Everything that survives between processes is the
+event journal in the local `.loopmill/state.sqlite` store, or a snapshot folded from it
+(`docs/design/mvp-design.md` §8-9). The **Envelope is the journal entry**: the record every applied or
+emitted event becomes, one row per event, hash-chained. GitHub is not the bus — it is where the
+repository lives, where decisions and native events are polled from, and where a human or a comment
+hands something back to Loopmill. The Envelope is still the only thing that has to be agreed on by
+parties that do not share memory: the driver and its `local`/`fake` dispatchers inside one process,
+`loopmill step` reading an envelope from stdin or a file, a human posting a fenced block in a GitHub
+comment, and an exported run re-ingested later.
 
 Two rules follow, and the rest of this document is mostly their consequences:
 
 1. **An envelope is past tense.** It states what happened, on whose authority, and with which
    identifiers. Present-tense coordination state ("a gate is waiting right now", "a lease is held until
-   10:30", "the next node is `test`") is *derived* state and lives in the snapshot the control plane
-   folds from events. It is never carried as an envelope field, because a stale in-flight fact
-   redelivered by an at-least-once transport would be indistinguishable from a fresh one.
-2. **An envelope is small and complete.** Small enough for every transport GitHub gives us (32 KiB,
-   section 7.5); complete enough that a reader with the loop file and the event log needs nothing else.
-   Bytes that are neither (logs, diffs, prompts, model output, uploaded files) travel as `artifactRefs`.
+   10:30", "the next node is `test`") is *derived* state and lives in the snapshot the driver folds
+   from events. It is never carried as an envelope field, because a stale in-flight fact redelivered by
+   an at-least-once transport would be indistinguishable from a fresh one.
+2. **An envelope is small and complete.** Small enough for every transport it might have to cross — in
+   process, over stdin/`--event-file`, through a GitHub comment, or through the reserved
+   `repository_dispatch`/`workflow_dispatch` paths (32 KiB, section 7.6); complete enough that a reader
+   with the loop file and the event log needs nothing else. Bytes that are neither (logs, diffs,
+   prompts, model output, uploaded files) travel as `artifactRefs`.
 
 ## 2. The Envelope is the only protocol
 
-Everything crossing a Loopmill boundary is an envelope. There is no second channel, no side-band state
-file, no "the workflow also writes a marker", no implicit signalling by mutating a branch or a label.
+Everything crossing a Loopmill *process* boundary is an envelope. There is no second channel, no
+side-band state file, no "the loop file also carries a marker", no implicit signalling by mutating a
+branch or a label. Handing an envelope between the driver and an in-process dispatcher does not cross a
+process boundary, but the object handed over is still schema-shaped and validated exactly as if it had.
 
 | Boundary | Direction | Carrier |
 |---|---|---|
-| trigger (schedule, CLI, GitHub event) -> control plane | inbound | envelope (`run-requested`) |
-| control plane -> execution backend | outbound | envelope inside a dispatch (section 7) |
-| execution backend -> control plane | inbound | envelope (`node-*`) |
-| human -> control plane | inbound | envelope minted by the ingest workflow from an authenticated GitHub action (section 8) |
-| control plane -> human | outbound | rendered views of envelopes (job summary, `loopmill status`, PR/issue comments) |
-| control plane -> control plane (next step) | inbound | envelope (`resumed`, `lease-expired`, sweep events) |
+| trigger (schedule, CLI, polled GitHub event) -> driver | inbound | envelope (`run-requested`) |
+| driver -> `local`/`fake` dispatcher | in-process | envelope inside a dispatch (section 7.1) |
+| `local`/`fake` dispatcher -> driver | in-process | envelope (`node-*`), handed back as an object in the same process |
+| human -> driver | inbound | envelope minted by polling with the operator's own `gh` login (`resume --due` or `loopmill ingest`), or written directly by `loopmill approve`/`reject` on the host (section 8) |
+| driver -> human | outbound | rendered views of envelopes (the run report, `loopmill status`, PR/issue comments) |
+| driver -> driver (next step) | inbound | envelope (`resumed`, `lease-expired`, sweep events) |
 
 What this forbids, explicitly:
 
-- No backend may write to the state branch. It reports; the control plane decides and records.
+- No backend may write to the journal directly. It reports; the driver decides and records.
 - No handoff may rely on a GitHub side effect being noticed. A push, a label or a comment is never a
   Loopmill-internal signal; every internal handoff is an explicit dispatch carrying an envelope.
-  Native GitHub events reach Loopmill only through the ingest workflow of section 8, which turns them
-  into envelopes.
+  Native GitHub events reach Loopmill only by being **polled** (section 8), which turns them into
+  envelopes; Loopmill never registers a webhook and never runs anything on GitHub's side in the MVP.
 - No component may infer state from another component's logs.
 - Nothing but an envelope may change a Run's state. If a fact cannot be expressed as an envelope, it is
   not part of the protocol yet, and adding it is a schema change under section 12.
@@ -66,7 +77,7 @@ What this forbids, explicitly:
   "eventId": "06G7BWHT4089ZN8MD96260DEPE",
   "eventType": "node-completed",
   "occurredAt": "2026-09-06T09:41:12.740Z",
-  "producer": "backend:github-actions",
+  "producer": "backend:local",
   "loopId": "article-review",
   "loopVersion": "sha256:49e8067c2d493d48f6c0e17f2ce1c27f579c945d25d80547506c3d8e79f93488",
   "runId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
@@ -169,13 +180,16 @@ is how a reconciled missed schedule stays distinguishable from a late run of the
   `structured`, never of `status`: `status: succeeded` means "the node ran"; whether the review passed
   is loop semantics and belongs to the condition node that reads it.
   *Decision (not in sheet): `structured` is restricted to a JSON object, and to 8 KiB serialised;
-  anything larger moves to an `actions-artifact` ref (section 7.5).*
+  anything larger moves to a `file` artifact ref (section 7.6). The reserved `github-actions`
+  integration uses `actions-artifact` for the same purpose (section 4.3).*
 - `summary` — one short paragraph for humans, max 4000 characters. Never a log, never a diff.
 
 ### 4.3 `artifactRefs`
 
-Array (max 32) of `{ kind, ref, digest?, url? }` with
-`kind ∈ commit | branch | pr | issue | comment | actions-artifact | file`.
+Array (max 32) of `{ kind, ref, digest?, url? }`. The design's kind list is
+`commit | branch | pr | issue | comment | file`. The schema additionally carries `actions-artifact`,
+**reserved** for the `github-actions` integration (ADR-002 D4) and unused by the `local` and `fake`
+backends in the MVP.
 
 `ref` is the identifier within its kind: a commit sha, a branch name, a PR or issue number, a comment
 id, an Actions artifact name, or a repository-relative path. `digest` is `sha256:<hex>` of the
@@ -254,7 +268,7 @@ Mapping per runtime:
 | `claude-code` | `result.usage` (or the sum of `modelUsage` when present, which covers subagents) | fresh = `input_tokens`, cacheWrite = `cache_creation_input_tokens`, cacheRead = `cache_read_input_tokens`, output = `output_tokens` | `reported` |
 | `codex` | `turn.completed.usage`, which is **thread-cumulative** | per-attempt = last cumulative minus cumulative at attempt start (a fresh session starts at zero); cacheRead = `cached_input_tokens`, cacheWrite = `cache_write_input_tokens`, fresh = `max(0, input - cached - cacheWrite)`, output = `output_tokens`, reasoning = `reasoning_output_tokens` | `derived` |
 | any runtime, no terminal usage record (turn failed, process killed) | none | all buckets null | `unavailable` |
-| `observed` backends | none; execution happens vendor-side | all buckets null | `unavailable` |
+| `observed` backends (**reserved**, unreachable in the MVP — SPIKE-2 NO-GO, ADR-002 D4) | none; execution would happen vendor-side | all buckets null | `unavailable` |
 
 Usage aggregates only upward along Loop > Run > Cycle > Node Execution > Attempt, and a scope containing
 an `unavailable` or `estimated` attempt is reported with its coverage attached rather than as a clean
@@ -277,11 +291,15 @@ wait: only `quota` **with** `quotaResetsAt` can park a Run.
 
 `{ mode?, subjectDigest, decision?, decidedBy?, deadline?, note? }`
 
-`mode ∈ environment-reviewers | pull-request-review | label`. `subjectDigest` is the sha256 of exactly
-what is being approved — normally the digest of the artifact recorded in the `human-requested` event.
-A new Attempt produces a new subject digest and therefore **invalidates every earlier approval**;
-approvals are never carried across attempts. `decidedBy` is the authenticated decider as the boundary
-saw it. `decision ∈ approve | reject | cancel` — the three the state machine routes on
+`mode ∈ cli | pull-request-review | label`. `cli` is the operator running `loopmill approve <runId>` /
+`loopmill reject <runId>` directly on the host; the other two are ingested by polling `gh` with the
+operator's own login (section 8). v0.5's `environment-reviewers` — a job pinned to a GitHub Environment
+with required reviewers — no longer exists: there is no job for GitHub to hold (ADR-002 D7).
+`subjectDigest` is the sha256 of exactly what is being approved — normally the digest of the artifact
+recorded in the `human-requested` event. A new Attempt produces a new subject digest and therefore
+**invalidates every earlier approval**; approvals are never carried across attempts. `decidedBy` is the
+authenticated decider as the boundary saw it — a GitHub login when polled, or the host's own user/`gh`
+identity for `cli`. `decision ∈ approve | reject | cancel` — the three the state machine routes on
 (`state-machine.md` §8.5, D-02/D-03). There is no `expired` decision: a gate that ran out of time is a
 `node-timed-out` with `error.code: human_timeout`, produced by the sweep, not a decision by a human.
 
@@ -337,23 +355,25 @@ skipping it, and abandoning the Run (`state-machine.md` §10.3). Budgets never r
 
 ## 5. Event catalogue
 
-Seventeen types. "Producer" is the policy the control plane enforces; the schema constrains the
-*shape* of `producer`, not which producer may send which type, because the same type legitimately comes
-from different backends.
+Seventeen types, of which sixteen are reachable in the MVP. `node-observed` (row 8) is kept in the
+catalogue as **reserved** for an artifact-matcher/`observed` backend and is unreachable in the MVP
+(SPIKE-2 NO-GO, ADR-002 D4). "Producer" is the policy the control plane enforces; the schema constrains
+the *shape* of `producer`, not which producer may send which type, because the same type legitimately
+comes from different backends.
 *Decision (not in sheet): producer policy is enforced by `loopmill step`, not by the schema.*
 
 Node-level types (require `cycle`, `nodeId`, `attempt`) are marked •.
 
 | # | eventType | Producer | Also required | Meaning |
 |---|---|---|---|---|
-| 1 | `run-requested` | `trigger`, `control-plane` (reconcile) | `trigger` | Someone asked for a Run. Creates the Run; `runId` is allocated here. A human's request reaches the machine through ingest, which stamps `producer: trigger` (8.1). |
+| 1 | `run-requested` | `trigger`, `control-plane` (reconcile) | `trigger` | Someone asked for a Run. Creates the Run; `runId` is allocated here. A human's request made through GitHub (an Issue, a label) reaches the machine when it is polled and stamped `producer: trigger` (8.1). |
 | 2 | `run-started` | `control-plane` | — | The Run exists, the loop file is validated and `loopVersion` is pinned. |
 | 3 | `node-dispatched` • | `control-plane` | `dispatch` | An Attempt was handed to a backend. Written **before** the dispatch call. |
 | 4 | `node-started` • | `backend:<id>` | — | The backend began executing (only backends that stream emit this). |
 | 5 | `node-completed` • | `backend:<id>` | `result` | The Attempt finished. Agent nodes MUST also carry `usage`. |
 | 6 | `node-failed` • | `backend:<id>`, `control-plane` | `error` | The Attempt failed. `error.classified` decides what happens next. |
 | 7 | `node-timed-out` • | `backend:<id>`, `control-plane` | — | The node's own timeout or an observed deadline elapsed. |
-| 8 | `node-observed` • | `backend:observed` | `matcher`, `artifactRefs` (>= 1); `result` when `matcher.outcome: found_valid` | An artifact matcher looked at the surface an `observed` backend writes to, and found something valid or something unusable. |
+| 8 | `node-observed` • | `backend:observed` | `matcher`, `artifactRefs` (>= 1); `result` when `matcher.outcome: found_valid` | **Reserved, unreachable in the MVP** (SPIKE-2 NO-GO). An artifact matcher looked at the surface an `observed` backend writes to, and found something valid or something unusable. |
 | 9 | `human-requested` • | `control-plane` | `human{mode, subjectDigest}` | A human gate opened. A gate is control-plane-local, so its `attempt` is `0` (3.2). |
 | 10 | `human-decided` • | `human` | `human{decision, subjectDigest}` | A human approved, rejected or cancelled. Same coordinates as the `human-requested` it answers, `attempt: 0`. |
 | 11 | `quota-parked` • | `control-plane` | `quotaResetsAt`, `reason` | The Run entered `WAITING_FOR_QUOTA`. Derived from a `node-failed` classified `quota`; backends never emit it directly. |
@@ -390,8 +410,8 @@ and `U` excluded), lexicographically sortable in generation order. The control p
 `appliedEventIds`; a second delivery of the same `eventId` writes nothing, produces no commit, and exits
 0 reporting `duplicate`.
 
-Producers MUST generate a fresh ULID per event, except ingest, which **derives** it (section 8.3) so
-that a redelivered GitHub event maps to the same `eventId`.
+Producers MUST generate a fresh ULID per event, except polling, which **derives** it (section 8.3) so
+that a redelivered or re-polled GitHub event maps to the same `eventId`.
 
 ### 6.2 Semantic key — different bytes, same fact
 
@@ -427,69 +447,50 @@ only field that answers "why did this happen now?" without replaying the fold.
 
 ### 6.4 Ordering
 
-Order comes from the event log's sequence numbers on the state branch, never from `occurredAt`.
-Producer clocks are unsynchronised, and a backend that returns after a lease expired can legitimately
-carry an earlier timestamp than the `lease-expired` that overtook it. `occurredAt` is for humans, for
-durations, and for the ULID timestamp prefix; the applied order is whatever the control plane
-committed.
+Order comes from the event log's `seq` in the local store, never from `occurredAt`. Producer clocks
+are unsynchronised, and a backend that returns after a lease expired can legitimately carry an earlier
+timestamp than the `lease-expired` that overtook it. `occurredAt` is for humans, for durations, and for
+the ULID timestamp prefix; the applied order is whatever transaction the driver committed.
 
 ---
 
 ## 7. Transports
 
-Four, all carrying the same bytes.
+Six paths carry the same bytes: three are used in the MVP (7.1-7.3), two are **reserved** for the
+`github-actions` integration (7.4-7.5), and one rule (7.6) bounds every one of them.
 
-### 7.1 `repository_dispatch` (default transport)
+### 7.1 In-process (default in the MVP)
 
-```http
-POST /repos/{owner}/{repo}/dispatches
-{
-  "event_type": "loopmill-event",
-  "client_payload": { "envelope": "<the envelope as one JSON string>" }
-}
-```
+Within one `loopmill run` process, the driver hands the dispatch envelope to the `local` or `fake`
+dispatcher as an in-memory object — after the `node-dispatched` event has been committed — and gets the
+completion envelope (`node-completed` / `node-failed` / `node-timed-out`) back the same way; the
+completion is then applied and persisted as the next journal transaction
+(`docs/design/mvp-design.md` §7.2, §8.2). Nothing is serialised to a wire for this path — the object
+simply changes hands inside one process — but it is schema-shaped and validated exactly as if it had
+crossed a process boundary; the schema does not know or care that no bytes moved. This is the path
+every MVP Run takes twice per node: once out to the dispatcher, once back.
 
-One top-level property in `client_payload`, always named `envelope`, always a **string** containing the
-serialised envelope (not a nested object). The workflow reads
-`${{ github.event.client_payload.envelope }}` and pipes it into `loopmill step`.
+### 7.2 stdin / `--event-file`
 
-Facts that shape this choice (verification status in section 7.5):
-
-- `client_payload` allows at most **10 top-level properties** and the whole JSON payload must be
-  **less than 64 KB**. Using exactly one property keeps every future field inside the envelope, where
-  the schema governs it, instead of inventing a second, unversioned wire format.
-- `repository_dispatch` runs **only workflows on the default branch**, and `GITHUB_REF` for the run is
-  the default branch. The MVP control workflow therefore lives on the default branch; a feature branch
-  or a spike must use 7.2.
-- `event_type` is limited to 100 characters. Loopmill uses exactly one value, `loopmill-event`; routing
-  is by `eventType` inside the envelope, not by `event_type` on the wire, so that adding an event type
-  never requires touching a workflow's `types:` filter.
-
-### 7.2 `workflow_dispatch` (any ref)
-
-```http
-POST /repos/{owner}/{repo}/actions/workflows/loopmill-step.yml/dispatches
-{ "ref": "refs/heads/<branch>", "inputs": { "envelope": "<the envelope as one JSON string>" } }
-```
-
-Used on feature branches and in spikes, because `ref` selects which version of the workflow actually
-runs. The workflow file must still exist on the default branch for the event to be dispatchable at all.
-`inputs` allows at most 25 top-level properties on github.com (10 on GitHub Enterprise Server) and a
-maximum payload of 65,535 characters; Loopmill uses one input, `envelope`.
-
-A second input, `run_id`, is permitted and carries the plain `runId` — not because the control plane
-needs it (it reads the envelope) but because an Actions `concurrency:` expression is evaluated before
-the job exists and must not depend on parsing an input.
-*Decision (not in sheet): the `run_id` companion input, for the concurrency group only. It is
-informational; if it ever disagreed with the envelope, the envelope wins.*
+`loopmill step` accepts exactly one envelope, as UTF-8 JSON on stdin or via `--event-file <path>`. One
+invocation applies one event. NDJSON, arrays of envelopes and multi-document input are rejected:
+batching would make the "one applied event, one transaction" audit property untrue. This is how the
+test suite drives the engine, and how a run `loopmill export`ed earlier is re-ingested one event at a
+time.
 
 ### 7.3 GitHub comment: the fenced `loopmill` block
 
-A comment carries an envelope only inside a fenced block. The grammar is exact:
+A human hands a decision to Loopmill — or, under the reserved `github-actions` integration, a backend
+reports one — by posting a comment that carries an envelope inside a fenced block. Loopmill never
+receives this over a webhook: it is read by **polling**, with the operator's own `gh` login, from
+`resume --due` or `loopmill ingest` (section 8). Nothing is ever pushed to Loopmill; a comment sits on
+GitHub until something on the operator's host asks for it.
+
+The grammar is exact:
 
 ````text
 ```loopmill
-{ "schemaVersion": "1.0.0", "eventId": "...", "eventType": "node-observed", ... }
+{ "schemaVersion": "1.0.0", "eventId": "...", "eventType": "human-decided", ... }
 ```
 ````
 
@@ -512,37 +513,65 @@ A comment carries an envelope only inside a fenced block. The grammar is exact:
 
 A comment body is limited to 65,536 characters, which the 32 KiB envelope rule already respects.
 
-### 7.4 Local: stdin or `--event-file`
+### 7.4 `repository_dispatch` — **reserved** (`github-actions` integration)
 
-`loopmill step` accepts exactly one envelope, as UTF-8 JSON on stdin or via `--event-file <path>`.
-One invocation applies one event. NDJSON, arrays of envelopes and multi-document input are rejected:
-batching would make the "one applied event, one commit" audit property untrue.
+```http
+POST /repos/{owner}/{repo}/dispatches
+{
+  "event_type": "loopmill-event",
+  "client_payload": { "envelope": "<the envelope as one JSON string>" }
+}
+```
 
-### 7.5 Size rule
+Not used by the MVP — there is no control-plane workflow on GitHub for it to reach. Kept as the
+mechanism SPIKE-1 and SPIKE-3 measured, as the reserved `github-actions` integration's transport
+(ADR-002 D4, D7). One top-level property in `client_payload`, always named `envelope`, always a
+**string** containing the serialised envelope (not a nested object); a workflow of that integration
+would read `${{ github.event.client_payload.envelope }}` and pipe it into `loopmill step`.
 
-**An envelope is at most 32 KiB serialised.** Anything larger travels as `artifactRefs`.
+Facts that shaped this choice (verification status in section 7.5):
 
-Producers MUST check the size of the **encoded transport body**, not only the envelope: escaping an
-envelope into a JSON string can in the worst case double its length, and 32 KiB doubled is 64 KiB —
-at or above the `client_payload` ceiling, depending on whether GitHub's "64KB" means 64,000 or 65,536
-bytes. The concrete rule:
+- `client_payload` allows at most **10 top-level properties** and the whole JSON payload must be
+  **less than 64 KB**. Using exactly one property keeps every future field inside the envelope, where
+  the schema governs it, instead of inventing a second, unversioned wire format.
+- `repository_dispatch` runs **only workflows on the default branch**, and `GITHUB_REF` for the run is
+  the default branch. A feature branch or a spike would need 7.5 instead.
+- `event_type` is limited to 100 characters. Loopmill uses exactly one value, `loopmill-event`; routing
+  is by `eventType` inside the envelope, not by `event_type` on the wire, so that adding an event type
+  never requires touching a workflow's `types:` filter.
 
-- envelope <= 32 KiB (32,768 bytes), and
-- the JSON-string-escaped form <= 60 KiB (61,440 bytes) for `repository_dispatch`, and
-- <= 65,535 characters for `workflow_dispatch` inputs.
+### 7.5 `workflow_dispatch` — **reserved** (`github-actions` integration)
 
-Measured on this specification's own examples, escaping costs about 10%: the largest example is 1,739 B
-pretty-printed, 1,422 B compact, 1,568 B escaped (section 13, TV-3).
+```http
+POST /repos/{owner}/{repo}/actions/workflows/loopmill-step.yml/dispatches
+{ "ref": "refs/heads/<branch>", "inputs": { "envelope": "<the envelope as one JSON string>" } }
+```
 
-What moves out of the envelope when it does not fit: `result.structured` above 8 KiB (upload as an
-Actions artifact, reference it with `kind: actions-artifact` and a `digest`), any log or diff (never in
-an envelope at all), and long human text (link to the comment or PR instead).
+Also not used by the MVP; kept for the same reserved integration, because `ref` selects which version
+of a workflow actually runs — needed on a feature branch or in a spike, where `repository_dispatch`
+(7.4) cannot reach. The workflow file must still exist on the default branch for the event to be
+dispatchable at all. `inputs` allows at most 25 top-level properties on github.com (10 on GitHub
+Enterprise Server) and a maximum payload of 65,535 characters; Loopmill would use one input, `envelope`.
+
+A second input, `run_id`, is permitted and carries the plain `runId` — not because the reader needs it
+(it reads the envelope) but because an Actions `concurrency:` expression is evaluated before the job
+exists and must not depend on parsing an input.
+*Decision (not in sheet): the `run_id` companion input, for the concurrency group only. It is
+informational; if it ever disagreed with the envelope, the envelope wins.*
+
+**Measured (SPIKE-3, `docs/spikes/README.md` §5, 2026-09-06) `[V]`.** A 32,768-byte envelope (the
+design's size rule) was accepted and applied through `workflow_dispatch` (a 33,045-byte record on the
+branch); a 65,400-byte envelope was accepted and applied too (65,678-byte record); a 66,000-byte
+envelope was refused by the API with HTTP 422 `inputs are too large` and no run was created — the
+65,535-character ceiling documented for the `inputs` payload holds, and the 32 KiB rule (section 7.6)
+leaves the escaping headroom it was designed to leave.
 
 #### GitHub facts, with verification status
 
 `docs.github.com` is not reachable from this build environment (blocked by the network egress proxy), so
 each fact below was verified against the machine-readable sources GitHub publishes for those same docs,
-fetched from `raw.githubusercontent.com` on 2026-09-06.
+fetched from `raw.githubusercontent.com` on 2026-09-06. These facts govern only the reserved 7.4/7.5
+paths; nothing here bears on the MVP's own transports (7.1-7.3).
 
 | Fact | Status | Source |
 |---|---|---|
@@ -553,20 +582,44 @@ fetched from `raw.githubusercontent.com` on 2026-09-06.
 | `workflow_dispatch` requires the workflow file to exist on the default branch to be dispatchable; `ref` then selects the version that runs | **verified** | `github/docs` events-that-trigger-workflows.md, `workflow_dispatch` section and the same reusable |
 | `GITHUB_TOKEN`-triggered `workflow_dispatch` and `repository_dispatch` **do** start workflow runs; other `GITHUB_TOKEN`-triggered events do not | **verified** | `github/docs` events-that-trigger-workflows.md: "With the exception of `workflow_dispatch` and `repository_dispatch`, other `GITHUB_TOKEN`-triggered events do not create workflow runs at all." |
 | A comment/issue body is limited to 65,536 characters | **partially verified** | Not found in GitHub Docs prose from the reachable sources. Corroborated by `github/docs`' own tooling (`src/links/lib/link-report.ts`: "GitHub rejects issue bodies over 65,536 characters") and, from memory, by the REST error `body is too long (maximum is 65536 characters)`. Treat as a soft limit and stay far below it. |
-| Dispatching needs `contents: write` (repository dispatch) / `actions: write` (workflow dispatch) on `GITHUB_TOKEN` | **from memory** | To be confirmed by the SPIKE-3 run against the real API. The agent job already holds `contents: write`; add `actions: write` only where 7.2 is used. |
+| Dispatching needs `contents: write` (repository dispatch) / `actions: write` (workflow dispatch) on `GITHUB_TOKEN` | **from memory** | Unconfirmed against the live API for this integration; not needed by the MVP's own transports. |
+
+### 7.6 Size rule
+
+**An envelope is at most 32 KiB serialised, on every path above, including the in-process one.**
+Anything larger travels as `artifactRefs`.
+
+Producers MUST check the size of the **encoded transport body** for any path that serialises, not only
+the envelope: escaping an envelope into a JSON string can in the worst case double its length, and 32
+KiB doubled is 64 KiB — at or above the `client_payload` ceiling of the reserved `repository_dispatch`
+path, depending on whether GitHub's "64KB" means 64,000 or 65,536 bytes. The concrete rule:
+
+- envelope <= 32 KiB (32,768 bytes), and
+- the JSON-string-escaped form <= 60 KiB (61,440 bytes) for the reserved `repository_dispatch`, and
+- <= 65,535 characters for the reserved `workflow_dispatch` inputs.
+
+Measured on this specification's own examples, escaping costs about 10%: the largest example is 1,739 B
+pretty-printed, 1,422 B compact, 1,568 B escaped (section 13, TV-3).
+
+What moves out of the envelope when it does not fit: `result.structured` above 8 KiB (a `file` artifact
+ref in the MVP; an uploaded Actions artifact, `kind: actions-artifact`, under the reserved integration),
+any log or diff (never in an envelope at all), and long human text (link to the comment or PR instead).
 
 ---
 
 ## 8. Ingesting native GitHub events
 
-GitHub's own events (`issues`, `pull_request`, `issue_comment`, `pull_request_review`, `workflow_run`)
-are not envelopes and never reach `loopmill step` directly. One workflow, `loopmill-ingest.yml`,
-subscribes to them, decides whether they mean anything to Loopmill, mints an envelope, and dispatches it
-through 7.1/7.2. It is the only place where an outside fact becomes a Loopmill fact, and therefore the
-only place where trust is established.
+GitHub's own events (`issues`, `pull_request`, `issue_comment`, `pull_request_review`) are not envelopes
+and never reach `loopmill step` directly. **There is no `ingest` workflow in the MVP.** `resume --due`
+(run on its own cadence, or by hand) and the explicit `loopmill ingest` command **poll** GitHub with the
+operator's own `gh` login, decide whether what they find means anything to Loopmill, mint an envelope,
+and apply it through `loopmill step` (7.2) in the same process. Polling is the only place where an
+outside fact becomes a Loopmill fact, and therefore the only place where trust is established; Loopmill
+never registers a webhook and runs nothing on GitHub's side.
 
-Its permissions are `contents: read` plus whatever the dispatch needs. It holds no vendor credential and
-cannot write the state branch.
+Polling uses whatever scopes the operator's own `gh` login already has. It holds no separate vendor
+credential of its own and writes nothing to the store directly — it converts what it reads into an
+envelope and hands that to `loopmill step`, exactly like stdin or `--event-file` would.
 
 ### 8.1 Mapping table
 
@@ -577,41 +630,47 @@ Rules are evaluated top to bottom; the first match wins.
 | `issues` (`unlabeled`) | the removed label is `loopmill:hold` on an in-flight `human` node with `mode: label`, and the actor has write access | `human-decided` with `human.decision: approve`, `subjectDigest` copied from the open `human-requested` | `human` |
 | `issues` (`labeled`) | the added label is `loopmill:reject` on that same node | `human-decided` with `human.decision: reject` | `human` |
 | `issues` (`opened`, `labeled`) | the Loop's `trigger.event.types` includes `issues` and the label filter matches; author association is `OWNER`/`MEMBER`/`COLLABORATOR` | `run-requested`, `trigger.kind: event`, `source: github:issues`, `dedupeKey: issue:<number>` | `trigger` |
-| `issue_comment` (`created`) | the body contains a fenced `loopmill` block (7.3), the author is not a control-plane identity, and the body carries no control-plane marker | the parsed envelope, re-stamped (8.2) | `human`, or `backend:observed` for an allow-listed vendor bot |
+| `issue_comment` (`created`) | the body contains a fenced `loopmill` block (7.3), the author is not a control-plane identity, and the body carries no control-plane marker | the parsed envelope, re-stamped (8.2) | `human`, or (**reserved**) `backend:observed` for an allow-listed vendor bot |
 | `pull_request_review` (`submitted`) | the PR is the subject of an in-flight `human` node with `mode: pull-request-review` and the review's head sha matches the recorded `subjectDigest` | `human-decided`: `approved` -> `approve`, `changes_requested` -> `reject`, `commented` -> no envelope | `human` |
-| `pull_request` (`opened`, `synchronize`) | an in-flight node is `OBSERVING` with a file matcher, and the PR head contains the declared JSON path | `node-observed` with `matcher{kind: file-in-diff, ref: <path>, outcome}` and `artifactRefs` of `kind: pr` and `kind: file` (with digests) | `backend:observed` |
+| `pull_request` (`opened`, `synchronize`) — **reserved, unreachable in the MVP** | an in-flight node is `OBSERVING` with a file matcher, and the PR head contains the declared JSON path | `node-observed` with `matcher{kind: file-in-diff, ref: <path>, outcome}` and `artifactRefs` of `kind: pr` and `kind: file` (with digests) | `backend:observed` |
 | `pull_request` (`closed`) | the PR is the working branch's PR of an in-flight Run | no envelope; the node's own completion still governs. A merged PR may produce a `run-requested` for a follow-up Loop when one declares that trigger | `trigger` |
-| `workflow_run` (`completed`) | `workflow_run.name` matches `loopmill:<runId>:<cycle>:<nodeId>:<attempt>` **and** that Attempt is still in flight | `conclusion: timed_out` -> `node-timed-out`; `cancelled` -> `node-failed` (`classified: cancelled`); `failure` -> `node-failed` (`classified: backend_error`); `success` -> **no envelope** | `backend:github-actions` |
+| `workflow_run` (`completed`) — **reserved for the `github-actions` integration, unreachable in the MVP** | `workflow_run.name` matches `loopmill:<runId>:<cycle>:<nodeId>:<attempt>` **and** that Attempt is still in flight | `conclusion: timed_out` -> `node-timed-out`; `cancelled` -> `node-failed` (`classified: cancelled`); `failure` -> `node-failed` (`classified: backend_error`); `success` -> **no envelope** | `backend:github-actions` |
 
-Two notes on the last row. The agent workflow sets
+Two notes on the last, reserved row. That integration's agent workflow would set
 `run-name: loopmill:${{ inputs.run_id }}:${{ inputs.cycle }}:${{ inputs.node_id }}:${{ inputs.attempt }}`
 so the attempt coordinates are recoverable from the `workflow_run` payload; this is the only reliable
 join back to Loopmill state, since the payload has no room for Loopmill fields.
 *Decision (not in sheet): the `run-name` convention and the join it enables.*
 A `success` conclusion without a completion envelope is deliberately **not** ingested: the job may still
 be uploading, and inventing a completion would race the real one. That case belongs to the lease
-(`lease-expired`), which is designed for exactly the "no answer" state.
+(`lease-expired`), which is designed for exactly the "no answer" state — and which the MVP's `local`
+backend reaches through the `locks` row instead (`state-machine.md` §10.1-10.2).
 
-### 8.2 Re-stamping: what ingest keeps and what it overwrites
+### 8.2 Re-stamping: what polling keeps and what it overwrites
 
-A comment-borne envelope is user input. Ingest keeps `eventType`, `runId`, `cycle`, `nodeId`,
+A comment-borne envelope is user input. Polling keeps `eventType`, `runId`, `cycle`, `nodeId`,
 `attempt`, `matcher`, `result`, `artifactRefs` and `usage`; it **overwrites**:
 
-- `producer` — set from the authenticated author, never copied from the payload;
-- `eventId` — replaced by the derivation of 8.3, so a redelivery is a duplicate rather than a new event;
+- `producer` — set from the authenticated author (the `gh` identity behind the comment), never copied
+  from the payload;
+- `eventId` — replaced by the derivation of 8.3, so re-polling the same object is a duplicate rather
+  than a new event;
 - `occurredAt` — set from the source object's timestamp (`comment.created_at`, `review.submitted_at`),
-  not from the comment's own claim and not from the ingest clock;
+  not from the comment's own claim and not from the polling clock;
 - `loopId`, `loopVersion` — set from the Run's pinned header, so a comment cannot re-point a Run at
   another Loop or another version;
 - `causationId` — set to the `node-dispatched` event of the in-flight Attempt.
 
 *Decision (not in sheet): the exact keep/overwrite split. The sheet requires strict parsing of the
-fenced block and an ingest workflow; this is what "strict" has to mean for it to be a boundary.*
+fenced block; in the MVP the enforcing boundary is the poll (`resume --due` / `loopmill ingest`) rather
+than a separate ingest workflow, and this is what "strict" has to mean for it to be a boundary either
+way.*
 
 ### 8.3 Deriving `eventId` from a delivery
 
-GitHub's `X-GitHub-Delivery` GUID is not exposed to a workflow, so ingest derives the id from the source
-object's natural key, which is stable across redelivery, workflow re-runs and re-runs of failed jobs:
+GitHub's `X-GitHub-Delivery` GUID belongs to webhooks and is never seen by a poll, so `resume --due` /
+`loopmill ingest` derive the id from the source object's own natural key, which is stable across
+repeated polls and repeated `resume --due` runs:
 
 ```text
 seed      = "loopmill/ingest/1" SP <github event name> SP <natural key> SP <source timestamp, RFC 3339>
@@ -626,12 +685,12 @@ eventId   = crockford32(timestamp, 10 chars) || crockford32(entropy, 16 chars)
 | `pull_request_review` | `review.id` |
 | `issues` | `issue.id` + `:` + `action` |
 | `pull_request` | `pull_request.id` + `:` + `action` |
-| `workflow_run` | `workflow_run.id` + `:` + `run_attempt` |
+| `workflow_run` (reserved) | `workflow_run.id` + `:` + `run_attempt` |
 
-Because both halves are functions of the source object, the same delivery always yields the same
-`eventId` and the control plane drops it as a duplicate (exit 0, nothing written). Should Loopmill ever
-receive webhooks outside Actions, the delivery GUID replaces the natural key and the derivation is
-otherwise unchanged.
+Because both halves are functions of the source object, polling the same object twice always yields the
+same `eventId` and the driver drops it as a duplicate (exit 0, nothing written). Should Loopmill ever
+receive webhooks instead of polling, the delivery GUID would replace the natural key and the derivation
+would otherwise be unchanged.
 *Decision (not in sheet): the derivation itself. The sheet requires deduping by delivery identity; this
 is the construction that also keeps `eventId` a valid, time-sortable ULID.* Test vector: TV-2.
 
@@ -639,34 +698,57 @@ is the construction that also keeps `eventId` a valid, time-sortable ULID.* Test
 
 Loopmill posts comments, and comments are events. Without rules, that is a loop.
 
-1. **Identity.** Ignore any event whose actor is a control-plane identity: `github-actions[bot]` for
-   anything posted with `GITHUB_TOKEN`, plus any login configured as Loopmill's own.
-2. **Marker.** Every comment Loopmill writes contains `<!-- loopmill:control-plane -->`. Ingest drops
+1. **Identity.** Ignore any event whose actor is a control-plane identity: `github-actions[bot]`
+   (reserved, for the `github-actions` integration), plus any bot login the operator has configured as
+   Loopmill's own. The MVP default posts as the operator's own `gh` login, for which rule 2 below is
+   the operative defense.
+2. **Marker.** Every comment Loopmill writes contains `<!-- loopmill:control-plane -->`. Polling drops
    any body containing that marker regardless of author, which also covers a human quoting Loopmill.
 3. **Fenced block required.** No `loopmill` fence, no envelope. Prose never becomes an event.
 4. **First block only.** One envelope per comment at most (7.3, rule 4).
-5. **Derived ids.** Redeliveries and re-runs collapse onto one `eventId` (8.3).
+5. **Derived ids.** Redeliveries and re-polls collapse onto one `eventId` (8.3).
 6. **In-flight check.** Node-level events are accepted only for the expected Attempt and expected
    producer (6.2); everything else is `ignored-stale`.
-7. **No implicit handoffs.** Loopmill's own steps are always explicit dispatches, so an ingest bug can
+7. **No implicit handoffs.** Loopmill's own steps are always explicit dispatches, so a polling bug can
    drop events but can never invent a step.
-8. **Hard cap.** `maxStepsPerRun` (default 200) and a per-`runId` Actions concurrency group bound any
-   chain that survives 1-7.
+8. **Hard cap.** `maxStepsPerRun` (default 200) bounds any chain that survives 1-7. The reserved
+   `github-actions` integration additionally uses a per-`runId` Actions concurrency group; the MVP's
+   `local` backend is bounded instead by the `locks` row allowing only one live process per Run
+   (`state-machine.md` §10.1).
 
 ---
 
-## 9. How an agent job reports completion
+## 9. How a node reports completion
 
-The agent job runs `loopmill run-node`, which owns the runtime process and therefore owns the only
-first-hand account of what happened. On exit it:
+### 9.1 The `local` backend (MVP)
+
+The node executor is a **subprocess of `loopmill run`**, not a separate job: `run` spawns the runtime
+CLI (`claude` or `codex`) directly in the Run's worktree, and owns the only first-hand account of what
+happened. On exit it:
 
 1. collects `result` (status, exit code, validated `structuredOutput`, a short summary), `usage`
-   (section 4.6) and `artifactRefs` (commit, branch, uploaded log artifact);
+   (section 4.6) and `artifactRefs` (commit, branch, a log file under `.loopmill/logs/`);
 2. runs the redactor over every string (section 11.1);
-3. builds the envelope with `producer: backend:github-actions`, the coordinates it was dispatched with,
-   and `causationId` = the `node-dispatched` `eventId` it received;
-4. checks the size rule (7.5), moving oversized `structured` output into an uploaded artifact;
-5. dispatches it with the job's `GITHUB_TOKEN`:
+3. builds the envelope with `producer: backend:local`, the coordinates it was dispatched with, and
+   `causationId` = the `node-dispatched` `eventId` it received;
+4. checks the size rule (7.6), moving oversized `structured` output into a `file` artifact ref;
+5. hands the envelope back to the driver **in process** (7.1) — there is no dispatch call to make and
+   nothing to retry with jitter, because nothing left the process.
+
+`run` applies the completion as the next event, in its own transaction: the applied completion, the
+events it emits, the new snapshot and the attempt record land together (`docs/design/mvp-design.md`
+§9.2). The `node-dispatched` event was committed in an earlier transaction, before the subprocess was
+spawned (§7.2 of the design), which is what makes a crash between the two recoverable. If the subprocess dies before it can report at all — killed,
+crashed, the host lost power — there is no completion to apply; that state is exactly what the lease and
+the sweep exist for (`state-machine.md` §10): the lease on the `locks` row expires, the sweep emits
+`lease-expired`, and a new attempt is dispatched up to `maxAttempts`. Silence is a supported outcome; a
+second protocol would not be.
+
+### 9.2 The reserved `github-actions` variant
+
+Under the reserved `github-actions` integration, the completion crosses a process boundary instead of
+staying in one process. The agent job runs `loopmill run-node`, builds the same envelope shape with
+`producer: backend:github-actions`, and dispatches it with the job's `GITHUB_TOKEN`:
 
 ```bash
 jq -n --rawfile e envelope.json \
@@ -675,19 +757,23 @@ gh api --method POST "/repos/$GITHUB_REPOSITORY/dispatches" --input body.json
 ```
 
 This works because `workflow_dispatch` and `repository_dispatch` are the documented exception to
-GitHub's rule that `GITHUB_TOKEN`-triggered events do not start workflow runs (verified, 7.5). It is
-also the reason the state-branch push cannot be the trigger: a push made with `GITHUB_TOKEN` starts
-nothing, and the agent job has no credential for that branch anyway.
+GitHub's rule that `GITHUB_TOKEN`-triggered events do not start workflow runs (verified, 7.5 GitHub
+facts). It is also the reason a push to that integration's git-branch store cannot be the trigger: a
+push made with `GITHUB_TOKEN` starts nothing, and the agent job has no credential for that branch
+anyway.
 
 If the dispatch call fails, the job **retries with jitter and then exits non-zero without inventing an
-alternative channel**. The completion is now unknown to the control plane, which is a state the design
-already handles: the lease expires, the sweep emits `lease-expired`, and attempt 2 runs. Silence is a
-supported outcome; a second protocol would not be.
-
-The control plane's own workflow re-dispatches to itself the same way when a step produces a follow-up
-event, subject to the chain cap of 8.4.
+alternative channel**; the completion is unknown to the control plane until the lease expires and the
+sweep emits `lease-expired`, exactly as in 9.1. The control plane's own workflow re-dispatches to itself
+the same way when a step produces a follow-up event, subject to the chain cap of 8.4. This subsection is
+measured (SPIKE-1, SPIKE-3) and kept as the reference for that integration (ADR-002 D4); it is not built
+in the MVP.
 
 ## 10. How observed backends produce `node-observed`
+
+**Reserved, unreachable in the MVP** (SPIKE-2 NO-GO: a vendor task's result never reaches GitHub as a
+change without a human click — ADR-002 D4). This section is kept as the mechanism an artifact-matcher
+backend would use if one is added later.
 
 An `observed` node executes on a vendor's cloud. Loopmill emits the trigger (a comment, or a vendor CLI
 call) and then watches for a declared artifact until a deadline. The matcher is declared per node in the
@@ -712,8 +798,10 @@ denominator of Usage Coverage.
 
 ### 11.1 No secrets in envelopes
 
-Envelopes are persisted to a git branch, rendered into job summaries, and posted into comments. They are
-public in every sense that matters. Therefore:
+Envelopes are persisted to the local journal, rendered into run reports, and — for a human handoff, or
+under the reserved `github-actions` integration — posted into GitHub comments, where they are as public
+as the repository is. Treat every envelope as if it were public, including one that never leaves the
+local journal: it can always be exported (`loopmill export`) or copied into a comment later. Therefore:
 
 - Nothing in an envelope may be a credential, and nothing may be derived from one (no token prefixes,
   no partial keys, no "redacted but recognisable" forms).
@@ -729,9 +817,9 @@ public in every sense that matters. Therefore:
 
 ### 11.2 Size as a security property
 
-The 32 KiB limit is not only about GitHub's ceilings. A bounded envelope bounds what an untrusted
-producer can push into the state branch, into a commit message, and into every reader's terminal.
-Oversized envelopes are rejected before parsing anything but the length.
+The 32 KiB limit is not only about GitHub's ceilings on the reserved paths. A bounded envelope bounds
+what an untrusted producer can push into the journal, into a run report, and into every reader's
+terminal. Oversized envelopes are rejected before parsing anything but the length.
 
 ### 11.3 What a forged envelope could do, and why it cannot
 
@@ -740,19 +828,19 @@ coordinates from a public comment.
 
 | Attempted forgery | Why it fails |
 |---|---|
-| Post a `node-completed` claiming success for the in-flight Attempt | Ingest sets `producer` from the authenticated author (`human`), so it can never equal the `expectedProducer` recorded at dispatch (`backend:github-actions`). The control plane records `ignored-stale` (`producer_not_expected`) and applies nothing. |
+| Post a `node-completed` claiming success for the in-flight Attempt | Polling sets `producer` from the authenticated author (`human`), so it can never equal the `expectedProducer` recorded at dispatch (`backend:local`, or `backend:github-actions` under the reserved integration). The driver records `ignored-stale` (`producer_not_expected`) and applies nothing. |
 | Post an envelope for an Attempt that is not in flight (an old cycle, a finished node, a finished Run) | Coordinates must equal the expected in-flight Attempt; otherwise `ignored-stale` (`stale_attempt` / `unknown_node` / `run_terminal`). |
-| Impersonate the observed backend by posting a matcher-shaped comment | Comment-borne `node-observed` is accepted only while that node is `OBSERVING`, only from the author allow-list declared for the node, and only with a digest that ingest computes from the fetched comment. |
-| Forge a `human-decided` approval | Ingest never mints `human-decided` from a comment: it mints it only from a `pull_request_review`, an environment approval, or a label change performed by an identity GitHub authenticated and that has write access. The `subjectDigest` must equal the one recorded in `human-requested`; a new Attempt changes that digest and voids old approvals. |
-| Start an expensive Run with `run-requested` | Ingest only mints `run-requested` when the Loop declares that trigger and the actor's association is `OWNER`/`MEMBER`/`COLLABORATOR`. Budgets (`maxRunsPerWindow`, `minInterval`, `maxMeasuredTokens`) are checked before any dispatch. |
+| Impersonate the observed backend by posting a matcher-shaped comment (**reserved**, unreachable in the MVP) | Comment-borne `node-observed` would be accepted only while that node is `OBSERVING`, only from the author allow-list declared for the node, and only with a digest computed from the fetched comment. |
+| Forge a `human-decided` approval | Polling never mints `human-decided` from a bare comment: it mints it only from a `pull_request_review` or a label change performed by an identity GitHub authenticated that has write access, or `loopmill approve`/`reject` runs it directly on the host. The `subjectDigest` must equal the one recorded in `human-requested`; a new Attempt changes that digest and voids old approvals. |
+| Start an expensive Run with `run-requested` | Polling only mints `run-requested` when the Loop declares that trigger and the actor's association is `OWNER`/`MEMBER`/`COLLABORATOR`. Budgets (`maxRunsPerWindow`, `minInterval`, `maxMeasuredTokens`) are checked before any dispatch. |
 | Inflate a headline usage figure | Usage from an untrusted producer is not accepted at all (same producer check). Even legitimate `unavailable` usage cannot become zero, and coverage is shown next to every total. |
-| Escalate privileges through an envelope | Envelopes carry no permissions. Job scopes are fixed in workflow files; the agent job never receives the state-branch credential, and a branch ruleset rejects any push to `loopmill/state` from it. |
-| Rewrite history | The state branch is push-protected and fast-forward-only; the control plane's write is a compare-and-swap. A rejected event still leaves an `ignored-stale` record, so refusals are visible. |
+| Escalate privileges through an envelope | Envelopes carry no permissions. On the host, the node executor runs under the permission profile's sandbox and tool restrictions (`docs/design/mvp-design.md` §13); an envelope cannot grant it a `gh`/`git push` capability the profile denied. Under the reserved `github-actions` integration, job scopes are fixed in workflow files and the agent job never receives the state-branch credential (ADR-002 Appendix A). |
+| Rewrite history | The journal is append-only inside one SQLite transaction; there is no operation that edits or deletes a past row, and a rejected event still leaves an `ignored-stale` record, so refusals are visible. (The reserved `github-actions` integration's git-branch store used push protection and compare-and-swap for the same property, measured in SPIKE-3.) |
 
 The general principle: **an envelope is a claim, and a claim is only as strong as the identity the
 receiving boundary attached to it.** Every trust decision is made at a boundary that has an
-authenticated identity to work with — the ingest workflow (GitHub's authentication) or the control plane
-(its own dispatch record) — and never by reading a field the sender chose.
+authenticated identity to work with — a poll (GitHub's own authentication of the `gh` login) or the
+driver (its own dispatch record) — and never by reading a field the sender chose.
 
 ### 11.4 Untrusted content passing through
 
@@ -763,12 +851,16 @@ content) and never sanitises it: silently editing an agent's input is unreproduc
 
 ### 11.5 Producer and permission model
 
+One host, one operator; the boundary is now the process, not a GitHub job.
+
 | Component | Permissions | Holds | Can emit |
 |---|---|---|---|
-| Control plane (`loopmill step`) | `contents: read`, `actions: write`, plus the state-branch credential from the `loopmill-control` environment | no vendor credential | every `control-plane` event |
-| Agent job (`loopmill run-node`) | `contents: write`; `pull-requests`/`issues: write` only for `effects: external` nodes | the vendor credential from `loopmill-agent` | `node-started`, `node-completed`, `node-failed`, `node-timed-out` for its own Attempt |
-| Ingest workflow | `contents: read` + dispatch | nothing | `run-requested`, `human-decided`, `node-observed`, `node-*` derived from `workflow_run` |
-| Human | GitHub identity | — | `human-decided`, `resumed`; a human-requested Run reaches the machine as a `run-requested` that ingest stamps `producer: trigger` |
+| Driver (`control-plane`: `loopmill run` / `step`) | reads and writes `.loopmill/state.sqlite` and manages the Run's worktree on the host | no vendor credential | every `control-plane` event |
+| `backend:local` (the node executor, a subprocess of `run`) | the runtime CLI's own permission profile (`readonly`/`workspace`/`full`); `gh`/`git push` denied by default (`docs/design/mvp-design.md` §13) | the CLI's own login on the host (`claude`, `codex`) | `node-started`, `node-completed`, `node-failed`, `node-timed-out` for its own Attempt |
+| `backend:fake` | none — fixture replay for tests and CI | nothing | the same event set as `local`, sourced from a fixture |
+| `human`, via polling or the host CLI | the GitHub identity a poll authenticated, or the host's own OS/`gh` identity for `loopmill approve`/`reject` | — | `human-decided`, `resumed`; a human-requested Run reaches the machine as a `run-requested` that polling stamps `producer: trigger` |
+| `trigger` | the OS scheduler, an operator-invoked `loopmill run`, or a polled GitHub event | — | `run-requested` |
+| (**reserved**) `backend:github-actions`, and that integration's polling | job-scoped GitHub permissions; a job secret for the vendor credential (ADR-002 Appendix A) | the vendor credential from a job secret | the same node-level and control-flow events, across a process boundary |
 
 ### 11.6 The reserved `signature` field
 
@@ -778,10 +870,11 @@ minor version bump rather than a breaking change.
 
 The intended future shape: a detached HMAC-SHA256 over the JCS-canonicalised (RFC 8785) envelope with
 `signature` removed, formatted `hmac-sha256:<keyId>:<base64url>`, with per-producer keys distributed as
-job secrets. It buys producer authentication on transports GitHub does not already authenticate — which
-today is none of them, since every current transport is authenticated by GitHub itself. That is exactly
-why it is reserved rather than implemented: an unverified signature field is worse than no field,
-because it invites readers to trust it.
+job secrets. It buys producer authentication on a transport nothing else authenticates — under the
+reserved GitHub paths that is none of them today, since GitHub authenticates every one of them itself;
+the MVP's in-process and stdin/`--event-file` transports are implicitly authenticated by process and
+host ownership instead. That is exactly why `signature` is reserved rather than implemented: an
+unverified signature field is worse than no field, because it invites readers to trust it.
 
 ---
 
@@ -850,7 +943,7 @@ eventId     = 06G7BXFYZ09DF0AZG7Y0K6EADR
 Deriving twice from the same delivery must give the same 26 characters; changing any byte of the seed
 must change the last 16.
 
-**TV-3 — size accounting (section 7.5).** `node-completed.json`, the largest example: 1,739 B as stored
+**TV-3 — size accounting (section 7.6).** `node-completed.json`, the largest example: 1,739 B as stored
 (pretty-printed, 1,943 B when that text is escaped into a JSON string) and 1,422 B compact, which is the
 wire form, 1,568 B escaped. Escaping costs about +10% on realistic content; the worst case is +100% (a
 string of nothing but quotes and backslashes), which is why the encoded-body check exists and why the
@@ -901,8 +994,8 @@ the parser must yield exactly the first object (`eventId` ending `T05TRH`), must
 must ignore the second block entirely. A body whose first fence line is ` ```loopmill ` (indented),
 ```` ```loopmill json ```` or ```` ```LOOPMILL ```` yields **no** envelope.
 
-**TV-7 — idempotency.** Applying the same `eventId` twice writes no second event file and produces no
-second commit. Applying a `node-completed` whose `(cycle, nodeId, attempt)` is not the in-flight Attempt
+**TV-7 — idempotency.** Applying the same `eventId` twice persists no second event and commits no
+second transaction. Applying a `node-completed` whose `(cycle, nodeId, attempt)` is not the in-flight Attempt
 produces exactly one `ignored-stale` with `reason: stale_attempt` and no state change. Both are
 control-plane behaviours, asserted by the control-plane test suite rather than by the schema.
 
@@ -910,7 +1003,9 @@ control-plane behaviours, asserted by the control-plane test suite rather than b
 
 ## 14. Open items
 
-- The dispatch permission scopes in 7.5 need confirmation against the live API (SPIKE-3).
+- The dispatch permission scopes in 7.4-7.5 apply only to the reserved `github-actions` integration and
+  are not needed by the MVP; confirming them against the live API is deferred until that integration is
+  built.
 - The comment body limit is a soft, community-corroborated number; if GitHub documents it differently,
   only the wording of 7.3 changes, never the 32 KiB rule.
-- `signature` stays reserved until there is a transport GitHub does not authenticate for us.
+- `signature` stays reserved until there is a transport nothing else authenticates for us.

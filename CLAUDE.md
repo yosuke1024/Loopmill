@@ -10,7 +10,9 @@
 - State the chosen model in the delegation so the choice is visible and reviewable.
 
 ## Current state
-- Design documents live under `docs/design/` (`mvp-design.md` is the source of truth, v0.5), decisions under `docs/adr/`,
+- Design documents live under `docs/design/` (`mvp-design.md` is the source of truth, v0.6: execution on a
+  user-managed host, see `docs/adr/ADR-002-local-self-hosted-execution.md`), decisions under `docs/adr/`,
   contracts under `docs/spec/`, spike plans and results under `docs/spikes/`.
 - `spikes/` holds throwaway prototypes and harnesses; they are not the product and may be deleted once their question is answered.
-- No product code exists yet. Do not start implementing the engine before the spikes listed in `docs/spikes/README.md` have results.
+- No product code exists yet. Do not start implementing the engine before the m0 contract freeze in
+  `docs/design/mvp-design.md` §20.2 is done; SPIKE-4 (`docs/spikes/README.md`) is part of m0.

@@ -56,7 +56,7 @@
     "transitionResultKind": ["applied", "duplicate", "ignored-stale", "invalid"],
     "actionType": ["dispatch", "request-approval", "observe", "wait", "finish"],
     "producer": ["control-plane", "backend:<id>", "human", "trigger"],
-    "gateMode": ["environment-reviewers", "pull-request-review", "label"],
+    "gateMode": ["cli", "pull-request-review", "label"],
     "matcherKind": ["comment-block", "file-in-diff", "cloud-status"],
     "matcherOutcome": ["found_valid", "found_invalid"],
     "onFailure": ["fail_run", "continue", "retry_edge:<edgeId>"],

@@ -28,14 +28,23 @@ If a spike result honestly meets one of these, the fix is to revisit the decisio
 sheet's positioning (section 1) and scope (section 11), not to route around the
 finding.
 
+**Update, 2026-09-06.** The maintainer adopted `docs/adr/ADR-002-local-self-hosted-execution.md`:
+Loopmill executes on a user-managed host, and GitHub is the repository and the source of events, not
+the control plane. Under that decision, STOP (a) is reworded to **no supported AI CLI can execute
+unattended on a user-managed host under subscription authentication**; STOP (b) is **retired** — it was
+a statement about hosted runners; STOP (c) is unchanged. The three conditions above are kept exactly as
+written: they are the ones the spikes below were actually run against, and the sections that follow read
+their results both ways — as measured, and as ADR-002 now reads them.
+
 ## 2. Spike overview
 
 | ID | Question | Status | Gate it retires | Owner |
 |---|---|---|---|---|
-| SPIKE-1 | Does `claude -p` run headless on a GitHub-hosted runner authenticated only with `CLAUDE_CODE_OAUTH_TOKEN`, with usable usage JSON and structured output? | **Measured — PASS** (hosted run 34024962852, 2026-09-06, claude-code 2.1.263: C1-C4 and C7 PASS); C6 SIGTERM measured on a C6-only re-run (34026065026): exit 143, no result | STOP (a) **not triggered**; `github-actions` keeps Claude Code as its primary runtime (decision sheet §4, §11) | Maintainer (needs a `claude setup-token` from their own subscription, stored as a repository secret) |
-| SPIKE-2 | Can Loopmill drive a Codex node on OpenAI's cloud under a ChatGPT subscription, get a machine-readable result onto GitHub, and re-trigger it, without an API key? | **Measured — NO-GO** (user runs R0, R1, R4, R8 on 2026-09-06: R1 PASS, R4 FAIL, R8 FAIL with `GITHUB_TOKEN`); the `observed` backend is dropped by maintainer decision | Decided the `observed` backend (decision sheet §4, §11): out. STOP (b) now hinges on SPIKE-2b | Maintainer (real ChatGPT Plus account, manual web-UI steps) |
-| SPIKE-2b | Does a seeded Codex ChatGPT `auth.json` survive refresh-token rotation on an ephemeral GitHub-hosted runner? | Documentary groundwork done (status table item 4d); not yet run | Decides whether `codex` on `github-actions` can leave EXPERIMENTAL status (decision sheet §11) | Maintainer (needs a real ChatGPT login to seed `auth.json` once) |
-| SPIKE-3 | Can `loopmill step` be a non-resident, event-sourced process that stays correct under duplicate, concurrent, and interrupted delivery, chained purely by GitHub Actions? | Measured — 21/21 local tests, 44 hosted workflow runs in two batches (chains and duplicates; then a forced CAS storm, envelope sizes, the concurrency group's pending-run behaviour, an interrupted job and an `always-fail` chain) | Confirms/adjusts decision sheet §6 (control-plane algorithm, exit codes) and §8 (state persistence); does not change positioning. One mechanism change: no per-run concurrency group for `step` (design §7.5) | Automated — a simulated backend, no vendor credentials required |
+| SPIKE-1 | Does `claude -p` run headless on a GitHub-hosted runner authenticated only with `CLAUDE_CODE_OAUTH_TOKEN`, with usable usage JSON and structured output? | **Measured — PASS** (hosted run 34024962852, 2026-09-06, claude-code 2.1.263: C1-C4 and C7 PASS); C6 SIGTERM measured on a C6-only re-run (34026065026): exit 143, no result. **v0.6 reading:** PASS — the CLI contract, runner-independent (ADR-002 Appendix B) | STOP (a) **not triggered**; `github-actions` keeps Claude Code as its primary runtime (decision sheet §4, §11) | Maintainer (needs a `claude setup-token` from their own subscription, stored as a repository secret) |
+| SPIKE-2 | Can Loopmill drive a Codex node on OpenAI's cloud under a ChatGPT subscription, get a machine-readable result onto GitHub, and re-trigger it, without an API key? | **Measured — NO-GO** (user runs R0, R1, R4, R8 on 2026-09-06: R1 PASS, R4 FAIL, R8 FAIL with `GITHUB_TOKEN`); the `observed` backend is dropped by maintainer decision. **v0.6 reading:** NO-GO stands; `observed` is removed, and Codex returns as a provider through `codex exec` on the host (SPIKE-4) | Decided the `observed` backend (decision sheet §4, §11): out. STOP (b) now hinges on SPIKE-2b | Maintainer (real ChatGPT Plus account, manual web-UI steps) |
+| SPIKE-2b | Does a seeded Codex ChatGPT `auth.json` survive refresh-token rotation on an ephemeral GitHub-hosted runner? | Documentary groundwork done (status table item 4d); not yet run. **v0.6 reading:** superseded — no credential is moved to a runner Loopmill does not own; still not run | Decides whether `codex` on `github-actions` can leave EXPERIMENTAL status (decision sheet §11) | Maintainer (needs a real ChatGPT login to seed `auth.json` once) |
+| SPIKE-3 | Can `loopmill step` be a non-resident, event-sourced process that stays correct under duplicate, concurrent, and interrupted delivery, chained purely by GitHub Actions? | Measured — 21/21 local tests, 44 hosted workflow runs in two batches (chains and duplicates; then a forced CAS storm, envelope sizes, the concurrency group's pending-run behaviour, an interrupted job and an `always-fail` chain). **v0.6 reading:** PASS — the transition, journal and concurrency properties carry to the SQLite store; the git-branch store and Actions chaining are the reserved backend's mechanism | Confirms/adjusts decision sheet §6 (control-plane algorithm, exit codes) and §8 (state persistence); does not change positioning. One mechanism change: no per-run concurrency group for `step` (design §7.5) | Automated — a simulated backend, no vendor credentials required |
+| SPIKE-4 | Does `codex exec` run non-interactively on the operator's own host under a ChatGPT login, with structured output, a terminal-state and exit-code contract, usage from `turn.completed`, and does a scheduler-started process (`launchd`, a `systemd` user timer) authenticate `claude`/`codex`? | **Planned — harness not yet built** | The `codex` runtime's status (`VERIFIED` or `PLANNED / EXPERIMENTAL`), `doctor --scheduler`'s check list (ADR-002 D10, Appendix B) | Maintainer (needs `codex`/`claude` logged in on the host, macOS and Linux) |
 
 Status legend: **ready** = harness exists, nothing has been executed against a real
 account yet; **documentary done** = everything answerable by reading source/binary
@@ -193,6 +202,12 @@ run (30-day retention). The recorded result objects behind C2, C5a and C6-SIGINT
   minutes of retries before failing.
 - **No no-TTY hang** on 2.1.263, so `invocation: on-demand` stands and acceptance criterion A14 needs no
   PTY clause for claude-code at this version.
+
+**v0.6 reading.** Every finding above is a property of the Claude Code CLI itself — the
+`is_error`/`terminal_reason` discriminator, `modelUsage` as the usage basis, the SIGINT/SIGTERM contract,
+the `rate_limit_event` quota signal, and the absence of a no-TTY hang — not of the GitHub-hosted runner it
+was measured on, and so it carries unchanged onto a user-managed host (`docs/adr/ADR-002-local-self-hosted-execution.md`
+Appendix B). SPIKE-4 exists to confirm the same contract locally, not to re-derive it.
 
 ---
 
@@ -639,6 +654,14 @@ separation between the control-plane and agent jobs.
   envelope rule sits comfortably under it (65,400 bytes passed, 66,000 were
   refused before any run was created).
 
+**v0.6 reading.** The properties this spike proves — a pure `transition`, an append-only hash-chained
+journal, and correctness under duplicate, concurrent and interrupted delivery — carry over to the SQLite
+journal and its per-Run lock (`docs/design/mvp-design.md` §9); only the medium changes, from an orphan git
+branch to a local database, and the concurrency primitive changes from compare-and-swap on a git ref to a
+SQLite transaction. The git-branch store, `GITHUB_TOKEN` chaining and the concurrency-group behaviour
+measured here are kept as the reference for the reserved `github-actions` integration, not as the MVP's
+own mechanism (`docs/adr/ADR-002-local-self-hosted-execution.md` Appendix A and D3-D4).
+
 ### How to reproduce
 
 Start a fresh chain (mints a new run because the default event's `runId` is the
@@ -679,37 +702,92 @@ node spikes/spike-3-control-plane/step.mjs rebuild-snapshot \
 
 ---
 
-## 6. Gate status and next steps
+## 6. SPIKE-4 — Codex CLI subscription backend and the scheduler context
+
+Location: `spikes/spike-4-codex-cli/` (to be created).
+
+### What it proves
+
+Whether `codex exec`, authenticated with nothing but the operator's own ChatGPT login on the host, can
+serve as Loopmill's `codex` runtime under `docs/adr/ADR-002-local-self-hosted-execution.md`: non-interactive
+execution, structured output, a terminal-state and exit-code contract, and thread-cumulative usage
+normalised into the common Usage record — plus whether a process started by the operating system's own
+scheduler, with no interactive session, can reach that same login state for both `claude` and `codex`.
+This is the harness for ADR-002's risks R1 (`codex exec` does not run non-interactively with
+machine-readable results, usage and a terminal signal), R2 (a scheduler-started process cannot reach the
+CLI's login state) and R3 (`claude -p` behaves differently on the operator's own host than on the hosted
+runner SPIKE-1 measured it on).
+
+### Prerequisites
+
+1. `codex` logged in via a ChatGPT subscription on the host (`codex login`); `OPENAI_API_KEY` and
+   `CODEX_API_KEY` unset, so a run cannot silently fall back to metered billing.
+2. `claude` logged in on the same host (interactive login, or `CLAUDE_CODE_OAUTH_TOKEN`).
+3. Both a macOS host and a Linux host — the scheduler-context checks (D9) are per-platform and neither
+   substitutes for the other.
+
+### Checks D1-D10 mapped to design questions
+
+| Check | What it runs | Design question it answers |
+|---|---|---|
+| D1 | `codex exec --json "<prompt>"` with stdin from `/dev/null`, no TTY, ChatGPT login only | Whether `subscription-login` runs non-interactively at all — the precondition for `codex` as an MVP runtime (`docs/design/mvp-design.md` §6.4, ADR-002 D5). |
+| D2 | Same, plus `--output-schema <file>` | Whether structured output is schema-conformant and survives Loopmill's own re-validation (design §11). |
+| D3 | A success, a forced failure, and an invalid argument | The terminal-state and exit-code contract: `turn.completed` vs `turn.failed`, and whether exit codes 0/1/2 are legible and distinct (design §6.3, §10). |
+| D4 | Two sequential turns on one thread | Whether `turn.completed.usage` is thread-cumulative as documented, and whether the diff-since-last-turn rule (design §14.2) recovers the correct per-attempt figure. |
+| D5 | SIGINT, SIGTERM, and a timeout against a long-running turn | Which signal `cancel(runId)` must send, and whether a usable result or usage record survives cancellation (design §14.4). |
+| D6 | Grep output for a plan-limit message; inspect for any structured field alongside it | The quota signal's shape for `codex` — prose `usage limit` only, or something machine-readable — feeding `WAITING_FOR_QUOTA` (design §10). Informational, no pass/fail, same status as SPIKE-1's C9. |
+| D7 | A prompt that edits a file, run inside a git worktree | Whether `filesChanged` and the worktree diff are what design §7.2 and §18 assume for the `local` backend. |
+| D8 | Map D1-D7's raw output through the per-runtime mapping | Whether the result normalises into the canonical Usage record (design §14.1) with the same shape discipline as `docs/spec/usage-fixtures/claude-recorded-*.json`. |
+| D9 | `claude -p` and `codex exec` invoked by a `launchd` user agent with the screen locked and with no user session, and by a `systemd --user` timer | Whether a scheduler-started process reaches the macOS login keychain, `CODEX_HOME`, and the operator's `gh` credential store (design §7.5, ADR-002 R2). |
+| D10 | The SPIKE-1 harness, `ONLY=C1,C2,C3,C4,C6,C7`, run locally on macOS | Whether the hosted-runner contract SPIKE-1 measured also holds on the operator's own host (ADR-002 R3). |
+
+### Pass/fail criteria
+
+D1-D4 and D7 all PASS → the `codex` runtime is `VERIFIED` (design §20.1); a FAIL on any of them keeps
+Codex at `PLANNED / EXPERIMENTAL` behind the same provider abstraction and does not stop the MVP (ADR-002
+D10). D9 does not gate the runtime at all — on each of macOS and Linux independently, it decides the
+per-platform notes in design §7.5 and the check list `doctor --scheduler` must run. D5, D6, D8 and D10 are
+expected to surface useful detail regardless of outcome, the same way C5, C6, C9 and C10 did in SPIKE-1.
+
+### Results
+
+Not yet run — the harness at `spikes/spike-4-codex-cli/` does not exist yet.
+
+| Check | Status |
+|---|---|
+| D1-D10 | not yet run |
+
+---
+
+## 7. Gate status and next steps
 
 | Gate | Question | Status (2026-09-06) | Evidence |
 |---|---|---|---|
 | G1 | SPIKE-1: `claude-code` headless on a hosted runner with subscription OAuth only | **green** | run 34024962852, C1-C4 and C7 PASS (§3) |
-| G2 | SPIKE-2: Codex Cloud as an `observed` backend, GO = R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8) | **red — NO-GO**; `observed` dropped by maintainer decision (2026-09-06) | R4 FAIL, R8 FAIL with `GITHUB_TOKEN` (§4) |
-| G3 | SPIKE-2b: seeded `auth.json` survives ephemeral runners | **open** — not run | — |
-| G4 | SPIKE-3: non-resident, event-sourced `step` on real GitHub | **green** | 21/21 local, 44 hosted runs (§5); `repository_dispatch` deferred to the default branch |
+| G2 | SPIKE-2: Codex Cloud as an `observed` backend, GO = R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8) | **red — NO-GO**; `observed` dropped by maintainer decision (2026-09-06) | R4 FAIL, R8 FAIL with `GITHUB_TOKEN` (§4). Under v0.6 this no longer gates the MVP at all: `observed` is removed from the design outright, not merely left ungated (ADR-002 D4) |
+| G3 | SPIKE-2b: seeded `auth.json` survives ephemeral runners | **superseded** — not run | ADR-002: no credential is ever moved to a runner Loopmill does not own, so the question no longer arises |
+| G4 | SPIKE-3: non-resident, event-sourced `step` on real GitHub | **green — reinterpreted** | 21/21 local, 44 hosted runs (§5); the transition/journal/concurrency properties carry over to the SQLite store (ADR-002 Appendix B); the git-branch store and `GITHUB_TOKEN` chaining measured here are the reserved `github-actions` backend's mechanism, not the MVP's own |
 | G5 | STOP (c): vendor terms read verbatim from primary sources | **open** — R11 not done | design §19 rows still `[L]` for OpenAI |
+| G6 | SPIKE-4: `codex exec` on the host, and the scheduler context | **open** — harness not yet built | §6 |
 
-STOP conditions: **(a) not triggered** (G1); **(b) not triggered yet** — G2 is red, but a
-cross-vendor path under subscriptions still exists through `codex exec` (`local` today;
-`github-actions` pending G3), so (b) is met only if SPIKE-2b also fails, in which case the
-Claude-only cross-role fallback in design §22 applies and D2 is withdrawn; **(c)
-undecided** until R11.
+**STOP conditions (v0.6, ADR-002 D10):** **(a)** no supported AI CLI can execute unattended on a
+user-managed host under subscription authentication — **not triggered**, pending the trivial host
+confirmation SPIKE-4 D10 is expected to give; **(b)** — "no cross-vendor path exists under subscriptions,
+and the only working shape is GitHub Actions plus API keys" — **retired**: it was a statement about
+hosted runners, and does not survive execution moving to a user-managed host; **(c)** vendor terms, read
+verbatim, forbid the single-user unattended use Loopmill relies on — **open**, undecided until R11.
 
-1. **Run SPIKE-2b** (seeded `auth.json` survival on an ephemeral GitHub-hosted runner):
-   it is now the gate for cross-vendor and for STOP (b). Needs the maintainer's ChatGPT
-   login once to seed `auth.json`; OpenAI documents the recipe as "advanced" and discourages
-   it, so the README must quote that caveat verbatim. Then delete the SPIKE-2 leftovers:
-   PR `#1`, branch `spike2/r8-mention`, and the `loopmill-codex-spike` environment.
-2. **SPIKE-1 follow-ups:** re-run the harness at every claude-code
-   version bump and diff the result shape against `claude-recorded-*.json`; record
-   the `rate_limit_event` refusal shape the first time a run actually hits a
-   limit (C9).
-3. **SPIKE-3 follow-ups:** `repository_dispatch` chaining once the control-plane
-   workflow lives on the default branch; deploy-key/ruleset privilege separation
-   between the control-plane and agent jobs; the snapshot O(n²) growth defect
-   (§8 of the design) before the real `loopmill step` is built on this shape.
-4. **Re-evaluate STOP conditions (b) and (c)** in writing once SPIKE-2 and R11
-   have results, and update the decision sheet's section 13 and section 11 scope
-   if either is honestly met.
-5. Only once the above close, proceed to the m0 "spikes and contract freeze"
-   milestone as scoped in decision sheet §11.
+1. **Build and run SPIKE-4** (`spikes/spike-4-codex-cli/`): the D1-D10 harness, plus the macOS and Linux
+   scheduler-context probes (D9). This is now the one thing standing between STOP (a) and a written
+   "not triggered".
+2. **R11 terms reading** (still needed): archive verbatim quotes from OpenAI's terms-of-use and
+   CI/CD-auth pages on an unrestricted machine, for STOP (c).
+3. **Clean up the SPIKE-2 leftovers**, now that `observed` is removed rather than merely ungated: PR
+   `#1`, branch `spike2/r8-mention`, and the Codex Cloud environment `loopmill-codex-spike`.
+4. **SPIKE-3's follow-ups are now post-MVP items for the reserved `github-actions` backend**, not
+   blockers for the SQLite-backed MVP store: `repository_dispatch` chaining and deploy-key/ruleset
+   privilege separation between the control-plane and agent jobs. The `snapshot.json` O(n²) growth
+   defect is the one SPIKE-3 finding that does carry over: the SQLite store keeps its idempotency index in
+   the `events` table, never as id lists inside the snapshot (design §9.1).
+5. Once SPIKE-4 and R11 close, proceed to the m0 "spikes and contract freeze" milestone
+   (`docs/design/mvp-design.md` §20.2).

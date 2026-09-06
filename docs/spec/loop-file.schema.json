@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://loopmill.dev/schema/loop-file/0.5.json",
+  "$id": "https://loopmill.dev/schema/loop-file/0.6.json",
   "title": "Loopmill Loop file",
-  "description": "Schema for `.loopmill/<slug>.loop.yaml`. The Loop file is the source of truth for a Loopmill Loop: a bounded, versioned definition of an AI engineering loop that may span several vendors and several execution backends. See docs/spec/loop-file.md for the semantics this schema cannot express.",
+  "description": "Schema for `.loopmill/<slug>.loop.yaml`. The Loop file is the source of truth for a Loopmill Loop: a bounded, versioned definition of an AI engineering loop that may span several vendors and several execution backends. See docs/spec/loop-file.md for the semantics this schema cannot express. 0.6.0 removes the `observed` backend and the `artifact` field / `captured.*` accessor, and adds `human.target`; `github-actions` and `trigger.kind: event` remain as reserved ids, rejected by validation rather than by the schema.",
   "type": "object",
   "required": ["schemaVersion", "slug", "name", "trigger", "repos", "nodes"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": {
       "$ref": "#/$defs/semver",
-      "description": "Version of this Loop file format. MVP accepts 0.5.x."
+      "description": "Version of this Loop file format. MVP accepts 0.6.x."
     },
     "slug": {
       "$ref": "#/$defs/identifier",
@@ -82,15 +82,17 @@
     },
     "reference": {
       "type": "string",
-      "pattern": "^(nodes\\.[a-z][a-z0-9-]*\\.(structured\\.[A-Za-z0-9_.]+|captured\\.[A-Za-z0-9_]+|stdout|exitCode|filesChanged)|run\\.[a-z]+|cycle\\.index|trigger\\.[A-Za-z0-9_.]+)$",
-      "description": "Dotted reference to a value produced earlier in the Run."
+      "pattern": "^(nodes\\.[a-z][a-z0-9-]*\\.(structured\\.[A-Za-z0-9_.]+|stdout|exitCode|filesChanged)|run\\.[a-z]+|cycle\\.index|trigger\\.[A-Za-z0-9_.]+)$",
+      "description": "Dotted reference to a value produced earlier in the Run. `captured.<name>` is reserved for a future artifact-matcher backend and is not a legal accessor in this version."
     },
     "scalar": {
       "type": ["string", "number", "boolean", "null"],
       "description": "A JSON scalar. Loopmill substitutes only scalars; arrays and objects are never templated."
     },
     "backendId": {
-      "enum": ["github-actions", "observed", "local", "fake"]
+      "enum": ["local", "fake", "github-actions"],
+      "default": "local",
+      "description": "`local` is the MVP's primary and default execution backend. `fake` replays fixtures for tests and CI. `github-actions` is reserved: the id stays valid here so a Loop file that names it is rejected by `loopmill validate` (LM-VAL-028) with a clear message, rather than by a bare schema/enum failure."
     },
     "runtimeId": {
       "enum": ["claude-code", "codex"]
@@ -103,7 +105,8 @@
       "default": "workspace"
     },
     "isolation": {
-      "enum": ["ephemeral", "worktree", "shared"]
+      "enum": ["ephemeral", "worktree", "shared"],
+      "default": "worktree"
     },
     "effects": {
       "enum": ["none", "external"],
@@ -254,7 +257,8 @@
         "maxUnmeasuredExecutions": {
           "type": "integer",
           "minimum": 0,
-          "description": "Per Run. Number of agent Node Executions that are NOT measured (usage provenance `unavailable` or `estimated`) that the Run may perform. Default: max(1, observedAgentNodes * (1 + maxEdgeIterations)) - loop-file.md 7.2. This is the binding guard whenever usage coverage is below 100%."
+          "default": 0,
+          "description": "Per Run. Number of agent Node Executions that are NOT measured (usage provenance `unavailable` or `estimated`) that the Run may perform. Default 0: no MVP backend declares `usage: none`, so this is the binding guard only once a future backend does (loop-file.md 7.2)."
         },
         "maxRunsPerWindow": {
           "type": "object",
@@ -366,36 +370,6 @@
       }
     },
 
-    "artifactMatcher": {
-      "type": "object",
-      "required": ["kind", "deadline"],
-      "additionalProperties": false,
-      "description": "How Loopmill finds the result of a node that ran on a vendor's own cloud (`observed` backend). Loopmill emits the trigger and then polls for this artifact until the deadline.",
-      "properties": {
-        "kind": {
-          "enum": ["comment-fenced-block", "file-in-diff", "pr-body"],
-          "description": "comment-fenced-block: a ```loopmill fenced JSON block in an Issue or PR comment. file-in-diff: a JSON file at `path` in the task's diff. pr-body: a ```loopmill fenced JSON block in the pull request body."
-        },
-        "path": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).*\\.json$",
-          "description": "Repository-relative path to the JSON artifact. Required for `file-in-diff`, forbidden otherwise."
-        },
-        "deadline": {
-          "$ref": "#/$defs/duration",
-          "description": "How long the Node Execution stays in OBSERVING before it becomes TIMED_OUT."
-        }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "kind": { "const": "file-in-diff" } }, "required": ["kind"] },
-          "then": { "required": ["path"] },
-          "else": { "not": { "required": ["path"] } }
-        }
-      ]
-    },
-
     "node": {
       "oneOf": [
         { "$ref": "#/$defs/agentNode" },
@@ -443,7 +417,6 @@
           "description": "Repository-relative path to the prompt. Its contents are templated exactly like an inline `prompt`."
         },
         "structuredOutput": { "$ref": "#/$defs/structuredOutputSchema" },
-        "artifact": { "$ref": "#/$defs/artifactMatcher" },
         "inputs": { "$ref": "#/$defs/inputs" },
         "timeout": { "$ref": "#/$defs/duration" },
         "onFailure": { "$ref": "#/$defs/onFailure" },
@@ -516,8 +489,13 @@
         "kind": { "const": "human" },
         "id": { "$ref": "#/$defs/identifier" },
         "mode": {
-          "enum": ["environment-reviewers", "pull-request-review", "label"],
-          "description": "environment-reviewers: a GitHub Environment with required reviewers gates the job before it starts. pull-request-review: an approving PR review. label: removing the `loopmill:hold` label approves, adding `loopmill:reject` rejects."
+          "enum": ["cli", "label", "pull-request-review"],
+          "description": "cli: `loopmill approve|reject <runId>` on the host writes the decision directly. label: adding `loopmill:approve` or `loopmill:reject` to the `target` node's Issue or PR, ingested by `resume --due` polling `gh`. pull-request-review: an approving review on the pull request, ingested the same way."
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^nodes\\.[a-z][a-z0-9-]{1,63}$",
+          "description": "The node whose Issue or pull request carries the label or review. Defaults to the Run's most recent Issue or PR. Meaningless for `mode: cli`."
         },
         "subject": {
           "type": "string",
