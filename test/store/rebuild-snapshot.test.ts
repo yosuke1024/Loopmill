@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 
 import { openStore } from "../../src/store/sqlite.ts";
-import type { Envelope } from "../../src/types/envelope.ts";
+import type { StoredEvent } from "../../src/store/sqlite.ts";
 import type { RunSnapshot } from "../../src/types/state.ts";
 import { freshDb, makeEnvelope, makeSnapshot, NOW, ZERO_DIGEST } from "../fixtures/store/helpers.ts";
 
@@ -23,9 +23,11 @@ function setUpRun(dbPath: string, runId = "run_1", loopId = "test-loop") {
 // A trivial fold (docs' own suggestion: "a counter") — it ignores the events' content and only
 // derives `snapshotOf` from how many there are. This is a legitimate fold to test identity
 // against, as long as the snapshot given to `append` was built the same way for the same event
-// count — which every test below does.
-function counterFold(runId: string, loopId: string): (events: Envelope[]) => RunSnapshot {
-  return (events) => makeSnapshot({ runId, loopId, snapshotOf: events.length });
+// count — which every test below does. Amendment (m0+), 2026-09-07: `rebuildSnapshot`'s `fold`
+// callback takes the stored rows (`StoredEvent[]`: `kind`/`recordedAt` included), not a bare
+// `Envelope[]` — this fold still only needs the row count.
+function counterFold(runId: string, loopId: string): (rows: StoredEvent[]) => RunSnapshot {
+  return (rows) => makeSnapshot({ runId, loopId, snapshotOf: rows.length });
 }
 
 test("rebuildSnapshot: a matching fold reports identical, byte for byte", async () => {

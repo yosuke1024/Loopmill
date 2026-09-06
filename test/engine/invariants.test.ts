@@ -73,7 +73,7 @@ test("I-01: snapshot === fold(events) — fold replays a full trace and reproduc
   assert.equal(canonicalJson(refolded), canonicalJson(expected));
 });
 
-test("I-01b: foldEnvelopes (the store.rebuildSnapshot adapter) reproduces the same snapshot from the plain envelope list", () => {
+test("I-01b: foldEnvelopes (a plain-Envelope[] convenience; store.rebuildSnapshot itself now hands fold() its StoredEvent rows directly, Amendment (m0+) 2026-09-07) reproduces the same snapshot from the plain envelope list", () => {
   const steps = finishHappyPath(happyPathSteps());
   const { snapshot: expected, results } = drive(steps);
   const allEnvelopes: Envelope[] = [];
@@ -339,12 +339,13 @@ test("I-21: a NO_PROGRESS cycle leaves traversals[e] unchanged and increments fr
 });
 
 test("I-22: two consecutive NO_PROGRESS terminate FAILED(no_progress_stalled); a non-NO_PROGRESS body execution resets noProgressStreak to 0", () => {
-  // NO_PROGRESS_ROOMY_LOOP (test/fixtures/engine/onfailure-loop.ts), not the reference loop: the
-  // reference loop's `review-changes` (an agent, inside the same body) makes `verdictFingerprint`
-  // asymmetric between a still-in-progress cycle and an already-completed one — see
-  // fingerprint.ts's own comment and 13.2's/rows.test.ts's R-15/R-16 tests, which hit the same
-  // thing and were fixed the same way. The "roomy" variant (maxIterations: 5, not 1) leaves space
-  // to interleave a genuine-progress (paid) traversal between two NO_PROGRESS (free) ones.
+  // NO_PROGRESS_ROOMY_LOOP (test/fixtures/engine/onfailure-loop.ts), not the reference loop: this
+  // fixture has no sibling agent node in the body (unlike the reference loop's `review-changes`),
+  // so `verdictFingerprint` (state-machine.md §6.6 Amendment (m0+) 2026-09-07; see
+  // fingerprint.test.ts) is always the empty-array hash on both sides of the comparison, isolating
+  // this invariant's own change-set/streak logic — see rows.test.ts's R-15/R-16 tests for the same
+  // choice. The "roomy" variant (maxIterations: 5, not 1) leaves space to interleave a
+  // genuine-progress (paid) traversal between two NO_PROGRESS (free) ones.
   const loop = NO_PROGRESS_ROOMY_LOOP;
   const steps: Step[] = [{ now: T0, event: runRequested(T0, { loopId: loop.slug, loopVersion: loop.loopVersion }) }];
   steps.push({ now: "2026-09-06T06:05:00.000Z", event: nodeCompleted("2026-09-06T06:05:00.000Z", { cycle: 0, nodeId: "setup", attempt: 1, result: { status: "succeeded", exitCode: 0 }, loopId: loop.slug, loopVersion: loop.loopVersion }) });

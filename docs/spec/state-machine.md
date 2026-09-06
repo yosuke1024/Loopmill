@@ -395,6 +395,17 @@ Note on R-08, R-14, R-17, R-22: a Run may terminate on a **guard**, without any 
 failure. This is the "check before dispatch" discipline (decision sheet §5, §10): the budget and the
 iteration cap are enforced *before* spending, never by killing work in flight.
 
+**Amendment (m0+), 2026-09-07**: R-01 emits `run-started` and, in the same transition, folds in the
+R-05..R-08 dispatch decision — the entry node's own `preDispatch`/routing outcome (`node-dispatched`,
+`human-requested`, `node-dispatched` for an observed backend, or `run-finished(outcome)`) is decided
+and emitted alongside `run-started`, not as a separate step reached by re-submitting `run-started` as
+its own inbound event. So `run-requested` alone moves the Run from `∅` to `RUNNING` / `WAITING_HUMAN`
+/ `WAITING_OBSERVED` / a terminal state in one transition; `loopmill step` never re-feeds an envelope
+this engine itself emitted (§3.3: inbound versus emitted are disjoint sets) back in as a new inbound
+event to reach R-05..R-08 as a second step. (`PENDING` can still be observed at rest after a crash —
+D-22 — in which case the sweep synthesises a fresh `run-started` to re-run R-05..R-08 on its own;
+that is recovery, not the ordinary R-01 path this note describes.)
+
 ```mermaid
 stateDiagram-v2
     direction LR
@@ -901,7 +912,11 @@ verdictFingerprint(cycle) =
     // evidence text included: a critic that fails with genuinely different evidence each cycle
     // is engaging with changing work and must be allowed to keep iterating
 
-progressFingerprint(cycle, nodeId) = sha256( changeFingerprint || verdictFingerprint )
+// Amendment (m0+), 2026-09-07: verdictFingerprint is read one cycle *behind* the change-set it is
+// paired with — the evidence the node was actually handed before this cycle's attempt began, not
+// whatever a sibling still in *this*, still-in-progress cycle has (or, being still in progress,
+// has not yet) produced. See the note below the rule for why.
+progressFingerprint(cycle, nodeId) = sha256( changeFingerprint(cycle, nodeId) || verdictFingerprint(cycle - 1) )
 ```
 
 **The rule.** An **agent** Node Execution inside a Retry Edge body terminates in `NO_PROGRESS` instead
@@ -915,6 +930,25 @@ of `SUCCEEDED` when **all** of:
 An empty change-set alone is not enough: an agent that changed nothing *and* was handed a different
 verdict is still responding to new information. Byte-identical change-set **and** byte-identical
 verdict is a plateau.
+
+**Amendment (m0+), 2026-09-07.** `verdictFingerprint(cycle - 1)` in rule 3's `progressFingerprint`
+reads "the evidence available before the node started cycle `cycle`'s own attempt" — i.e. whichever
+sibling agent Node Executions cycle `cycle - 1` (already complete, by the time `cycle` dispatches)
+recorded — for *both* sides of the comparison: the current side reads `verdictFingerprint(cycle - 1)`,
+the previous side reads `verdictFingerprint(cycle - 2)`. It is deliberately **not**
+`verdictFingerprint(cycle)`/`verdictFingerprint(cycle - 1)` (i.e. each side paired with its own,
+same-numbered cycle) even though that pairing looks more natural next to `changeFingerprint(cycle,
+nodeId)`. In a body where the node being fingerprinted runs *before* another agent node in the same
+cycle (the reference loop's `implement`, ahead of `review-changes`), that same-cycle reading makes
+`verdictFingerprint(cycle)` the empty-array hash on every check — nothing has run alongside `implement`
+yet, this cycle — while `verdictFingerprint(cycle - 1)` is not (that cycle is already complete). The
+two fingerprints would then differ every time purely from this timing artefact, not from any actual
+change in evidence, so rule 3 could never hold and `NO_PROGRESS` could never fire for such a loop
+regardless of whether the change-set repeated — exactly the failure mode D-08's two-fingerprint split
+was meant to prevent, arrived at from the opposite direction (a false "always different" instead of a
+false "always same"). Reading both sides one cycle back keeps the two fingerprints computed the same
+way relative to each other, so rule 3 again holds exactly when the change-set repeated *and* the
+evidence that produced it was also the same.
 
 **Consequences.**
 
@@ -1080,6 +1114,12 @@ mistake a park for a process that died; the `maxRuntime` clock pauses (D-04).
 infrastructure failure of the attempt, and `maxAttempts` exists for `LOST`/transient retries
 (decision sheet §2). The re-dispatch increments `attempt` (identity must stay unique) but the attempt
 is not *charged*: `chargedAttempts` counts only `FAILED`, `TIMEOUT` and `LOST` classifications.
+
+**Amendment (m0+), 2026-09-07**: the same reading extends to usage coverage — a QUOTA-classified
+attempt's own Attempt record keeps `usage.provenance: 'unavailable'` on the ledger, but it is excluded
+from the Node Execution's "every contributing attempt must be measured" test (`usage-normalization.md`
+§4.1), so a Node Execution that parks on quota and later completes normally is measured, not dragged
+into `maxUnmeasuredExecutions` by the park it recovered from.
 
 **Decision (not in sheet) D-06 — `maxQuotaParks`.** Default 3 per Node Execution. Exceeding it is
 `FAILED(quota_parks_exhausted)` (R-25). Without it, a genuinely exhausted weekly limit could park,
@@ -1417,7 +1457,7 @@ preDispatch(node, cycleIndex, edge?) -> ok | Outcome
        -> MAX_ITERATIONS_EXCEEDED(edge, ...)                          # D-10
 3. if budget.measuredTokens >= budget.maxMeasuredTokens
        -> BUDGET_EXCEEDED(maxMeasuredTokens, limit, observed)
-4. if budget.unmeasuredExecutions >= budget.maxUnmeasuredExecutions
+4. if budget.unmeasuredExecutions > budget.maxUnmeasuredExecutions   # Amendment (m0+), 2026-09-07
        -> BUDGET_EXCEEDED(maxUnmeasuredExecutions, limit, observed)
 5. if budget.activeMs >= budget.maxRuntime
        -> EXPIRED(max_runtime)
@@ -1433,6 +1473,14 @@ blowout. `maxRuntime` sits below the token checks because a token line is a hard
 spend than a wall clock about a machine that may have been slow. The order is fixed, deterministic and
 asserted by a test (invariant I-20); *which* order matters far less than that only one Outcome can ever
 be produced for one breach.
+
+**Amendment (m0+), 2026-09-07 — step 4 reads `>`, not `>=`.** With `>=` and `maxUnmeasuredExecutions`'s
+own MVP default of `0` (§11.1), step 4 would breach on the *very first* dispatch of *every* Run
+(`0 >= 0`), before a single event — measured or not — has ever occurred. `>` keeps step 4 in the same
+"the offending execution already completed by the time the check fires" shape as steps 3, 5 and 6: a
+Run whose unmeasured count has *already reached* the cap (from a dispatch that already finished) is
+refused on the *next* dispatch, and a cap of `0` means "the first unmeasured execution ends the Run at
+its next dispatch", not "no Run may ever dispatch anything".
 
 ### 11.3 Two rules about how budgets bite
 

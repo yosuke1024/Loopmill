@@ -227,12 +227,12 @@ test("R-14: RUNNING + node-completed routes to a retry edge, exhausted -> MAX_IT
 
 test("R-15 / N-09: RUNNING + node-completed(NO_PROGRESS), streak below limit, free traversal available -> RUNNING, free retry-edge-taken", () => {
   // Uses NO_PROGRESS_LOOP (setup -> implement -> verdict -> back-edge), not the reference loop:
-  // the reference loop's `implement` runs *before* `review-changes` in every cycle, so at the
-  // point `implement`'s own NO_PROGRESS guard is evaluated, `verdictFingerprint` for a *prior,
-  // now-fully-completed* cycle already includes that cycle's `review-changes` record, while the
-  // *current*, still-in-progress cycle does not yet — an asymmetry documented in
-  // fingerprint.ts's own verdictFingerprint comment. This fixture has no such sibling agent node,
-  // so it isolates the row cleanly.
+  // the reference loop's `implement` shares its body with `review-changes`, an agent node whose
+  // verdict feeds `verdictFingerprint` (fingerprint.ts, state-machine.md §6.6 Amendment (m0+)
+  // 2026-09-07 — see fingerprint.test.ts for a dedicated test of that evidence-comparison rule).
+  // This fixture has no such sibling agent node at all, so `verdictFingerprint` is always the
+  // empty-array hash on both sides of the comparison here, isolating this row's own change-set
+  // logic cleanly from the evidence-comparison rule exercised elsewhere.
   const loop = NO_PROGRESS_LOOP;
   const steps: Step[] = [{ now: T0, event: runRequested(T0, { loopId: loop.slug, loopVersion: loop.loopVersion }) }];
   steps.push({ now: "2026-09-06T06:05:00.000Z", event: nodeCompleted("2026-09-06T06:05:00.000Z", { cycle: 0, nodeId: "setup", attempt: 1, result: { status: "succeeded", exitCode: 0 }, loopId: loop.slug, loopVersion: loop.loopVersion }) });

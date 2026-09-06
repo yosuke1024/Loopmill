@@ -1148,12 +1148,20 @@ function applyRunningNodeCompleted(snapshot: RunSnapshot, event: Envelope, ctx: 
   return settleAndFinalize(working, ctx, cur.nodeId, cur.cycleIndex, event.eventId, emitIdx, null);
 }
 
+// usage-normalization.md §4.1, Amendment (m0+), 2026-09-07: a QUOTA-classified attempt is the CLI
+// declining before any work started, not an execution that burned tokens and simply went
+// unmeasured — it is excluded from the "every contributing attempt" set this function tests, so
+// a quota park + resume that ends in a normal measured completion no longer drags the whole Node
+// Execution into `unmeasuredExecutions`. Its own Attempt record still carries `usage.provenance:
+// 'unavailable'` on the ledger (unchanged, for the audit) — this only changes what counts toward
+// the Node Execution's aggregate.
 function accrueNodeExecutionUsage(snapshot: RunSnapshot, node: ResolvedNode, cycle: number, nodeId: string): RunSnapshot {
   if (node.kind !== "agent") return snapshot;
   const attempts = Object.values(snapshot.attempts).filter((a) => a.cycleIndex === cycle && a.nodeId === nodeId);
   if (attempts.length === 0) return snapshot;
-  const usages = attempts.map((a) => a.usage).filter((u): u is UsageRecord => u !== null);
-  const measured = attempts.every((a) => a.usage !== null && isMeasured(a.usage));
+  const ranAttempts = attempts.filter((a) => a.classification !== "QUOTA");
+  const usages = ranAttempts.map((a) => a.usage).filter((u): u is UsageRecord => u !== null);
+  const measured = ranAttempts.length > 0 && ranAttempts.every((a) => a.usage !== null && isMeasured(a.usage));
   const tokenSum = sumMeasuredTokens(usages);
   return {
     ...snapshot,

@@ -72,20 +72,18 @@ export function preDispatch(
     };
   }
 
-  // 4. Unmeasured-execution budget. Decision (not in sheet), m1: this reads `>` rather than the
-  // JSON's literal `>=`. `maxUnmeasuredExecutions` defaults to 0 loop-wide (loop-file.md §7.2:
-  // "no MVP backend declares usage: none" — no MVP-reachable backend ever produces an unmeasured
-  // execution at all), and `snapshot.budget.unmeasuredExecutions` starts at 0 too; `>=` would
-  // make step 4 breach on the *very first* dispatch of *every* MVP Run regardless of what
-  // actually happened (0 >= 0), which cannot be intended — it would make `preDispatch` reject
-  // the reference loop's entry node before a single event, measured or not, has ever occurred.
-  // `>` keeps the "check before dispatch, never kill work in flight" reading intact: a Run whose
-  // unmeasured count has *already reached* the configured cap (an unmeasured execution the
-  // *previous* dispatch produced) is refused on the *next* one, exactly the "the offending
-  // execution already completed by the time the check fires" shape steps 3/5/6 share, but a cap
-  // of 0 no longer means "reject the first dispatch of any kind" — **report**: the spec's own
-  // `>=` should probably be corrected to `>` here, or `maxUnmeasuredExecutions`'s MVP default
-  // should stop being 0.
+  // 4. Unmeasured-execution budget. Amendment (m0+), 2026-09-07 (state-machine.md §11.2 step 4):
+  // reads `>`, not the pre-amendment JSON's literal `>=`. `maxUnmeasuredExecutions` defaults to 0
+  // loop-wide (loop-file.md §7.2: "no MVP backend declares usage: none" — no MVP-reachable
+  // backend ever produces an unmeasured execution at all), and `snapshot.budget.unmeasuredExecutions`
+  // starts at 0 too; `>=` would make step 4 breach on the *very first* dispatch of *every* MVP Run
+  // regardless of what actually happened (0 >= 0), which cannot be intended — it would make
+  // `preDispatch` reject the reference loop's entry node before a single event, measured or not,
+  // has ever occurred. `>` keeps the "check before dispatch, never kill work in flight" reading
+  // intact: a Run whose unmeasured count has *already reached* the configured cap (an unmeasured
+  // execution the *previous* dispatch produced) is refused on the *next* one, exactly the "the
+  // offending execution already completed by the time the check fires" shape steps 3/5/6 share,
+  // but a cap of 0 no longer means "reject the first dispatch of any kind".
   if (snapshot.budget.unmeasuredExecutions > loop.budget.maxUnmeasuredExecutions) {
     return {
       ok: false,

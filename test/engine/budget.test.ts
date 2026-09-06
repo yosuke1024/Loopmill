@@ -84,7 +84,7 @@ test("preDispatch step 3: maxMeasuredTokens breach -> BUDGET_EXCEEDED(maxMeasure
   }
 });
 
-test("preDispatch step 4: unmeasuredExecutions breach -> BUDGET_EXCEEDED(maxUnmeasuredExecutions); the boundary at 0/0 does NOT breach (Decision (not in sheet), m1 — see budget.ts)", () => {
+test("preDispatch step 4: unmeasuredExecutions breach -> BUDGET_EXCEEDED(maxUnmeasuredExecutions); the boundary at 0/0 does NOT breach (state-machine.md §11.2 step 4, Amendment (m0+) 2026-09-07 — `>`, not the pre-amendment `>=`)", () => {
   const atDefault = preDispatch(baseSnapshot({ unmeasuredExecutions: 0 }), REFERENCE_LOOP, implement, 1, null, DEFAULT_POLICY);
   assert.equal(atDefault.ok, true, "0 unmeasured against the default cap of 0 must not block the very first dispatch");
 

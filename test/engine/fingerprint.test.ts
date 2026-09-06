@@ -172,3 +172,36 @@ test("noProgressFires: does not fire when the previous cycle's execution is not 
   const fires = noProgressFires(snapshot, REFERENCE_LOOP, 2, NODES.implement, [{ path: "a.ts", digest: "same" }]);
   assert.equal(fires, false);
 });
+
+// Amendment (m0+), 2026-09-07 (state-machine.md §6.6): progressFingerprint(cycle, nodeId) reads
+// verdictFingerprint(cycle - 1), not verdictFingerprint(cycle) — the evidence a node was handed
+// *before* it started its own cycle, not the (necessarily still-empty) sibling set of its own
+// still-in-progress cycle. Both tests below check `noProgressFires` at cycle 2 against cycle 1,
+// which compares verdictFingerprint(1) (evidence before cycle 2 started) against
+// verdictFingerprint(0) (evidence before cycle 1 started) — a sibling agent Node Execution
+// (`review-changes`) planted in cycle 0 and cycle 1 stands in for that "evidence".
+
+test("noProgressFires: Amendment (m0+) 2026-09-07 — identical change-set AND identical prior-cycle review evidence -> NO_PROGRESS fires", () => {
+  const changeFp = changeFingerprint([{ path: "a.ts", digest: "same" }]);
+  const verdict = { approved: false, reasons: "same reason" };
+  const nodes = {
+    "0:review-changes": record({ nodeId: NODES.reviewChanges, cycleIndex: 0, structured: verdict }),
+    "1:implement": record({ nodeId: NODES.implement, cycleIndex: 1, changeFingerprint: changeFp, state: "SUCCEEDED" }),
+    "1:review-changes": record({ nodeId: NODES.reviewChanges, cycleIndex: 1, structured: verdict }),
+  };
+  const snapshot = snapshotWithNodes(nodes, { "1:implement": changeFp });
+  const fires = noProgressFires(snapshot, REFERENCE_LOOP, 2, NODES.implement, [{ path: "a.ts", digest: "same" }]);
+  assert.equal(fires, true, "same change-set, same evidence handed to both cycles -> stuck");
+});
+
+test("noProgressFires: Amendment (m0+) 2026-09-07 — identical change-set but the prior cycle's review evidence differs -> NO_PROGRESS does not fire", () => {
+  const changeFp = changeFingerprint([{ path: "a.ts", digest: "same" }]);
+  const nodes = {
+    "0:review-changes": record({ nodeId: NODES.reviewChanges, cycleIndex: 0, structured: { approved: false, reasons: "reason A" } }),
+    "1:implement": record({ nodeId: NODES.implement, cycleIndex: 1, changeFingerprint: changeFp, state: "SUCCEEDED" }),
+    "1:review-changes": record({ nodeId: NODES.reviewChanges, cycleIndex: 1, structured: { approved: false, reasons: "reason B" } }),
+  };
+  const snapshot = snapshotWithNodes(nodes, { "1:implement": changeFp });
+  const fires = noProgressFires(snapshot, REFERENCE_LOOP, 2, NODES.implement, [{ path: "a.ts", digest: "same" }]);
+  assert.equal(fires, false, "an empty change-set alone is not enough (§6.6): a different verdict is still new information");
+});

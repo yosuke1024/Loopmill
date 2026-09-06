@@ -627,6 +627,24 @@ lower bound, marked per section 3.3.
 A Node Execution whose provenance is `estimated` counts as **unmeasured**. An estimate is not a
 measurement, and coverage is a statement about measurement.
 
+**Amendment (m0+), 2026-09-07 — a QUOTA-classified attempt does not count toward "every contributing
+attempt".** Read literally, "every contributing attempt has `complete === true`" would make a Node
+Execution that hit quota once — parked, resumed and then completed with a full, `reported`,
+`complete: true` record — unmeasured, because its earlier, quota-refused attempt is `unavailable`
+(`complete: false`, section 2.5). That attempt did no work to be incomplete about: the CLI declined
+*before* the turn started, so there is no partial usage the way an `aborted_streaming` SIGINT (the
+clause above) genuinely has some. Treating a quota refusal as if it were a partial measurement would
+make `maxUnmeasuredExecutions`'s MVP default of `0` (section 6.2) breach on the dispatch immediately
+*after* every quota recovery, regardless of whether that recovery's own attempt was fully measured —
+punishing a Run for a vendor rate limit it already waited out, not for anything Loopmill failed to
+observe. The rule: a Node Execution is **measured** iff every attempt that actually ran — i.e. every
+attempt whose classification is not `QUOTA` — is itself measured and complete. A QUOTA-classified
+attempt is excluded both from this "every contributing attempt" test and from the coverage
+denominator's "unmeasured" set; it never turns a Node Execution's own aggregate un-measured, and it
+never counts toward `maxUnmeasuredExecutions` on its own. Its own Attempt record is unaffected and
+still carries `usage.provenance: 'unavailable'` on the ledger — this amendment changes what counts
+toward the *Node Execution's* aggregate, not what is recorded for the audit.
+
 ### 4.2 Computation per scope
 
 | Scope | Denominator | Numerator |

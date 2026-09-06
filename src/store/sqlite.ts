@@ -588,12 +588,24 @@ export class SqliteStore implements StateStore {
 
   // -- audit: rebuild and verify --------------------------------------------------------------
 
-  /** Refolds every stored event (applied + emitted, seq order) through `fold` and compares the
-   * result to the stored snapshot as canonical JSON, byte for byte (A4, P-8). */
-  rebuildSnapshot(runId: string, fold: (events: Envelope[]) => RunSnapshot): RebuildResult {
-    const rows = this.db.prepare("SELECT envelope_json FROM events WHERE run_id = ? ORDER BY seq ASC").all(runId);
-    const events = rows.map((row) => parseJson(textCol(row, "envelope_json")) as Envelope);
-    const rebuilt = canonicalJson(fold(events));
+  /**
+   * Refolds every stored event (applied + emitted, seq order) through `fold` and compares the
+   * result to the stored snapshot as canonical JSON, byte for byte (A4, P-8).
+   *
+   * Amendment (m0+), 2026-09-07: `fold` takes the full `StoredEvent[]` rows this table actually
+   * holds — `kind` (`applied` | `ignored` | `emitted`) and `recordedAt` included — not a bare
+   * `Envelope[]`. `engine/fold.ts`'s own `fold()` needs the recorded clock (`now = recordedAt`,
+   * O-2) to reproduce the original transition's decision, and needs `kind` to know which rows
+   * were inbound versus emitted by the control plane; a plain envelope list could only carry
+   * that by inference (`engine/fold.ts`'s `foldEnvelopes` did exactly that, and documented the
+   * inference as a report against this very signature). `StoredEvent` is a structural superset
+   * of `engine/fold.ts`'s own `FoldRow` (`kind`/`envelope`/`recordedAt`), so callers hand these
+   * rows to `fold()` directly with no adapter.
+   */
+  rebuildSnapshot(runId: string, fold: (rows: StoredEvent[]) => RunSnapshot): RebuildResult {
+    const rawRows = this.db.prepare("SELECT * FROM events WHERE run_id = ? ORDER BY seq ASC").all(runId);
+    const rows = rawRows.map((row) => this.rowToStoredEvent(row));
+    const rebuilt = canonicalJson(fold(rows));
     const storedRow = this.db.prepare("SELECT snapshot_json FROM snapshots WHERE run_id = ?").get(runId);
     const stored = storedRow ? textCol(storedRow, "snapshot_json") : "";
     if (stored === rebuilt) {

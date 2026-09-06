@@ -91,17 +91,35 @@ test("13.4: quota park (reported reset) and resume", () => {
   const final = drive(steps);
   assert.equal(final.snapshot.nodes["1:implement"]?.state, "SUCCEEDED");
   assert.equal(final.snapshot.attempts["1:implement:2"]?.state, "COMPLETED");
-  // Finding for the maintainer (not asserted as a bug — this is the literal consequence of the
-  // frozen spec text, reported rather than silently patched around): usage-normalization.md's
-  // "measured iff every contributing attempt is measured" means implement's Node Execution as a
-  // whole is *not* fully measured, because its quota-parked attempt 1 carries
-  // `usage.provenance: 'unavailable'` (state-machine.md §13.4's own trace text) even though
-  // attempt 2 succeeded with full usage. With `maxUnmeasuredExecutions` at its MVP default of 0
-  // (loop-file.md §7.2; no MVP backend declares `usage: none`, so the default was presumably
-  // meant to never bind), this one partially-unmeasured Node Execution is enough to breach the
-  // budget on the *next* dispatch (run-tests), even though the Run actually recovered.
-  assert.equal(final.snapshot.status, "BUDGET_EXCEEDED");
-  assert.deepEqual(final.snapshot.outcome, { state: "BUDGET_EXCEEDED", budgetKey: "maxUnmeasuredExecutions", limit: 0, observed: 1 });
+
+  // usage-normalization.md §4.1, Amendment (m0+) 2026-09-07: a QUOTA-classified attempt does not
+  // make its Node Execution unmeasured. Attempt 1 (the quota refusal) still keeps its own
+  // `usage.provenance: 'unavailable'` on the ledger, for the audit...
+  assert.equal(final.snapshot.attempts["1:implement:1"]?.classification, "QUOTA");
+  assert.equal(final.snapshot.attempts["1:implement:1"]?.usage?.provenance, "unavailable");
+  // ...but it is excluded from the "every contributing attempt measured" test: attempt 2 (the
+  // retry after the park) is `reported`/`complete: true`, so implement's Node Execution as a
+  // whole is measured, `unmeasuredExecutions` stays 0, and the post-recovery dispatch of
+  // run-tests does not breach `maxUnmeasuredExecutions` (default 0) the way it did before this
+  // amendment.
+  assert.equal(final.snapshot.attempts["1:implement:2"]?.usage?.provenance, "reported");
+  assert.equal(final.snapshot.budget.unmeasuredExecutions, 0);
+  assert.equal(final.snapshot.budget.measuredExecutions, 2);
+  assert.equal(final.snapshot.budget.agentExecutions, 2);
+
+  // The Run recovered: run-tests is dispatched next, RUNNING, not BUDGET_EXCEEDED.
+  assert.equal(final.snapshot.status, "RUNNING");
+  assert.equal(final.snapshot.current?.nodeId, NODES.runTests);
+  assert.equal(final.snapshot.current?.cycleIndex, 1);
+  assert.equal(final.snapshot.current?.attempt, 1);
+  const last = final.results[final.results.length - 1]!;
+  assert.equal(last.kind, "applied");
+  if (last.kind === "applied") {
+    assert.deepEqual(
+      last.emitted.map((e) => e.eventType),
+      ["node-dispatched"],
+    );
+  }
 });
 
 test("13.4 variant: §7.1 wire table — 'quota' classified with no quotaResetsAt degrades to internal FAILED (never QUOTA), so the Run fails generically, not as quota_unclassifiable", () => {

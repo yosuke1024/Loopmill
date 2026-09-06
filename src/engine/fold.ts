@@ -108,11 +108,16 @@ export function fold(rows: FoldRow[], ctx: FoldContext): FoldResult {
 }
 
 /**
- * Adapter for `store.rebuildSnapshot(runId, fold)`, whose own signature (`src/store/sqlite.ts`)
- * is `fold: (events: Envelope[]) => RunSnapshot` — a plain envelope list, in `seq` order, with
- * **no `kind` tag and no `recordedAt`** even though the `events` table it reads from stores both
- * (`StoredEvent.kind: "applied" | "ignored" | "emitted"`, `StoredEvent.recordedAt`). This adapter
- * therefore has to *infer* which envelopes were inbound (`applied`/`ignored`) versus emitted by
+ * Amendment (m0+), 2026-09-07: this function is no longer what `store.rebuildSnapshot(runId,
+ * fold)` calls. Its own signature (`src/store/sqlite.ts`) now takes `fold: (rows: StoredEvent[])
+ * => RunSnapshot` — the actual stored rows, `kind` and `recordedAt` included — and hands them to
+ * `fold()` above directly (`StoredEvent` is a structural superset of this module's own `FoldRow`,
+ * so no adapter is needed). `foldEnvelopes` is kept as a convenience for a caller that only has a
+ * flat `Envelope[]` and no store to read `kind`/`recordedAt` from (e.g. a hand-built trace in a
+ * test) and is willing to accept the inference below in exchange. Read on for what that inference
+ * costs, previously paid on every `rebuildSnapshot` call and now paid only here:
+ *
+ * This adapter has to *infer* which envelopes were inbound (`applied`/`ignored`) versus emitted by
  * the control plane, from the envelope's own `eventType`/`producer` shape:
  *
  * - every type in `envelope/policy.ts`'s `EMITTED_EVENT_TYPES` (`run-started`, `node-dispatched`,
@@ -126,13 +131,11 @@ export function fold(rows: FoldRow[], ctx: FoldContext): FoldResult {
  *   still replayed correctly, it is simply labelled `applied` here rather than `ignored` — the
  *   label is `fold`'s own bookkeeping, not something `transition()` reads).
  *
- * `recordedAt` is assumed equal to `occurredAt` for every envelope, per this task's own
- * instruction — true for every control-plane-emitted envelope (both are stamped from the same
- * `ctx.now`) and a reasonable approximation for an inbound one.
- *
- * **Report**: `store.rebuildSnapshot`'s callback signature should take `StoredEvent[]` (or at
- * least `Array<{ kind; envelope; recordedAt }>`) instead of `Envelope[]`, so `fold`'s real
- * `kind`/`recordedAt` distinctions survive the round trip instead of being reconstructed here.
+ * `recordedAt` is assumed equal to `occurredAt` for every envelope — true for every
+ * control-plane-emitted envelope (both are stamped from the same `ctx.now`) and a reasonable
+ * approximation for an inbound one. `store.rebuildSnapshot` itself no longer relies on any of
+ * this (see the amendment note above) — a real store already knows `kind` and `recordedAt` for
+ * every row it holds and hands them to `fold()` untouched.
  */
 export function foldEnvelopes(events: Envelope[], ctx: FoldContext): RunSnapshot {
   const rows: FoldRow[] = events.map((envelope) => ({

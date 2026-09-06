@@ -157,7 +157,7 @@
     { "step": 1, "check": "traversals[edgeId] >= maxIterations[edgeId]",              "outcome": "MAX_ITERATIONS_EXCEEDED" },
     { "step": 2, "check": "freeTraversals[edgeId] >= maxIterations[edgeId]",          "outcome": "MAX_ITERATIONS_EXCEEDED" },
     { "step": 3, "check": "budget.measuredTokens >= budget.maxMeasuredTokens",        "outcome": "BUDGET_EXCEEDED(maxMeasuredTokens)" },
-    { "step": 4, "check": "budget.unmeasuredExecutions >= budget.maxUnmeasuredExecutions", "outcome": "BUDGET_EXCEEDED(maxUnmeasuredExecutions)" },
+    { "step": 4, "check": "budget.unmeasuredExecutions > budget.maxUnmeasuredExecutions", "outcome": "BUDGET_EXCEEDED(maxUnmeasuredExecutions)", "$comment": "Amendment (m0+), 2026-09-07: '>', not '>=' -- see state-machine.md §11.2." },
     { "step": 5, "check": "budget.activeMs >= budget.maxRuntime",                     "outcome": "EXPIRED(max_runtime)" },
     { "step": 6, "check": "budget.stepsUsed >= policy.maxStepsPerRun",                "outcome": "BUDGET_EXCEEDED(maxStepsPerRun)" },
     { "step": 7, "check": "otherwise",                                                "outcome": "ok" }

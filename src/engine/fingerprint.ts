@@ -24,19 +24,22 @@ export function changeFingerprint(filesChanged: Array<{ path: string; digest: st
  * §6.6's pseudocode defines this over "failing verdicts" (`failingVerdicts.map(v => [v.nodeId,
  * v.status, v.evidence])`) — a filter the engine cannot compute generically, since "failing"
  * verdict shape is loop-specific data buried inside each agent's own `structuredOutput`, not
- * something `RunSnapshot`/`ResolvedLoop` name. **Decision (not in sheet), m1** (the maintainer
- * will fold this into the spec): implemented instead as the sha256 of the sorted
+ * something `RunSnapshot`/`ResolvedLoop` name. Implemented instead as the sha256 of the sorted
  * `[nodeId, canonicalJson(structured)]` pairs of every **agent** Node Execution recorded so far
- * **in this exact cycle** (`nodeExec.cycleIndex === cycle`), other than `excludeNodeId` (the node
- * being fingerprinted) — never a node's own structured output about itself. `cycle` is read
- * literally (not "the most recent execution of each node up to this point", which §9.2 uses for
- * ordinary references): in the reference loop this means `verdictFingerprint` is the empty-array
- * hash every time `implement` is checked (it runs before `review-changes` in the same cycle, so
- * no sibling agent execution exists yet in that cycle at the point `implement`'s own NO_PROGRESS
- * guard runs) — `noProgressFires` for this loop's shape is therefore driven by
- * `changeFingerprint` alone. A loop whose retry-edge target runs *after* another agent node in
- * the same cycle body would see this function actually vary; this deviation is called out for
- * the maintainer to reconcile against the "evidence-inclusive" intent of D-08's prose.
+ * in cycle `cycle` (`nodeExec.cycleIndex === cycle`), other than `excludeNodeId` (the node being
+ * fingerprinted) — never a node's own structured output about itself.
+ *
+ * `cycle` is read literally: this function itself does not pick which cycle to look at (that is
+ * `progressFingerprint`'s job, below). Amendment (m0+), 2026-09-07 — the fix for the bug this
+ * function's callers used to have when they passed their *own* `cycle` (see `progressFingerprint`
+ * and `noProgressFires`): in the reference loop, `implement` runs *before* `review-changes` in
+ * every cycle, so `verdictFingerprint(cycle, "implement", ...)` for the *current, still-running*
+ * cycle is always the empty-array hash (no sibling agent execution exists yet at the point
+ * `implement`'s own NO_PROGRESS guard runs), while the *same* call for a *prior, already-complete*
+ * cycle is not (that cycle's `review-changes` has long since run). Calling this with mismatched
+ * cycles for the two sides of a NO_PROGRESS comparison made the comparison spuriously fail on the
+ * verdict half every time, regardless of the change-set — the fix is entirely in what cycle
+ * number `noProgressFires` passes here, not in this function.
  */
 export function verdictFingerprint(cycle: number, excludeNodeId: string, snapshot: RunSnapshot, loop: ResolvedLoop): string {
   const pairs: Array<[string, string]> = [];
@@ -73,6 +76,24 @@ export function progressFingerprint(changeFp: string, verdictFp: string): string
  * envelope being processed); the previous cycle's `changeFingerprint` is read back from
  * `snapshot.changeFingerprints` (already persisted when that execution completed) rather than
  * recomputed.
+ *
+ * Amendment (m0+), 2026-09-07 (state-machine.md §6.6): `progressFingerprint(cycle, nodeId) =
+ * sha256(changeFingerprint(cycle, nodeId) || verdictFingerprint(cycle - 1))` — condition 3 above
+ * compares evidence one cycle *behind* each side's own change-set, not evidence from the same
+ * cycle as that change-set. `verdictFingerprint(cycle - 1)` is "the evidence this node was handed
+ * before it started cycle `cycle`'s own attempt": whatever sibling agent Node Executions cycle
+ * `cycle - 1` recorded (a completed cycle by the time `cycle` dispatches, D-08's own "handed a
+ * different verdict" reading), not the still-empty set of siblings that have run *so far in this
+ * same, still-in-progress* cycle. The previous fix candidate — reading `verdictFingerprint(cycle)`
+ * for the current side — degenerated to comparing an always-empty hash (nothing has run yet
+ * alongside the node being fingerprinted, this cycle) against a near-always-non-empty one (the
+ * *previous* cycle's siblings, by definition already complete), so the two verdict fingerprints
+ * essentially never matched and NO_PROGRESS could not fire at all for a loop shaped like the
+ * reference loop, regardless of whether the change-set repeated. Reading both sides one cycle back
+ * fixes the asymmetry: `curVerdictFp` (evidence before cycle `cycle`) and `prevVerdictFp` (evidence
+ * before cycle `cycle - 1`) are computed the same way, so an identical change-set now correctly
+ * fires NO_PROGRESS only when the evidence that produced it was *also* identical, and does not
+ * fire when the reviewer's verdict changed even though the agent produced the same diff again.
  */
 export function noProgressFires(
   snapshot: RunSnapshot,
@@ -90,8 +111,11 @@ export function noProgressFires(
   if (prevChangeFp === undefined) return false;
 
   const curChangeFp = changeFingerprint(filesChanged);
-  const curVerdictFp = verdictFingerprint(cycle, nodeId, snapshot, loop);
-  const prevVerdictFp = verdictFingerprint(cycle - 1, nodeId, snapshot, loop);
+  // Amendment (m0+), 2026-09-07: both sides read the evidence available *before* the cycle whose
+  // change-set they pair with — cycle - 1 for the current side, cycle - 2 for the previous side —
+  // never the still-in-progress cycle's own (necessarily empty) sibling set.
+  const curVerdictFp = verdictFingerprint(cycle - 1, nodeId, snapshot, loop);
+  const prevVerdictFp = verdictFingerprint(cycle - 2, nodeId, snapshot, loop);
 
   const curProgress = progressFingerprint(curChangeFp, curVerdictFp);
   const prevProgress = progressFingerprint(prevChangeFp, prevVerdictFp);
