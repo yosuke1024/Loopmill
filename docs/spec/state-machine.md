@@ -993,9 +993,9 @@ rather than a scattering of `includes()` calls.
 |---|---|---|
 | 1 | `LOST` | `deadlineMissed` — produced only by the sweep, never by a runtime. |
 | 2 | `TIMEOUT` | `timeoutFired`, or `error.code ∈ {node_timeout, observe_deadline, human_timeout}`. |
-| 3 | `CANCELLED` | `cancelRequested` is true **and** the process ended, or the backend reports a job cancel (claude-code: SIGINT ends with exit 0 and a `result` carrying `subtype: error_during_execution`, `is_error: true`, `terminal_reason: aborted_streaming` `[V]` 2.1.263; codex: `TurnStatus::Interrupted`). Never inferred from a signal alone. |
+| 3 | `CANCELLED` | `cancelRequested` is true **and** the process ended, or the backend reports a job cancel (claude-code: SIGINT ends with exit 0 and a `result` carrying `subtype: error_during_execution`, `is_error: true`, `terminal_reason: aborted_streaming` `[V]` 2.1.263; codex: `TurnStatus::Interrupted` on the app-server path; on `codex exec`, SIGINT exits 1 and SIGTERM exits **0**, both with the stream stopped after `turn.started` and no `turn.completed` `[V]` 0.153.4 — so `cancelRequested` plus the absence of a terminal event is the discriminator). Never inferred from a signal alone. |
 | 4 | `QUOTA` | a positive match on the runtime's quota table **and** no match on its retryable look-alike table (7.3). |
-| 5 | `SUCCESS` | exit 0 **and** a well-formed terminal result (`claude-code`: a `result` message with `is_error: false` — never `subtype` alone, since an authentication failure ends `subtype: success`, `is_error: true`, `terminal_reason: api_error`, exit 1 `[V]`; `codex`: a `turn.completed`) **and**, when the node declares `structuredOutput`, the parsed output validates. |
+| 5 | `SUCCESS` | exit 0 **and** a well-formed terminal result (`claude-code`: a `result` message with `is_error: false` — never `subtype` alone, since an authentication failure ends `subtype: success`, `is_error: true`, `terminal_reason: api_error`, exit 1 `[V]`; `codex`: a `turn.completed` — required precisely because a SIGTERM-ed `codex exec` exits 0 with none `[V]`) **and**, when the node declares `structuredOutput`, the parsed output validates. |
 | 6 | `FAILED` | everything else. |
 
 **The ambiguity rule (decision sheet §5, normative).** Anything that does not positively match rows 1–5

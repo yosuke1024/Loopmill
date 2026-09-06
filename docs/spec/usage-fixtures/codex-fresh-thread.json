@@ -5,7 +5,7 @@
   "notARecording": "Hand-written from the documented codex exec JSONL event shapes. No CLI was executed to produce this file. The usage numbers are illustrative.",
   "spec": "docs/spec/usage-normalization.md",
   "scenario": {
-    "backend": "github-actions",
+    "backend": "local",
     "runtime": "codex",
     "authMode": "subscription-login",
     "runId": "run_01JQ8ZD6T8V1X4B7D0F3H6K9M5",
@@ -13,7 +13,7 @@
     "nodeId": "code-review",
     "attempt": 1,
     "sessionPolicy": "fresh",
-    "note": "sessionPolicy fresh is the MVP default: one Codex thread per attempt, so usageAtAttemptStart is zero and the last turn.completed cumulative IS the attempt delta. The record is still provenance derived, because the subset arithmetic and the delta rule are Loopmill's, not the vendor's."
+    "note": "sessionPolicy fresh is the MVP default: one Codex process per attempt, and a process reports only its own usage (SPIKE-4 D4), so usageAtAttemptStart is zero and the last turn.completed usage IS the attempt figure. The record is still provenance derived, because the subset arithmetic and the delta rule are Loopmill's, not the vendor's."
   },
   "input": {
     "invocation": "codex exec --json -C <workspace> -s workspace-write -m gpt-5.6-codex -",

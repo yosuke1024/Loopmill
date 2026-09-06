@@ -1,0 +1,144 @@
+{
+  "fixtureId": "codex-recorded-turn-failed",
+  "title": "codex exec recorded: forced failure via an invalid --model (SPIKE-4 D3b)",
+  "handWritten": false,
+  "recording": {
+    "harness": "spikes/spike-4-codex-cli (check D3b)",
+    "date": "2026-09-06",
+    "host": "operator macOS host",
+    "runtimeVersion": "codex-cli 0.153.4",
+    "nodeVersion": "v25.5.0",
+    "authMode": "subscription-login",
+    "redaction": "token-shaped strings, e-mail addresses and home-directory names redacted by the harness; nothing else altered"
+  },
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "local",
+    "runtime": "codex",
+    "authMode": "subscription-login",
+    "runId": "run_01SPIKE4TURNFAILEDRECORDED",
+    "cycleIndex": 1,
+    "nodeId": "implement",
+    "attempt": 1,
+    "sessionPolicy": "fresh",
+    "note": "codex exec --json -m loopmill-no-such-model against a trivial prompt. The runtime is expected to end the turn with a turn.failed event (or, failing that, a non-JSON stderr message) and no turn.completed -- whichever it is is itself the finding this fixture pins."
+  },
+  "input": {
+    "invocation": "env -u OPENAI_API_KEY -u CODEX_API_KEY codex exec --json --color never -s read-only -C /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/work -m loopmill-no-such-model -o /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/D3b.last.txt Reply\\ with\\ exactly:\\ LOOPMILL-OK",
+    "exitCode": 1,
+    "signal": null,
+    "usageAtAttemptStart": {
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_output_tokens": 0
+    },
+    "events": [
+      {
+        "type": "thread.started",
+        "thread_id": "01a076dd-f4f3-7e21-b6d1-b1822a17b6d6"
+      },
+      {
+        "type": "item.completed",
+        "item": {
+          "id": "item_0",
+          "type": "error",
+          "message": "Model metadata for `loopmill-no-such-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+        }
+      },
+      {
+        "type": "turn.started"
+      },
+      {
+        "type": "error",
+        "message": "{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'loopmill-no-such-model' model is not supported when using Codex with a ChatGPT account.\"}}"
+      },
+      {
+        "type": "turn.failed",
+        "error": {
+          "message": "{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'loopmill-no-such-model' model is not supported when using Codex with a ChatGPT account.\"}}"
+        }
+      }
+    ],
+    "ignoredStreamLines": []
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE4TURNFAILEDRECORDED",
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "codex",
+          "model": null,
+          "freshInputTokens": null,
+          "cacheWriteTokens": null,
+          "cacheReadTokens": null,
+          "outputTokens": null,
+          "reasoningTokens": null,
+          "totalInputTokens": null,
+          "totalTokens": null,
+          "provenance": "unavailable",
+          "provenanceNote": "process exited 1; turn.failed with no preceding turn.completed on this thread",
+          "source": {
+            "runtimeVersion": "codex-cli 0.153.4",
+            "eventKind": "turn.failed"
+          },
+          "complete": false,
+          "usageBasis": "none",
+          "sessionRef": {
+            "kind": "codex-thread",
+            "id": "01a076dd-f4f3-7e21-b6d1-b1822a17b6d6"
+          },
+          "usageAtAttemptStart": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0
+          },
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": null,
+      "totalTokens": null,
+      "provenance": "unavailable",
+      "measured": false
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 0,
+      "coverage": 0,
+      "unmeasured": [
+        {
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1,
+          "runtime": "codex",
+          "reason": "turn.failed, no turn.completed"
+        }
+      ]
+    },
+    "mustNotEqual": {
+      "storedAsZero": 0
+    },
+    "display": {
+      "nodeTotal": "—",
+      "measuredTokens": "0+",
+      "usageCoverage": "0/1 (0%)"
+    }
+  },
+  "assertsInvariants": [
+    "I2",
+    "I4",
+    "I9",
+    "I12"
+  ]
+}

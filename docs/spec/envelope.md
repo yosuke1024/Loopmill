@@ -266,7 +266,7 @@ Mapping per runtime:
 | Runtime | Source record | Mapping | Provenance |
 |---|---|---|---|
 | `claude-code` | `result.usage` (or the sum of `modelUsage` when present, which covers subagents) | fresh = `input_tokens`, cacheWrite = `cache_creation_input_tokens`, cacheRead = `cache_read_input_tokens`, output = `output_tokens` | `reported` |
-| `codex` | `turn.completed.usage`, which is **thread-cumulative** | per-attempt = last cumulative minus cumulative at attempt start (a fresh session starts at zero); cacheRead = `cached_input_tokens`, cacheWrite = `cache_write_input_tokens`, fresh = `max(0, input - cached - cacheWrite)`, output = `output_tokens`, reasoning = `reasoning_output_tokens` | `derived` |
+| `codex` | `turn.completed.usage` of the attempt's own process — a process counts only itself, and a resumed thread's process starts from zero (SPIKE-4 D4, 0.153.4 `[V]`) | per-attempt = that object with an all-zero start; cacheRead = `cached_input_tokens`, cacheWrite = `cache_write_input_tokens`, fresh = `max(0, input - cached - cacheWrite)`, output = `output_tokens`, reasoning = `reasoning_output_tokens` | `derived` |
 | any runtime, no terminal usage record (turn failed, process killed) | none | all buckets null | `unavailable` |
 | `observed` backends (**reserved**, unreachable in the MVP — SPIKE-2 NO-GO, ADR-002 D4) | none; execution would happen vendor-side | all buckets null | `unavailable` |
 
@@ -949,18 +949,20 @@ wire form, 1,568 B escaped. Escaping costs about +10% on realistic content; the 
 string of nothing but quotes and backslashes), which is why the encoded-body check exists and why the
 budget is 60 KiB rather than 64 KB.
 
-**TV-4 — codex cumulative-usage delta (section 4.6).** `turn.completed.usage` is thread-cumulative.
+**TV-4 — codex per-process usage (section 4.6).** `turn.completed.usage` counts the process that
+emitted it; a resumed thread's process starts from zero (SPIKE-4 D4, codex 0.153.4, recorded in
+`docs/spec/usage-fixtures/codex-recorded-two-turns.json`).
 
 | | input | cached | cache_write | output | reasoning |
 |---|---|---|---|---|---|
-| cumulative at attempt start | 12,000 | 9,000 | 1,500 | 800 | 400 |
-| cumulative at `turn.completed` | 31,000 | 24,000 | 3,000 | 2,600 | 1,500 |
-| delta | 19,000 | 15,000 | 1,500 | 1,800 | 1,100 |
+| attempt 1, `turn.completed` | 17,578 | 12,928 | 0 | 303 | 0 |
+| attempt 2 (`codex exec resume`), `turn.completed` | 19,714 | 17,408 | 0 | 7 | 0 |
 
-Envelope: `cacheReadTokens: 15000`, `cacheWriteTokens: 1500`,
-`freshInputTokens: max(0, 19000 - 15000 - 1500) = 2500`, `outputTokens: 1800`,
-`reasoningTokens: 1100`, `totalInputTokens: 19000`, `totalTokens: 20800`,
-`provenance: "derived"`, `source.eventKind: "turn.completed.usage"`.
+Attempt 2's envelope: `cacheReadTokens: 17408`, `cacheWriteTokens: 0`,
+`freshInputTokens: max(0, 19714 - 17408 - 0) = 2306`, `outputTokens: 7`, `reasoningTokens: 0`,
+`totalInputTokens: 19714`, `totalTokens: 19721`, `provenance: "derived"`,
+`source.eventKind: "turn.completed"`. Subtracting attempt 1's object first — the v0.5 rule — would
+give `totalTokens: 4480` with `freshInputTokens` clamped to 0, and MUST NOT be produced.
 
 **TV-5 — the credential backstop must not fire on ordinary prose.**
 

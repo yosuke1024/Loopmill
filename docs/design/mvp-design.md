@@ -484,14 +484,14 @@ Notes that the table cannot carry:
 | Runtime | Non-interactive entry | Structured output | Usage | Quota signal |
 |---|---|---|---|---|
 | `claude-code` | `claude -p --output-format json` `[V]`, measured headless with a subscription OAuth token only (SPIKE-1, 2026-09-06, 2.1.263) `[V]`; the same contract on the operator's host is confirmed by SPIKE-4 `[S]` | `--json-schema <schema>`, returned in `structured_output` `[V]` | `modelUsage` sum — always present in 2.1.263 and carrying a helper-model call even without subagents, so `result.usage` alone undercounts `[V]`; `thinkingTokens` broken out `[V]` | No dedicated result subtype `[V]`; `stream-json` carries a structured `rate_limit_event` with per-window utilization and reset time `[V]`, refusal shape unobserved `[U]` |
-| `codex` | `codex exec --json` `[V]` (documentary); the live contract under a ChatGPT login on the host is SPIKE-4's deliverable `[S]` | `--output-schema <FILE>` `[V]` | `turn.completed.usage`, **thread-cumulative** `[V]` | No exit code and no structured error; invariant substring `usage limit` in prose `[V]` |
+| `codex` | `codex exec --json` `[V]`, measured on the operator's host under a ChatGPT login only (SPIKE-4, 2026-09-06, 0.153.4) `[V]`; stdin must be `/dev/null` or closed, since a non-TTY stdin is read as additional input (`Reading additional input from stdin...` on stderr) `[V]` | `--output-schema <FILE>` `[V]` | `turn.completed.usage` of the attempt's own process — a resumed thread's process starts from zero, so per-attempt accounting is a plain read (SPIKE-4 D4, 0.153.4) `[V]` | No exit code and no structured error; invariant substring `usage limit` in prose `[V]`; the exec JSONL carries no quota-shaped field at all (SPIKE-4 D6) `[V]` |
 
 Version-fragility is a first-order risk, not a footnote: `--full-auto` has already been removed from
 `codex exec` `[V]`, `-a/--ask-for-approval` is rejected by `codex exec` and approvals are auto-rejected in
 exec mode `[V]`, and `claude --bare` "will become the default for `-p` in a future release" while bare mode
 never reads OAuth credentials `[V]` — which would void `subscription-oauth` outright. Mitigations: pin a
 tested version range per runtime, ship contract tests against the recorded fixtures
-(`docs/spec/usage-fixtures/claude-recorded-*.json`), and never scrape `--help` for capabilities
+(`docs/spec/usage-fixtures/claude-recorded-*.json`, `codex-recorded-*.json`), and never scrape `--help` for capabilities
 (`--max-turns` exists but is hidden from help in 2.1.261 `[V]`).
 
 ### 6.4 Authentication modes
@@ -499,7 +499,7 @@ tested version range per runtime, ship contract tests against the recorded fixtu
 | Mode | Runtime | Mechanism | Status |
 |---|---|---|---|
 | `subscription-oauth` | `claude-code` | The CLI's own login on the host (`claude` → `/login`), or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` exported by the operator — an Anthropic-documented, one-year, inference-only token, Pro/Max/Team/Enterprise only `[V]` | MVP baseline |
-| `subscription-login` | `codex` | The CLI's own ChatGPT login on the host (`codex login`), read by `codex exec` from `CODEX_HOME` | MVP; `EXPERIMENTAL` until SPIKE-4 passes |
+| `subscription-login` | `codex` | The CLI's own ChatGPT login on the host (`codex login`), read by `codex exec` from `CODEX_HOME` | MVP; **verified** on the operator's host by SPIKE-4 (2026-09-06, 0.153.4) |
 | `api-key` | either | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` supplied by the operator | Opt-in only, see 6.5 |
 
 Loopmill reads none of these. It spawns the CLI with an environment the policy in section 13.2 has
@@ -554,7 +554,8 @@ applied once, from an envelope on stdin or in a file; `run` is a loop over `step
 5. **Persist** the applied event, the emitted events and the snapshot as **one SQLite transaction**;
    a `node-dispatched` event is committed *before* the dispatch happens.
 6. **Dispatch**: `local` spawns the node executor as a subprocess of `run` (agent: the runtime CLI in
-   the Run's worktree; command: `argv` with `shell:false`); `fake` replays a fixture. The executor's
+   the Run's worktree with stdin from `/dev/null`, because `codex exec` reads a non-TTY stdin as extra
+   input `[V]`; command: `argv` with `shell:false`); `fake` replays a fixture. The executor's
    completion — `node-completed`, `node-failed` or `node-timed-out`, with usage, structured output and
    artifact refs — is the next event.
 7. **Continue** with the next event, or **exit** with the outcome code when the Run is terminal or
@@ -631,9 +632,13 @@ how often a Run may start, and a missed night is visible as a gap in `loopmill r
 
 **What the scheduler context must provide.** A scheduled process must reach the runtime CLI's login
 state: the macOS login keychain for `claude`, `CODEX_HOME` for `codex`, and the operator's `gh`
-authentication. Whether a `launchd` user agent or a `systemd` user unit gets that on a locked screen or
-without a login session is a measured question (SPIKE-4), and `doctor --scheduler` probes exactly the
-environment the unit will run in before 06:00 ever comes.
+authentication. On the maintainer's macOS host all three are keychain items — `Claude Code-credentials`,
+`Codex Auth` (codex 0.153.4 with `cli_auth_credentials_store = "keyring"`, no `auth.json`), and `gh`'s
+keyring store — measured 2026-09-06 `[V]`, so on macOS the question is keychain access rather than file
+permissions; OpenAI's own docs require the file store before any headless use of `auth.json` (section
+19.1). Whether a `launchd` user agent or a `systemd` user unit reaches that state on a locked screen or
+without a login session is still a measured question (SPIKE-4 D9, open), and `doctor --scheduler` probes
+exactly the environment the unit will run in before 06:00 ever comes.
 
 ### 7.6 Portability
 
@@ -848,7 +853,7 @@ cannot decide must stop.
 
 **Sessions.** `sessionPolicy: fresh` is the only MVP value: every Node Execution starts a new session or
 thread, and objections travel through the I/O contract, not through a resumed conversation. This is what
-makes Codex's thread-cumulative usage a per-node total by construction (section 14). `sessionId` /
+makes Codex's per-process usage a per-node total by construction (section 14). `sessionId` /
 `threadId` are recorded anyway so that resume can be added additively later.
 
 ---
@@ -979,7 +984,7 @@ The four buckets are mutually disjoint by construction, which is what makes two 
 
 | | `claude-code` | `codex` | artifact-matcher backends (reserved) | `fake` |
 |---|---|---|---|---|
-| Source | `modelUsage` sum — always present in 2.1.263, and carrying a helper-model call even without subagents `[V]`; `result.usage` only when `modelUsage` is absent or `{}` | `turn.completed.usage`, **thread-cumulative** `[V]` | — | fixture |
+| Source | `modelUsage` sum — always present in 2.1.263, and carrying a helper-model call even without subagents `[V]`; `result.usage` only when `modelUsage` is absent or `{}` | `turn.completed.usage` of the attempt's own process — a resumed thread's process starts from zero, so per-attempt accounting is a plain read (SPIKE-4 D4, 0.153.4) `[V]` | — | fixture |
 | fresh | `input_tokens` (excludes cache `[V]`) | `max(0, input − cached − cache_write)` | — | fixture |
 | write | `cache_creation_input_tokens` | `cache_write_input_tokens` | — | fixture |
 | read | `cache_read_input_tokens` | `cached_input_tokens` (a **subset** of input `[V]`) | — | fixture |
@@ -987,9 +992,9 @@ The four buckets are mutually disjoint by construction, which is what makes two 
 | reasoning | `thinkingTokens` per model / `output_tokens_details.thinking_tokens`, broken out since 2.1.263 `[V]`; billed as output, reference only | `reasoning_output_tokens` (subset of output `[L]`) | — | — |
 | provenance | `reported` | `derived` | `unavailable` | `estimated` |
 
-Per-attempt Codex usage = last cumulative − cumulative at attempt start. With `sessionPolicy: fresh` the
-start is zero, so the diff is the attempt. No `turn.completed` at all — a failed, cancelled or killed turn
-`[V]` — means `provenance: unavailable`, **all buckets null, `complete: false`, never 0**.
+Per-attempt Codex usage = the last `turn.completed.usage` of the attempt's own process, from a zero start;
+nothing is carried across processes (SPIKE-4 D4). No `turn.completed` at all — a failed, cancelled or
+killed turn, including a SIGTERM that exits 0 `[V]` — means `provenance: unavailable`, **all buckets null, `complete: false`, never 0**.
 
 ### 14.3 Coverage
 
@@ -1101,12 +1106,12 @@ The loop of section 5.3, executed for real on the maintainer's machine. Time zon
 
 | # | Node | Kind | Runtime | Backend | Auth | Cycle | If its spike fails |
 |---|---|---|---|---|---|---|---|
-| 1 | `review-content` | agent | `codex` | `local` | `subscription-login` `[S]` SPIKE-4 | 0 | `claude-code` with a different model; the loop is single-vendor until SPIKE-4 passes |
+| 1 | `review-content` | agent | `codex` | `local` | `subscription-login` `[V]` SPIKE-4 | 0 | `claude-code` with a different model; kept as the documented fallback now that SPIKE-4 has passed |
 | 2 | `needs-issue` | condition | — | `control-plane` | — | 0 | — |
 | 3 | `create-issue` | command | — | `local` | the operator's `gh` login (`issues: write`) | 0 | — |
-| 4 | `implement` | agent | `claude-code` | `local` | `subscription-oauth` `[V]` SPIKE-1, local confirmation in SPIKE-4 | 1..4 | none — this is STOP (a) |
+| 4 | `implement` | agent | `claude-code` | `local` | `subscription-oauth` `[V]` SPIKE-1, confirmed on the host by SPIKE-4 D10 | 1..4 | none — this is STOP (a) |
 | 5 | `run-tests` | command | — | `local` | none | 1..4 | — |
-| 6 | `review-changes` | agent | `codex` | `local` | `subscription-login` `[S]` SPIKE-4 | 1..4 | as node 1 |
+| 6 | `review-changes` | agent | `codex` | `local` | `subscription-login` `[V]` SPIKE-4 | 1..4 | as node 1 |
 | 7 | `review-verdict` | condition | — | `control-plane` | — | 1..4 | — |
 | 8 | `approve-pr` | human | — | `control-plane` (`label` on the Issue) | the approver's GitHub identity | 0 | — |
 | 9 | `create-pr` | command | — | `local` | the operator's `gh` login (`pull-requests: write`) | 0 | — |
@@ -1123,7 +1128,7 @@ an attempt is interrupted, in which case that execution is named as unmeasured a
 |---|---|---|---|---|
 | 1 | `run-requested` | `trigger` (the scheduler-started `run`) | `loopId`, `loopVersion`, trigger payload, `dedupeKey` | Run created, lock taken, `PENDING` → `RUNNING` |
 | 2 | `node-dispatched` `review-content` | control-plane | cycle 0, attempt 1, lease | Committed **before** `codex exec` is spawned in the worktree |
-| 3 | `node-completed` `review-content` | `backend:local` | `result.structured {needs_issue, title, summary}`, `usage` (derived from `turn.completed`, thread-cumulative) | `structured.*` inputs available |
+| 3 | `node-completed` `review-content` | `backend:local` | `result.structured {needs_issue, title, summary}`, `usage` (derived from `turn.completed`, per process) | `structured.*` inputs available |
 | 4 | `node-completed` `create-issue` | `backend:local` | `stdout` (the Issue URL), `artifactRefs: [{kind: issue, ref: "#482"}]` | Issue exists; `nodes.create-issue.stdout` is the handle |
 | 5 | `node-completed` `implement` (cycle 1) | `backend:local` | `result.structured {changed, summary}`, `usage` (reported, basis `modelUsage`), `filesChanged`, `artifactRefs: [{kind: commit}]` | One commit on the run branch |
 | 6 | `node-completed` `run-tests` | `backend:local` | `exitCode` | Recorded either way — `onFailure: continue` means the verdict decides |
@@ -1278,8 +1283,8 @@ its own product; and it does not resell or intermediate anyone's usage.
 
 | In scope | Status |
 |---|---|
-| `local` + `claude-code` + `subscription-oauth` | **Baseline.** The CLI contract is measured (SPIKE-1, 2026-09-06, 2.1.263) `[V]`; the local and scheduler-context confirmation is SPIKE-4's first item |
-| `local` + `codex` + `subscription-login` | **Planned; `EXPERIMENTAL` until SPIKE-4 passes.** The provider abstraction ships either way; a delay narrows D2's claim to "Codex planned", it does not stop the MVP |
+| `local` + `claude-code` + `subscription-oauth` | **Baseline.** The CLI contract is measured (SPIKE-1, 2026-09-06, 2.1.263) `[V]`; the local confirmation is done (SPIKE-4 D10, 2026-09-06, 2.1.263 on macOS: C1-C4, C6 and C7 PASS); the scheduler-context probes (D9) are still to be run |
+| `local` + `codex` + `subscription-login` | **Verified** (SPIKE-4, 2026-09-06, codex 0.153.4: D1-D4 and D7 PASS on the maintainer's host). The provider abstraction ships either way; the scheduler-context probes (D9) are still to be run |
 | `fake` | In scope, ships in the package |
 | `control-plane` | In scope (conditions, human gates, ends) |
 | `api-key` | Opt-in only, per section 6.5 |
@@ -1372,7 +1377,7 @@ numbering is stable across v0.5 and v0.6; criteria whose mechanism changed are r
 
 **E. Observability and economics (m2-m3)**
 
-28. Per-attempt Codex usage is the cumulative diff, and a three-cycle run does not multiply-count; proven
+28. Per-attempt Codex usage is the attempt's own process figure, and a three-cycle run does not multiply-count; proven
     against recorded JSONL fixtures.
 29. A run containing an unmeasured execution reports its coverage as a fraction of agent executions, a
     `+`-suffixed token total, and every unmeasured execution by name; a fully measured run renders no `+`.
@@ -1436,13 +1441,16 @@ Not in the MVP, and each for a stated reason:
 | **SPIKE-2** | Codex Cloud as an `observed` backend: R1 task creation, R4 the result reaching GitHub without a click, R5 a JSON artifact, R7 bounded completion, R3 or R8 an ownable trigger | **NO-GO 2026-09-06** `[V]`: R1 PASS; R4 FAIL (the diff stays inside the task, the UI's "Create PR" click is the only exit); R8 FAIL (a `GITHUB_TOKEN`-authored mention is refused). `observed` removed. Codex as a provider is not NO-GO: it returns through `codex exec` on the host (SPIKE-4) |
 | **SPIKE-2b** | Does a seeded `auth.json` survive refresh-token rotation on ephemeral runners? | **Superseded** by ADR-002: no credential is moved to a runner Loopmill does not own. Not run |
 | **SPIKE-3** | A non-resident, event-sourced `step` on real GitHub: CAS, duplicates, concurrency, an interrupted job, chaining | **PASSED 2026-09-06** (21/21 local, 44 hosted runs) `[V]`. v0.6 reading: the transition, journal and concurrency properties carry over to the SQLite store; the git-branch store and Actions chaining are the reserved backend's mechanism |
-| **SPIKE-4** | The Codex CLI subscription backend on the host, and the scheduler context: `codex exec` non-interactively under a ChatGPT login with `OPENAI_API_KEY`/`CODEX_API_KEY` unset — structured output, terminal state, usage from `turn.completed`, interrupt and timeout behaviour, the quota signal, changes in a git worktree, normalisation into the common contract; plus whether `claude -p` and `codex exec` authenticate when started by `launchd` (locked screen, no session) and by a `systemd` user unit; plus the SPIKE-1 harness run locally on macOS | The `codex` runtime's status (`VERIFIED` or `PLANNED / EXPERIMENTAL`), `doctor --scheduler`'s check list, and the per-platform notes in section 7.5 `[S]`. Neither outcome stops the MVP |
+| **SPIKE-4** | The Codex CLI subscription backend on the host, and the scheduler context: `codex exec` non-interactively under a ChatGPT login with `OPENAI_API_KEY`/`CODEX_API_KEY` unset — structured output, terminal state, usage from `turn.completed`, interrupt and timeout behaviour, the quota signal, changes in a git worktree, normalisation into the common contract; plus whether `claude -p` and `codex exec` authenticate when started by `launchd` (locked screen, no session) and by a `systemd` user unit; plus the SPIKE-1 harness run locally on macOS | **D0-D8 and D10 run 2026-09-06** (codex 0.153.4, claude 2.1.263, macOS): D1, D2, D3, D4 and D7 PASS → `codex` is **verified**; D4 refuted the documentary thread-cumulative claim (usage is per process, section 14.2); D5 measured SIGINT exit 1 and SIGTERM exit 0 with no terminal event; D6 found no structured quota field; D10 reproduced SPIKE-1's C1-C4, C6 and C7 locally. **D9 (scheduler context) still open**: the macOS probes are ready to run, no Linux host is available. Neither outcome stops the MVP |
 
 **STOP conditions.** If one of these is true, the MVP does not ship as designed:
 
 * **(a)** No supported AI CLI can execute unattended on a user-managed host under subscription
-  authentication. *Evaluation 2026-09-06:* not triggered — the Claude Code contract is measured
-  (SPIKE-1); the host-side confirmation is SPIKE-4's first item and is expected to be trivial.
+  authentication. *Evaluation 2026-09-06, updated after SPIKE-4:* **not triggered** — the Claude Code contract
+  is measured on a hosted runner (SPIKE-1) and reproduced on the maintainer's own macOS host (SPIKE-4
+  D10: C1-C4, C6 and C7 PASS on 2.1.263), and `codex exec` runs there too under its own ChatGPT login
+  (SPIKE-4 D1-D7). Not yet shown is the scheduler-started case (D9), which decides preparation steps
+  and `doctor` checks, not this condition.
 * **(c)** Vendor terms, once read verbatim from primary sources, forbid the single-user unattended use
   Loopmill relies on. *Evaluation 2026-09-06 (R11 completed the same day):* **not triggered on the text
   read.** Anthropic's rows were already `[V]`; OpenAI's Terms of Use (effective 2026-01-01), Usage
@@ -1537,8 +1545,9 @@ Loopmill's own design rules, and nothing is carried across as code without its o
 3. **Notification when nothing touched GitHub.** A silent `end:no_change` night is visible only in the
    scheduler's log and in `status --last`. What is the smallest first-party channel that does not require
    Loopmill-owned infrastructure?
-4. **Codex on the host.** Usage from `turn.completed` is thread-cumulative and the quota signal is prose;
-   SPIKE-4 decides whether Loopmill can account for Codex executions well enough to call them measured.
+4. **Codex on the host — answered 2026-09-06.** SPIKE-4 measured per-process usage (no cumulative
+   arithmetic is needed) and a quota signal that is prose only; Codex executions are measured as `derived`.
+   Still open: the refusal shape at a plan limit, which no run has hit yet.
 5. **Missed fires.** Loopmill adds no catch-up authority; `launchd` coalesces, `systemd` gives one
    catch-up, `cron` none. Is "a gap in `loopmill runs`" an acceptable answer for a nightly loop?
 6. **Prompt engineering is unbudgeted.** The 13 weeks assume the reference loop lands useful PRs once the

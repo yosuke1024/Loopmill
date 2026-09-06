@@ -1,0 +1,138 @@
+{
+  "fixtureId": "codex-recorded-structured",
+  "title": "codex exec recorded: schema-validated structured output via --output-schema (SPIKE-4 D2)",
+  "handWritten": false,
+  "recording": {
+    "harness": "spikes/spike-4-codex-cli (check D2)",
+    "date": "2026-09-06",
+    "host": "operator macOS host",
+    "runtimeVersion": "codex-cli 0.153.4",
+    "nodeVersion": "v25.5.0",
+    "authMode": "subscription-login",
+    "redaction": "token-shaped strings, e-mail addresses and home-directory names redacted by the harness; nothing else altered"
+  },
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "local",
+    "runtime": "codex",
+    "authMode": "subscription-login",
+    "runId": "run_01SPIKE4STRUCTUREDRECORDED",
+    "cycleIndex": 1,
+    "nodeId": "review",
+    "attempt": 1,
+    "sessionPolicy": "fresh",
+    "note": "codex exec --json --output-schema schema.json against a structured pass/fail verdict prompt; the last agent_message text is expected to parse as JSON and validate against schema.json."
+  },
+  "input": {
+    "invocation": "env -u OPENAI_API_KEY -u CODEX_API_KEY codex exec --json --color never -s read-only -C /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/work --output-schema /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/schema.json -o /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/D2.last.txt Evaluate\\ this\\ claim:\\ \\'1\\ +\\ 1\\ =\\ 2\\'.\\ It\\ is\\ true.\\ Respond\\ with\\ a\\ structured\\ verdict\\ of\\ pass\\ and\\ a\\ one-sentence\\ reason.",
+    "exitCode": 0,
+    "signal": null,
+    "usageAtAttemptStart": {
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_output_tokens": 0
+    },
+    "events": [
+      {
+        "type": "thread.started",
+        "thread_id": "01a076dd-b5d2-7681-9ac5-8e0decb59027"
+      },
+      {
+        "type": "turn.started"
+      },
+      {
+        "type": "item.completed",
+        "item": {
+          "id": "item_0",
+          "type": "agent_message",
+          "text": "{\"verdict\":\"pass\",\"reason\":\"In standard arithmetic, adding 1 and 1 equals 2.\"}"
+        }
+      },
+      {
+        "type": "turn.completed",
+        "usage": {
+          "input_tokens": 16867,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 33,
+          "reasoning_output_tokens": 0
+        }
+      }
+    ],
+    "ignoredStreamLines": []
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE4STRUCTUREDRECORDED",
+          "cycleIndex": 1,
+          "nodeId": "review",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "codex",
+          "model": null,
+          "freshInputTokens": 16867,
+          "cacheWriteTokens": 0,
+          "cacheReadTokens": 0,
+          "outputTokens": 33,
+          "reasoningTokens": 0,
+          "totalInputTokens": 16867,
+          "totalTokens": 16900,
+          "provenance": "derived",
+          "provenanceNote": "turn.completed cumulative (input 16867, cached 0, cache_write 0, output 33) minus usageAtAttemptStart, clamped at 0 field-by-field; fresh = max(0, 16867 - 0 - 0) = 16867",
+          "source": {
+            "runtimeVersion": "codex-cli 0.153.4",
+            "eventKind": "turn.completed"
+          },
+          "complete": true,
+          "usageBasis": "turn.completed",
+          "sessionRef": {
+            "kind": "codex-thread",
+            "id": "01a076dd-b5d2-7681-9ac5-8e0decb59027"
+          },
+          "usageAtAttemptStart": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0
+          },
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": 16867,
+      "totalTokens": 16900,
+      "provenance": "derived",
+      "measured": true
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 1,
+      "coverage": 1,
+      "unmeasured": []
+    },
+    "mustNotEqual": {
+      "totalIfCachedWereAddedToInput": 16900,
+      "totalIfReasoningWereAddedToOutput": 16900
+    },
+    "display": {
+      "measuredTokens": "16,900",
+      "usageCoverage": "1/1 (100%)"
+    }
+  },
+  "assertsInvariants": [
+    "I1",
+    "I2",
+    "I3",
+    "I5",
+    "I8",
+    "I9"
+  ]
+}

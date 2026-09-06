@@ -22,7 +22,7 @@
 //      `--jsonl`, `--exit-code` and `--signal` may each be repeated; when repeated they are
 //      positional (jsonl[0] pairs with exit-code[0]/signal[0], and so on). This is only exercised by
 //      `--fixture two-turns`, which needs both attempts' raw streams to build the two-attempt fixture
-//      shape of docs/spec/usage-fixtures/codex-two-turns-cumulative.json. Every other invocation
+//      shape of docs/spec/usage-fixtures/codex-recorded-two-turns.json. Every other invocation
 //      passes each flag once.
 //
 // Rules implemented here (usage-normalization.md section 2.2, exactly):
@@ -472,17 +472,27 @@ function buildTwoTurnsFixture({ result1, result2, events1, events2, exitCodes, i
           totalInputTokens: usage1.totalInputTokens + usage2.totalInputTokens,
           totalTokens: usage1.totalTokens + usage2.totalTokens,
           provenance: "derived",
-          note: "The sum of the two deltas equals the LAST cumulative reported on the thread. That identity is invariant I5.",
+          note: "Each attempt is one process, and each process reports its own invocation's usage; the run total is the plain sum of the attempt records (invariant I5 as re-scoped after SPIKE-4 D4).",
         }
       : null;
 
-  const lastCumulative2 = result2.diagnostics.lastCumulative;
+  // What the retired thread-delta rule (subtracting the previous invocation's figure as if it were a
+  // thread-cumulative start) would have produced for attempt 2: the number a wrong implementation reports.
+  const retired = result1.diagnostics.lastCumulative
+    ? normalizeCodexStream({
+        events: events2,
+        exitCode: exitCodes && exitCodes[1] !== undefined ? exitCodes[1] : 0,
+        signal: null,
+        runtimeVersion,
+        usageAtAttemptStart: result1.diagnostics.lastCumulative,
+        model: usage2.model,
+      }).usage
+    : null;
   const mustNotEqual =
-    run && lastCumulative2
+    run && retired
       ? {
-          cycle2TotalIfCumulativeWereStoredRaw: num(lastCumulative2, "input_tokens") + num(lastCumulative2, "output_tokens"),
-          runTotalIfCumulativesWereSummed: usage1.totalTokens + num(lastCumulative2, "input_tokens") + num(lastCumulative2, "output_tokens"),
-          overcountIfCumulativesWereSummed: usage1.totalTokens,
+          cycle2TotalIfPreviousInvocationWereSubtracted: retired.totalTokens,
+          runTotalIfPreviousInvocationWereSubtracted: usage1.totalTokens + retired.totalTokens,
         }
       : { storedAsZero: 0 };
 
@@ -518,8 +528,10 @@ function buildTwoTurnsFixture({ result1, result2, events1, events2, exitCodes, i
       threadId: (usage2.sessionRef && usage2.sessionRef.id) || (usage1.sessionRef && usage1.sessionRef.id) || null,
       note:
         "Two attempts on the same Codex thread via codex exec resume: turn 1 a deliberately large output, turn 2 " +
-        "'TURN-TWO'. turn.completed.usage is thread-cumulative, so attempt 2's usageAtAttemptStart is attempt 1's " +
-        "last cumulative and the delta rule (usage-normalization.md section 2.2) recovers attempt 2's own tokens.",
+        "'TURN-TWO'. Measured: the resumed process reports its own invocation's usage (turn 2's output_tokens is a " +
+        "handful, far below turn 1's), not a thread-cumulative total. Each attempt is therefore read from its own " +
+        "last turn.completed with a zero usageAtAttemptStart; subtracting the previous invocation's figure is the " +
+        "documented-but-wrong arithmetic recorded under mustNotEqual.",
     },
     input: {
       attempts: [
@@ -665,14 +677,15 @@ function main() {
       const parsed1 = parseJsonlFile(jsonlFiles[1]);
       const exitCode1 = parseExitCode(pick(args["exit-code"], 1, exitCode0));
       const signal1 = parseSignalArg(pick(args.signal, 1, null));
-      // Attempt 2's start is attempt 1's own last cumulative, per the delta rule -- not whatever
-      // --start was given (that flag describes attempt 1's start, normally zero for a fresh thread).
+      // Attempt 2 is its own process and reports its own invocation's usage (SPIKE-4 D4, codex
+      // 0.153.4), so it starts from zero exactly like attempt 1. The builder computes what the retired
+      // thread-delta arithmetic would have produced and records it under mustNotEqual.
       const result1 = normalizeCodexStream({
         events: parsed1.events,
         exitCode: exitCode1,
         signal: signal1,
         runtimeVersion,
-        usageAtAttemptStart: result0.diagnostics.lastCumulative || zeroUsage(),
+        usageAtAttemptStart: zeroUsage(),
         model,
       });
 

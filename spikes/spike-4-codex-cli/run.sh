@@ -758,7 +758,7 @@ check_D4() {
   local id_a="D4a" id_b="D4b"
   local desc_a="D4a: turn 1 on a fresh thread (deliberately large output)"
   local desc_b="D4b: turn 2 via codex exec resume on the same thread"
-  local desc_overall="D4 overall: two sequential turns on one thread -- cumulative usage and the delta rule"
+  local desc_overall="D4 overall: two sequential turns on one thread -- is turn.completed.usage per invocation or thread-cumulative"
 
   local prompt_a="Write the integers from 1 to 150 separated by single spaces, on one line, and nothing else."
   local prompt_b="Reply with exactly: TURN-TWO"
@@ -869,9 +869,11 @@ check_D4() {
   append_row "$id_b" "$desc_b" "INFO" \
     "exit=$final_code accepted_flags=\"$accepted_flags\" turns_completed=$turn_completed_count_b (see D4b.summary.json)"
 
-  # D4 overall verdict: both turns have turn.completed with usage, and turn 2's output_tokens >= turn
-  # 1's output_tokens + 1 (the cumulative signature -- a per-turn figure for the tiny second turn
-  # would be far below turn 1's).
+  # D4 overall verdict. The design question is whether the per-attempt figure can be recovered,
+  # whichever way the CLI counts. Turn 2's reply is a handful of tokens, so a thread-cumulative count
+  # carries turn 1's large output forward (output_b > output_a) and a per-invocation count does not
+  # (output_b far below output_a). Either answer is a PASS once it is determinable; FAIL means one of
+  # the two usage objects is missing. First real run (0.153.4, 2026-09-06): per-invocation.
   local output_a output_b
   output_a=$(node -e 'try{const d=JSON.parse(process.argv[1]);console.log(d && typeof d.output_tokens==="number"?d.output_tokens:"");}catch(e){console.log("");}' "$last_usage_a" 2>/dev/null)
   output_b=$(node -e 'try{const d=JSON.parse(process.argv[1]);console.log(d && typeof d.output_tokens==="number"?d.output_tokens:"");}catch(e){console.log("");}' "$last_usage_b" 2>/dev/null)
@@ -879,14 +881,14 @@ check_D4() {
   local thread_ids_equal="no"
   [ -n "$thread_id" ] && [ "$thread_id" = "$thread_id_b" ] && thread_ids_equal="yes"
 
-  local cumulative="undetermined"
+  local usage_semantics="undetermined"
   local status="FAIL"
   if [ -n "$output_a" ] && [ -n "$output_b" ] \
      && [ "$(intval "$turn_completed_count_a")" -ge 1 ] && [ "$(intval "$turn_completed_count_b")" -ge 1 ]; then
     if [ "$output_b" -ge "$((output_a + 1))" ] 2>/dev/null; then
-      cumulative="yes"; status="PASS"
+      usage_semantics="thread-cumulative"; status="PASS"
     else
-      cumulative="no"; status="FAIL"
+      usage_semantics="per-invocation"; status="PASS"
     fi
   fi
 
@@ -903,7 +905,7 @@ check_D4() {
   ' "$last_usage_a" "$last_usage_b" 2>/dev/null)
 
   append_row "D4" "$desc_overall" "$status" \
-    "usage_a=$last_usage_a usage_b=$last_usage_b delta=$delta_json cumulative=$cumulative thread_ids_equal=$thread_ids_equal accepted_resume_flags=\"$accepted_flags\" (see D4a.summary.json, D4b.summary.json)"
+    "usage_a=$last_usage_a usage_b=$last_usage_b b_minus_a=$delta_json usage_semantics=$usage_semantics thread_ids_equal=$thread_ids_equal accepted_resume_flags=\"$accepted_flags\" (see D4a.summary.json, D4b.summary.json)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1137,11 +1139,23 @@ check_D7() {
   porcelain_wt=$(git -C "$worktree_dir" status --porcelain 2>/dev/null)
   porcelain_main=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null)
 
-  local content="" content_ok="no"
+  # The design question is the worktree contract, not the model's punctuation: content_ok accepts the
+  # requested line with a trailing-punctuation or whitespace difference and records separately whether
+  # the match was exact (the first real run wrote "spike-4 wrote this." with a full stop).
+  local content="" content_ok="no" content_exact="no"
   if [ -f "$worktree_dir/SPIKE4.md" ]; then
     content=$(cat "$worktree_dir/SPIKE4.md")
-    [ "$content" = "spike-4 wrote this" ] && content_ok="yes"
+    [ "$content" = "spike-4 wrote this" ] && content_exact="yes"
+    local normalized
+    normalized=$(printf '%s' "$content" | head -n1 | tr '[:upper:]' '[:lower:]' | sed -E 's/[[:space:][:punct:]]+$//')
+    [ "$normalized" = "spike-4 wrote this" ] && content_ok="yes"
   fi
+
+  local wrote_via="unknown"
+  case "$item_types" in
+    *file_change*) wrote_via="file_change item" ;;
+    *command_execution*) wrote_via="command_execution (a shell command wrote the file)" ;;
+  esac
 
   local porcelain_line_count porcelain_shape_ok
   porcelain_line_count=$(printf '%s\n' "$porcelain_wt" | grep -c .)
@@ -1163,7 +1177,7 @@ check_D7() {
   fi
 
   append_row "$id" "$desc" "$status" \
-    "exit=$code turns_completed=$turn_completed_count item_types=$item_types approval_event_seen=$approval_seen porcelain_wt=\"$porcelain_wt\" porcelain_main_clean=$main_clean content_ok=$content_ok diff_stat=\"$diff_stat\" (see D7.summary.json, D7.worktree-add.err)"
+    "exit=$code turns_completed=$turn_completed_count item_types=$item_types wrote_via=\"$wrote_via\" approval_event_seen=$approval_seen porcelain_wt=\"$porcelain_wt\" porcelain_main_clean=$main_clean content_ok=$content_ok content_exact=$content_exact content=\"$content\" diff_stat=\"$diff_stat\" (see D7.summary.json, D7.worktree-add.err)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1197,10 +1211,10 @@ d8_normalize_one() {
       ;;
   esac
 
+  # Every attempt is its own process, and D4 measured per-invocation counting on 0.153.4, so every
+  # record -- D4b included -- is read from its own invocation's last turn.completed with a zero start.
+  # The retired thread-delta arithmetic survives only as a must-not-equal inside the two-turns fixture.
   local extra_args=()
-  if [ "$nid" = "D4b" ]; then
-    extra_args=(--start "$OUT_DIR/D4a.usage-start.json")
-  fi
 
   local out_file="$OUT_DIR/${nid}.usage.json"
   local node_args=(--jsonl "$jsonl" --exit-code "$exit_code" --signal "$signal" --runtime-version "$D8_RUNTIME_VERSION" --out "$out_file")
@@ -1228,7 +1242,7 @@ check_D8() {
   local id="D8" desc="normalize D1/D2/D3b/D4a/D4b/D5-SIGINT/D5-SIGTERM/D5-TIMEOUT/D7 into canonical Usage records (normalize.mjs)"
 
   if [ "$DRY_RUN" = "1" ]; then
-    dry_row "$id" "$desc" "node normalize.mjs --jsonl out/<id>.json --exit-code <code> --signal <SIGINT|SIGTERM|SIGKILL|none> --runtime-version <codex --version> --out out/<id>.usage.json [--start out/D4a.usage-start.json for D4b] [--fixture <name> --fixture-out out/fixtures/codex-recorded-<name>.json] for each of D1,D2,D3b,D4a,D4b,D5-SIGINT,D5-SIGTERM,D5-TIMEOUT,D7, plus a two-jsonl --fixture two-turns call over D4a+D4b"
+    dry_row "$id" "$desc" "node normalize.mjs --jsonl out/<id>.json --exit-code <code> --signal <SIGINT|SIGTERM|SIGKILL|none> --runtime-version <codex --version> --out out/<id>.usage.json [--fixture <name> --fixture-out out/fixtures/codex-recorded-<name>.json] for each of D1,D2,D3b,D4a,D4b,D5-SIGINT,D5-SIGTERM,D5-TIMEOUT,D7, plus a two-jsonl --fixture two-turns call over D4a+D4b"
     return 0
   fi
 
@@ -1302,7 +1316,8 @@ check_D8() {
     fi
   done
 
-  # I5 for D4: D4a.total + D4b.total == D4b's cumulative input+output, when both are derived.
+  # I5 for D4 (per-invocation counting): each record equals its own invocation's turn.completed figure
+  # -- no cross-invocation subtraction happened -- and the two-attempt total is their plain sum.
   if [ -f "$OUT_DIR/D4a.usage.json" ] && [ -f "$OUT_DIR/D4b.usage.json" ]; then
     local i5_result
     i5_result=$(node -e '
@@ -1311,11 +1326,14 @@ check_D8() {
         const a = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
         const b = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
         if (a.usage.provenance !== "derived" || b.usage.provenance !== "derived") { console.log("skipped(not both derived)"); process.exit(0); }
-        const lastCum = b.diagnostics.lastCumulative;
-        if (!lastCum) { console.log("skipped(no cumulative)"); process.exit(0); }
-        const sum = a.usage.totalTokens + b.usage.totalTokens;
-        const cumTotal = (lastCum.input_tokens || 0) + (lastCum.output_tokens || 0);
-        console.log(sum === cumTotal ? "ok" : ("FAIL:" + sum + "!=" + cumTotal));
+        for (const [name, r] of [["D4a", a], ["D4b", b]]) {
+          const c = r.diagnostics.lastCumulative;
+          if (!c) { console.log("skipped(no usage on " + name + ")"); process.exit(0); }
+          if (r.usage.totalInputTokens !== (c.input_tokens || 0) || r.usage.outputTokens !== (c.output_tokens || 0)) {
+            console.log("FAIL:" + name + " record differs from its own invocation figure"); process.exit(0);
+          }
+        }
+        console.log("ok");
       } catch (e) { console.log("FAIL:exception " + String((e && e.message) || e)); }
     ' "$OUT_DIR/D4a.usage.json" "$OUT_DIR/D4b.usage.json" 2>/dev/null)
     case "$i5_result" in

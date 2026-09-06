@@ -5,7 +5,7 @@
   "notARecording": "Hand-written from the documented codex exec JSONL event shapes and the documented fact that a failed turn emits turn.failed and never turn.completed. No CLI was executed to produce this file.",
   "spec": "docs/spec/usage-normalization.md",
   "scenario": {
-    "backend": "github-actions",
+    "backend": "local",
     "runtime": "codex",
     "authMode": "subscription-login",
     "runId": "run_01JQ8ZF0Y2Z5B8E1G4J7M0Q3S9",

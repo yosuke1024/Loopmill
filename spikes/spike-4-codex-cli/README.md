@@ -143,6 +143,21 @@ Redaction is applied before anything is persisted: API-key and token shapes, JWT
 - **macOS `date` has no `%N`**, so durations are whole seconds.
 - **`--skip-git-repo-check` is not used**: the harness gives `codex` a real repository, because that
   is what the `local` backend does.
+- **The first real run changed two grades, not the measurements.** D4 had been written expecting a
+  thread-cumulative count and graded the per-invocation result FAIL; D7 graded a trailing full stop
+  FAIL on an exact-content match. Both now grade the design question and record the raw observation
+  (`usage_semantics`, `content_exact`). The first pass's numbers are kept in `docs/spikes/README.md`
+  section 6.
+- **`codex exec` reads a non-TTY stdin.** With stdin on `/dev/null` it prints
+  `Reading additional input from stdin...` and continues; an open pipe that is never closed would hold
+  it. Loopmill's executor must hand the CLI `/dev/null`.
+- **A SIGTERM-ed `codex exec` exits 0** with no `turn.completed`; SIGINT exits 1. Neither leaves a usage
+  record, so the terminal event, never the exit code, is the completion signal.
+
+## Results
+
+Recorded in `docs/spikes/README.md` section 6 (2026-09-06, codex 0.153.4, claude 2.1.263). The
+recorded fixtures live in `docs/spec/usage-fixtures/codex-recorded-*.json`.
 
 ## D9 -- the scheduler context
 

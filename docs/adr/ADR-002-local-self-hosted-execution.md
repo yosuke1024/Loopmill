@@ -222,8 +222,8 @@ keys" — is retired: it was a statement about hosted runners.
   mapping, never a credential transport.
 - Subscription-native is kept without a single credential leaving the host; the compliance posture of
   `docs/design/mvp-design.md` §19 gets simpler, not weaker.
-- Codex is a provider again, through `codex exec` on the host, with the thread-cumulative usage rule
-  already specified.
+- Codex is a provider again, through `codex exec` on the host, with the per-process usage rule
+  SPIKE-4 measured on 2026-09-06 (the documented thread-cumulative rule was refuted on 0.153.4).
 - The engine is the same engine: pure transition, event journal, three state machines, fixtures. The
   git-branch store and the GitHub transports become adapters that are not built in the MVP.
 - One host, one file, one lock: crash recovery is a transaction, not a distributed protocol.
@@ -246,9 +246,9 @@ keys" — is retired: it was a statement about hosted runners.
 
 | # | Risk | If it lands | Retired by |
 | --- | --- | --- | --- |
-| R1 | `codex exec` does not run non-interactively under a ChatGPT login with machine-readable results, usage and a terminal signal | Codex stays `PLANNED / EXPERIMENTAL`; the MVP ships Claude-only behind the same abstraction | **SPIKE-4** |
-| R2 | A scheduler-started process cannot reach the CLI's login state (macOS keychain when the screen is locked or no user session; `CODEX_HOME` not found under a `systemd` unit) | Unattended scheduled runs fail at authentication on that platform until the environment is prepared; `doctor` must detect it before 06:00 | **SPIKE-4** (launchd/systemd probes), a `doctor` check |
-| R3 | `claude -p` behaves differently on the user's host than on the hosted runner | Contract tests catch it | run the SPIKE-1 harness locally (SPIKE-4) |
+| R1 | `codex exec` does not run non-interactively under a ChatGPT login with machine-readable results, usage and a terminal signal | Codex stays `PLANNED / EXPERIMENTAL`; the MVP ships Claude-only behind the same abstraction | **SPIKE-4 — retired 2026-09-06**: D1-D4 and D7 PASS on codex 0.153.4 under a ChatGPT login (design §22) |
+| R2 | A scheduler-started process cannot reach the CLI's login state (macOS keychain when the screen is locked or no user session; `CODEX_HOME` not found under a `systemd` unit) | Unattended scheduled runs fail at authentication on that platform until the environment is prepared; `doctor` must detect it before 06:00 | **SPIKE-4 D9** — open: the macOS probes are ready, no Linux host is available; plus a `doctor` check |
+| R3 | `claude -p` behaves differently on the user's host than on the hosted runner | Contract tests catch it | **retired 2026-09-06**: SPIKE-1's C1-C4, C6 and C7 reproduced on the maintainer's macOS host with claude 2.1.263 (SPIKE-4 D10) |
 | R4 | Two entrypoints race on one repository (scheduler plus a manual `run`, or `resume --due` plus `run`) | A double Run or a torn journal | the `locks` row (D6), acceptance criteria A10/A11 |
 | R5 | Vendor terms forbid unattended single-user use | STOP (c) | R11, done 2026-09-06: the primary texts were read verbatim and do not forbid it; the interpretive residual is recorded in design §19.1 and §22 |
 

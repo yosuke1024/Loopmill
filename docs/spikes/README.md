@@ -758,25 +758,56 @@ expected to surface useful detail regardless of outcome, the same way C5, C6, C9
 
 ### Results
 
-Not yet run. The harness exists and is verified offline (2026-09-06): `bash -n`, `SPIKE_DRY_RUN=1`,
-the normaliser's tests against the committed hand-written fixtures (5/5), and a full end-to-end run
-against a stand-in `codex` script that emits the documented JSONL shapes — every check graded as
-designed, including the three D5 cancellation paths. The real run spends subscription quota and waits
-for the maintainer's go-ahead.
+Run on 2026-09-06 on the maintainer's macOS host (Darwin 25.5.0, arm64), Node v25.5.0, codex-cli
+**0.153.4**, claude-code **2.1.263** — both updated from 0.144.6 / 2.1.245 immediately before the run,
+so the measurements match the research baselines — account-default models, `OPENAI_API_KEY` /
+`CODEX_API_KEY` unset, the `codex` login in the macOS keyring (`cli_auth_credentials_store = "keyring"`,
+`forced_login_method = "chatgpt"`, no `auth.json`). Two passes: the full D0-D8 pass, then D4, D7 and D8
+re-run after their grading was corrected (see the rows); every number is from the pass named in its row.
+Before either pass the harness had been verified offline: `bash -n`, `SPIKE_DRY_RUN=1`, the normaliser's
+tests against the hand-written fixtures, and an end-to-end run against a stand-in `codex` script.
 
-| Check | Status |
-|---|---|
-| D0-D8 | not yet run (harness ready: `bash spikes/spike-4-codex-cli/run.sh`) |
-| D9 | not yet run (macOS procedure ready in `spikes/spike-4-codex-cli/d9/README.md`; no Linux host available to the maintainer at the time of writing) |
-| D10 | not yet run (`ONLY=C1,C2,C3,C4,C6,C7 bash spikes/spike-1-claude-subscription/run.sh`) |
+| Check | Status | Notes |
+|---|---|---|
+| D0 environment | INFO | `codex login status` exit 0 ("Logged in using ChatGPT"); keyring item `Codex Auth` present; no API key in the environment |
+| D1 plain `exec --json` | PASS | exit 0, 9 s; stream `thread.started` → `turn.started` → `item.completed` (`agent_message`, `LOOPMILL-OK`) → `turn.completed` with `usage` {input 16,807, cached 12,928, cache_write 0, output 10, reasoning 0}; stderr `Reading additional input from stdin...` because stdin was `/dev/null` |
+| D2 `--output-schema` | PASS | exit 0; the final `agent_message` is `{"verdict":"pass","reason":…}`, validates against the schema and equals the `-o` file byte for byte |
+| D3 exit codes | PASS | a: 0. b (`-m loopmill-no-such-model`): exit 1 after an `item.completed` of `type: error` (a metadata warning), then `error` and `turn.failed` carrying the backend's HTTP 400 `invalid_request_error` ("The 'loopmill-no-such-model' model is not supported when using Codex with a ChatGPT account.") — a structured event, not prose. c (unknown flag): exit 2, clap usage on stderr, nothing on stdout. Pairwise distinct |
+| D4 two turns, one thread | **PASS — the documentary claim is refuted** | `codex exec resume <thread_id>` accepted `--json` (and, per `--help`, `-o`, `--output-schema`, `-m`) but not `-C`, `-s` or `--color`; the same `thread_id` on both streams. Turn 1: {input 17,578, cached 12,928, output 303}; turn 2 (`TURN-TWO`): {input 19,714, cached 17,408, output **7**}. A thread-cumulative counter would have reported at least 310 output tokens; the resumed process counted only itself. The first pass, graded under the cumulative expectation, reported FAIL on the same shape (turn 1 {16,820 / 12,928 / 303}, turn 2 {17,136 / 16,640 / 7}); the grade now records which semantics was measured, and the re-run reproduced per-invocation counting |
+| D5 SIGINT | INFO | delivered 8 s in to a live process: exit **1**, elapsed 9 s, stream stopped after `turn.started`, no `turn.completed`, nothing on stderr beyond the stdin notice |
+| D5 SIGTERM | INFO | same, but exit **0** — a killed `codex exec` exits successfully with no terminal event |
+| D5 TIMEOUT (SIGTERM, then SIGKILL) | INFO | ended on the SIGTERM: exit 0, no `turn.completed` |
+| D6 quota probe | INFO | no limit phrase anywhere; the event types seen across the whole run are exactly `thread.started`, `turn.started`, `item.completed`, `turn.completed` (`usage`), `turn.failed` (`error`) and `error` (`message`); no key names a limit, a window or a reset |
+| D7 worktree edit | PASS | exit 0, 13 s; `git status --porcelain` in the worktree is exactly `?? SPIKE4.md` and the scratch main checkout is clean; the file was written by a shell command (`agent_message` ×2, `command_execution` ×2, no `file_change` item, no approval event); content `spike-4 wrote this.` — the model added a full stop, which the first pass graded FAIL on an exact match; the re-run grades the worktree contract and records `content_exact=no` |
+| D8 normalisation | PASS | nine records: D1, D2, D4a, D4b and D7 `derived` and complete (16,817 / 16,900 / 17,881 / 19,721 / 34,445); D3b and the three D5 cases `unavailable`; invariants I2 and I8 hold and I5 was re-scoped (below). The recorded fixtures are committed as `docs/spec/usage-fixtures/codex-recorded-*.json` |
+| D9 scheduler context | **not yet run** | macOS procedure ready in `spikes/spike-4-codex-cli/d9/README.md`; no Linux host is available |
+| D10 SPIKE-1 locally | PASS | claude 2.1.263 on macOS, account default `claude-opus-5[1m]`: C1 (`loggedIn: true`, `authMethod: "claude.ai"`), C2, C3, C4 (7 lines, including a `rate_limit_event` and the operator's own hook events), C6-sigint (exit 0, `error_during_execution`, `aborted_streaming`, a result with `modelUsage: {}`), C6-sigterm (exit 143, no result), C6-timeoutint (124 through the shim, `aborted_streaming`), C7 (no hang, 5.1 s, no `setsid` on macOS). The hosted-runner contract holds on the host |
 
-Facts already measured on the maintainer's host while building the harness, which the D9 write-up
-must take into account: `codex` 0.144.6 keeps its ChatGPT login in the macOS login keychain
-(`cli_auth_credentials_store = "keyring"` in `config.toml`; there is no `auth.json`), `claude` 2.1.245
-keeps its claude.ai login in the keychain item `Claude Code-credentials`, and `gh` uses the keyring
-too — so on this host every one of the three logins a scheduled process needs is a keychain question,
-not a file-permission one. OpenAI's own docs say the keyring store must be switched to file-backed
-storage before any headless use of `auth.json` (design §19.1).
+**Verdict.** D1-D4 and D7 PASS: the `codex` runtime is **verified** on the operator's host under
+`subscription-login` (design §20.1). D9 does not gate the runtime and stays open.
+
+### Findings that change the design
+
+- **Codex usage is per process, not per thread.** `codex exec resume` starts its counter at zero, so
+  the per-attempt figure is the attempt's own last `turn.completed.usage` and nothing is subtracted
+  across processes. v0.5's thread-delta rule would have under-counted a resumed attempt (4,480 for the
+  19,721-token attempt recorded here) and clamped its fresh bucket to zero. `usage-normalization.md`
+  §2.2(b) and invariant I5 are rewritten; the hand-written `codex-two-turns-cumulative.json` is replaced
+  by the recording `codex-recorded-two-turns.json`, which keeps the wrong numbers under `mustNotEqual`.
+- **A SIGTERM-ed `codex exec` exits 0** — with no `turn.completed` in the stream. The exit code is
+  therefore never a completion signal for codex; the terminal event is (`state-machine.md` §7.2 row 5
+  already required it and now says why). SIGINT exits 1, also without a terminal event, so unlike
+  claude-code there is no cancel signal that preserves usage: a cancelled codex attempt is `unavailable`
+  and unmeasured for coverage.
+- **stdin must be `/dev/null` or closed.** A non-TTY stdin is read as additional input (the
+  `Reading additional input from stdin...` notice); an open pipe that is never closed would hold the
+  CLI. Recorded in design §7.2.
+- **The failure signal is structured.** An unknown model yields `error` and `turn.failed` events with
+  the backend's `invalid_request_error` JSON inside `message`, exit 1. `codex exec resume`'s narrower
+  flag set and the absence of any quota-shaped key in the exec JSONL (D6) are recorded in design §6.3
+  and §14.2.
+- **On macOS every login a scheduled process needs is a keychain item** (`claude`, `codex` with the
+  keyring store, `gh`). D9 decides what that means for `launchd`; design §7.5 records the fact now.
 
 Harness lessons found before any real run, all recorded in `spikes/spike-4-codex-cli/README.md`: a
 background job started by a non-interactive bash inherits an ignored SIGINT (measured on macOS bash
@@ -796,20 +827,21 @@ in 0.144.6), so D4b runs from the scratch repository's own directory; macOS `dat
 | G3 | SPIKE-2b: seeded `auth.json` survives ephemeral runners | **superseded** — not run | ADR-002: no credential is ever moved to a runner Loopmill does not own, so the question no longer arises |
 | G4 | SPIKE-3: non-resident, event-sourced `step` on real GitHub | **green — reinterpreted** | 21/21 local, 44 hosted runs (§5); the transition/journal/concurrency properties carry over to the SQLite store (ADR-002 Appendix B); the git-branch store and `GITHUB_TOKEN` chaining measured here are the reserved `github-actions` backend's mechanism, not the MVP's own |
 | G5 | STOP (c): vendor terms read verbatim from primary sources | **green** — R11 done 2026-09-06 | OpenAI's Terms of Use, Usage Policies, the Codex CI/CD-auth page and the Scheduled-tasks page are quoted verbatim with access times in design §19.1; STOP (c) is evaluated in design §22: not triggered on the text, interpretive residual recorded |
-| G6 | SPIKE-4: `codex exec` on the host, and the scheduler context | **open** — harness built and verified offline 2026-09-06; the real run (quota-spending) awaits the maintainer | §6 |
+| G6 | SPIKE-4: `codex exec` on the host, and the scheduler context | **green for the runtime** — D1-D4 and D7 PASS 2026-09-06 (codex 0.153.4), D10 PASS (claude 2.1.263 on macOS); **D9 open** (macOS probes ready, no Linux host) | §6 |
 
 **STOP conditions (v0.6, ADR-002 D10):** **(a)** no supported AI CLI can execute unattended on a
-user-managed host under subscription authentication — **not triggered**, pending the trivial host
-confirmation SPIKE-4 D10 is expected to give; **(b)** — "no cross-vendor path exists under subscriptions,
+user-managed host under subscription authentication — **not triggered**, confirmed on the maintainer's
+own host on 2026-09-06 (SPIKE-4 D10 reproduced SPIKE-1's C1-C4, C6 and C7 there, and D1-D7 ran
+`codex exec` there too); **(b)** — "no cross-vendor path exists under subscriptions,
 and the only working shape is GitHub Actions plus API keys" — **retired**: it was a statement about
 hosted runners, and does not survive execution moving to a user-managed host; **(c)** vendor terms, read
 verbatim, forbid the single-user unattended use Loopmill relies on — **not triggered on the text read**
 (R11, 2026-09-06; design §19.1 and §22 carry the quotes and the interpretive residual).
 
-1. **Run SPIKE-4** (`spikes/spike-4-codex-cli/`, harness built 2026-09-06): D0-D8 on the maintainer's
-   Mac, the macOS D9 probes (`launchd` agent with the screen locked, `launchd` daemon with no session),
-   D10, and — when a Linux host is available — the `systemd --user` half of D9. This is now the one
-   thing standing between STOP (a) and a written "not triggered".
+1. **Run SPIKE-4 D9** (`spikes/spike-4-codex-cli/d9/README.md`): the `launchd` user agent with the
+   screen locked and the `launchd` daemon with no login session on the maintainer's Mac, and — when a
+   Linux host exists — the `systemd --user` half. D0-D8 and D10 ran on 2026-09-06 (§6); D9 decides the
+   per-platform notes in design §7.5 and the `doctor --scheduler` check list, not the STOP condition.
 2. **R11 terms reading — done 2026-09-06.** OpenAI's Terms of Use, Usage Policies, the Codex CI/CD-auth
    page and the Scheduled-tasks page were read in a browser on the maintainer's machine (the policy pages
    answer HTTP 403 to non-browser clients); the quotes, URLs and access times are in design §19.1, and

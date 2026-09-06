@@ -13,9 +13,12 @@ Conformance language: MUST, MUST NOT, SHOULD, MAY.
 
 Vendor facts used here (Anthropic's three input fields are disjoint and additive; OpenAI's cached and
 cache-write counts are subsets of `input_tokens`; reasoning is a subset of output; the Codex
-`turn.completed.usage` object is thread-cumulative; a failed Codex turn emits no usage; Claude Code's
+`turn.completed.usage` object counts the process that emitted it — SPIKE-4 D4 (2026-09-06, codex
+0.153.4) measured that a resumed thread's process starts from zero, so the documentation's
+"thread-cumulative" is at most per-process; a failed Codex turn emits no usage; Claude Code's
 `result.usage` excludes subagents while `modelUsage` includes them) come from the verified runtime
-research briefs dated 2026-09-06 and are treated as settled input, not re-argued here.
+research briefs dated 2026-09-06, corrected by the SPIKE-4 measurements of the same day where the two
+differ, and are treated as settled input, not re-argued here.
 
 ---
 
@@ -82,8 +85,10 @@ interface UsageRecord extends Usage {
   /** The runtime's own conversation handle, needed to audit the Codex delta rule. */
   sessionRef: { kind: "claude-session" | "codex-thread"; id: string } | null;
 
-  /** For cumulative runtimes: the vendor cumulative snapshot at the START of this attempt,
-   *  stored verbatim in the vendor's own field names. null for non-cumulative runtimes. */
+  /** The vendor usage counter at the START of this attempt, stored verbatim in the vendor's own
+   *  field names. All-zero for codex in the MVP — every attempt is its own process and a process
+   *  counts only itself (SPIKE-4 D4) — and null for runtimes that report per call. Kept so that a
+   *  future in-process multi-turn runtime can be audited without a schema change. */
   usageAtAttemptStart: Record<string, number> | null;
 
   /** Vendor client-side list-price estimate, stored verbatim, never recomputed. Section 5.2. */
@@ -342,48 +347,56 @@ When the clamp actually fires (the subtraction went negative), `provenanceNote` 
 There is no `total_tokens` field in the exec JSONL usage object, so a Codex total is by construction
 computed by Loopmill. That alone forbids `reported`.
 
-**(b) The thread-delta rule.** `turn.completed.usage` carries the **thread-cumulative** total, not the
-turn delta. For an attempt:
+**(b) One process, one figure.** Each attempt is one `codex exec` (or `codex exec resume`) process,
+and a process reports its own usage: SPIKE-4 D4 (2026-09-06, codex 0.153.4) resumed a thread whose
+first turn had produced 303 output tokens, and the resumed process reported `output_tokens: 7` for its
+own reply, not 310 `[V]`. Whatever the counter accumulates *within* a process — the documentation calls
+it thread-cumulative, and `codex exec` runs exactly one turn per process, so the question does not
+arise — it starts from zero when the process starts. The rule is therefore:
 
 ```
-delta        = lastTurnCompletedUsage - usageAtAttemptStart      // field-by-field, clamped at 0
-usageAtAttemptStart = the thread cumulative recorded when this attempt was dispatched
-                      (all-zero for a fresh thread)
+attempt usage        = the LAST turn.completed.usage the attempt's process emitted
+usageAtAttemptStart  = all-zero, recorded verbatim so the record stays auditable
+delta                = usage - usageAtAttemptStart, field-by-field, clamped at 0   // == usage
 ```
 
-Only the **last** `turn.completed` of the attempt is used. The several `turn.completed` lines an
-attempt may emit are successive cumulative snapshots; summing them is wrong by construction.
+Only the **last** `turn.completed` of the process is used; should a future version emit several in
+one process, they are successive snapshots of that process and summing them is wrong by construction.
+No figure is ever carried from one process to the next: subtracting the previous invocation's usage —
+the arithmetic v0.5 specified from the documentation — under-counts a resumed attempt and, when the
+resumed process read a larger context than the previous one, clamps its fresh bucket to zero. That
+wrong result is kept as a `mustNotEqual` value in the recorded fixture.
 
-The MVP default `sessionPolicy: fresh` gives every attempt its own thread, so `usageAtAttemptStart` is
-zero and the delta equals the cumulative. Thread reuse (`codex exec resume`) is an explicit opt-in and
-requires the persisted `sessionRef.id` + `usageAtAttemptStart` pair to be auditable.
+Thread reuse (`codex exec resume`, `sessionPolicy: reuse`) changes the *context* the next process
+starts from, not the accounting; the persisted `sessionRef.id` is what makes the reuse auditable.
 
-#### Worked example A — two attempts on one thread
+#### Worked example A — two attempts on one thread (recorded, SPIKE-4 D4)
 
-Thread `th_01JQ8ZE8...`, reused. (The same arithmetic applies whether the two attempts are two
-dispatches of one node execution — attempt 1 `LOST`, attempt 2 resumes — or two node executions in
-different cycles sharing a thread.)
+One thread, reused through `codex exec resume`. Attempt 1 asked for a long answer; attempt 2 asked for
+the single word `TURN-TWO`. The numbers are the recorded `turn.completed.usage` objects
+(`codex-recorded-two-turns.json`).
 
 | | attempt 1 (cycle 1) | attempt 2 (cycle 2) |
 |---|---|---|
-| `usageAtAttemptStart` | 0 / 0 / 0 / 0 | 132,000 / 96,000 / 12,000 / 8,000 |
-| `turn.completed.usage` (cumulative) | 132,000 / 96,000 / 12,000 / 8,000 | 227,000 / 168,000 / 19,000 / 14,300 |
-| delta (`input` / `cached` / `write` / `output`) | 132,000 / 96,000 / 12,000 / 8,000 | **95,000 / 72,000 / 7,000 / 6,300** |
-| `freshInputTokens` | `max(0, 132,000−96,000−12,000)` = **24,000** | `max(0, 95,000−72,000−7,000)` = **16,000** |
-| `cacheWriteTokens` | 12,000 | 7,000 |
-| `cacheReadTokens` | 96,000 | 72,000 |
-| `outputTokens` | 8,000 | 6,300 |
-| `reasoningTokens` (reference) | 3,200 | 2,700 |
-| `totalInputTokens` | 132,000 | 95,000 |
-| `totalTokens` | **140,000** | **101,300** |
+| `usageAtAttemptStart` | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `turn.completed.usage` (`input` / `cached` / `write` / `output`) | 17,578 / 12,928 / 0 / 303 | 19,714 / 17,408 / 0 / 7 |
+| `freshInputTokens` | `max(0, 17,578−12,928−0)` = **4,650** | `max(0, 19,714−17,408−0)` = **2,306** |
+| `cacheWriteTokens` | 0 | 0 |
+| `cacheReadTokens` | 12,928 | 17,408 |
+| `outputTokens` | 303 | 7 |
+| `reasoningTokens` (reference) | 0 | 0 |
+| `totalInputTokens` | 17,578 | 19,714 |
+| `totalTokens` | **17,881** | **19,721** |
 
-Run total = 140,000 + 101,300 = **241,300**, which is exactly the last cumulative
-(227,000 input + 14,300 output). That identity is invariant I5 and is the cheapest available check
-that the delta rule was applied.
+Run total = 17,881 + 19,721 = **37,602**: the plain sum of the attempt records, which is invariant I5
+as re-scoped. Attempt 2's input is larger than attempt 1's because the resumed process re-read the
+whole thread (17,408 of its 19,714 input tokens came from the cache); it is not a running total, and
+its 7 output tokens are the proof.
 
-Storing the raw cumulative for attempt 2 would report **241,300** for a 101,300-token attempt and give
-a run total of **381,300** — an overcount of 140,000, i.e. attempt 1 counted twice. With
-`maxIterations: 3` the overcount grows quadratically in the number of cycles.
+The retired thread-delta arithmetic applied to attempt 2 — subtract attempt 1's object, clamp at zero
+— gives 2,136 / 4,480 / 0 / 0: `freshInputTokens` clamped from −2,344 to 0, `outputTokens` 0, a total of
+**4,480** for a 19,721-token attempt, and a run total of **22,361** instead of 37,602. The fixture
+carries both wrong numbers under `mustNotEqual`.
 
 #### Worked example B — a fresh thread
 
@@ -413,7 +426,9 @@ and is never used in a ratio that also uses `outputTokens` from a runtime that d
 than of work.
 
 **Rate-limit and quota data are not available from the exec JSONL stream** and are therefore not part
-of the Usage record. Quota classification is carried on the `node-failed` event, never on the usage
+of the Usage record (confirmed on 0.153.4: SPIKE-4 D6 saw only `thread.started`, `turn.started`,
+`item.*`, `turn.completed` with `usage`, `turn.failed` with `error` and `error` with `message`; no key
+names a limit, a window or a reset `[V]`). Quota classification is carried on the `node-failed` event, never on the usage
 record, and never fills a bucket.
 
 ### 2.3 `observed` backends — reserved
@@ -466,6 +481,7 @@ label that already carries the "never summed with measured values" rule.
 |---|---|---|
 | Process killed (SIGTERM/SIGKILL, OOM, an operator-cancelled run, a host reboot mid-attempt) | non-zero exit with a signal, no terminal event on stdout (claude-code SIGTERM: exit 143, empty stdout, measured on 2.1.263 `[V]`) | `unavailable`, `complete: false`, `eventKind: null`, note names the signal |
 | No terminal event (stream ends mid-turn; deadline hit; `codex` turn interrupted) | stream closed without `result` / `turn.completed` | `unavailable`, `complete: false`, `eventKind: null` |
+| `codex` signalled mid-turn | SIGINT: exit 1; SIGTERM: **exit 0**; in both cases the stream stops after `turn.started` with no `turn.completed` (measured on 0.153.4, SPIKE-4 D5 `[V]`) | `unavailable`, `complete: false`, `eventKind: null`, note names the signal. The SIGTERM case is why a terminal event, never the exit code, decides completion for codex |
 | `codex` `turn.failed` | `turn.failed` seen, no `turn.completed` on the thread | `unavailable`, `complete: false`, `eventKind: "turn.failed"` |
 | Malformed JSON (a truncated line, a non-JSON line, a schema-invalid usage object, a negative or non-integer field) | parse or validation failure | `unavailable`, `complete: false`, `eventKind` names the line kind, note carries the parse error |
 | `claude-code` result with all-zero usage after a crash or an authentication failure | `totalInputTokens === 0` on the chosen basis (`modelUsage: {}` and zeroed `usage`); seen with `subtype: "error_during_execution"`, and with `subtype: "success"`, `is_error: true`, `terminal_reason: "api_error"` `[V]` | `unavailable` (section 2.1 zeroed-crash rule) |
@@ -496,7 +512,7 @@ provenance of `unavailable` or `estimated` would poison.
 
 | Level | Sums over | Notes |
 |---|---|---|
-| Node Execution | all its Attempts that produced a measured record | attempts are disjoint by construction, including on a reused Codex thread (invariant I5). Retried attempts both count; there is no de-duplication. |
+| Node Execution | all its Attempts that produced a measured record | attempts are disjoint by construction — each is one process that counts only itself, including on a reused Codex thread (invariant I5). Retried attempts both count; there is no de-duplication. |
 | Cycle | all Node Executions in `(runId, cycleIndex)` | only `agent` nodes ever carry usage; `command`, `condition`, `human` and `end` nodes contribute nothing and are not counted anywhere, including in the coverage denominator |
 | Run | all Cycles, **including cycle 0** | cycle 0 is setup/teardown: nodes outside every Retry Edge body |
 | Loop window | all Runs whose `startedAt` falls in the window | window is rolling, defined in section 6.4 |
@@ -1024,10 +1040,12 @@ row MUST still show the per-runtime split and, if any contributing node is unmea
 `docs/spec/usage-fixtures/*.json`. Two kinds of file live here. **`handWritten: true`** files are
 hand-written from the documented event shapes and are not recordings; no CLI was executed to produce
 them, every one says so in its `notARecording` field, and their numbers are illustrative but
-internally consistent with the rules above. **`handWritten: false`** files (`claude-recorded-*.json`)
-are verbatim recordings from the SPIKE-1 harness (claude-code 2.1.263 on a GitHub-hosted runner,
-2026-09-06, workflow run 34024962852) with their provenance under `recording`; the expected records
-were derived from them by the rules above and can be checked by hand.
+internally consistent with the rules above. **`handWritten: false`** files are verbatim recordings
+with their provenance under `recording`: `claude-recorded-*.json` from the SPIKE-1 harness
+(claude-code 2.1.263 on a GitHub-hosted runner, 2026-09-06, workflow run 34024962852) and
+`codex-recorded-*.json` from the SPIKE-4 harness (codex 0.153.4 on the maintainer's macOS host,
+2026-09-06); the expected records were derived from them by the rules above and can be checked by
+hand.
 
 Common shape:
 
@@ -1053,7 +1071,10 @@ matches one of them fails with a named diagnosis rather than a bare inequality.
 | `claude-recorded-success.json` (recording) | 2.1.263 clean success: `modelUsage` with a helper-model entry beside the main model; `thinkingTokens` broken out | `reported`, basis `modelUsage`, two `perModel` entries, **30,476**; must not equal 29,560 (`result.usage` alone) |
 | `claude-recorded-max-turns.json` (recording) | `error_max_turns`, `is_error: true`, exit 1, `terminal_reason: max_turns`: usage is reported in full on a failed attempt | `reported`, `complete: true`; must not be `unavailable` |
 | `claude-recorded-sigint.json` (recording) | SIGINT mid-turn: exit 0, `terminal_reason: aborted_streaming`, `result.usage` zeroed, `modelUsage` with the completed helper call only | `reported`, `complete: false`, unmeasured for coverage; must not equal 0 and must not be `complete: true` |
-| `codex-two-turns-cumulative.json` | thread reuse; the delta rule; the sum-of-deltas identity | two `derived` records, **140,000** and **101,300**, run total **241,300**; must not equal 381,300 |
+| `codex-recorded-two-turns.json` (recording) | thread reuse via `codex exec resume`; one process, one figure; the retired thread-delta arithmetic kept as a must-not-equal | two `derived` records, **17,881** and **19,721**, run total **37,602**; must not equal 4,480 (attempt 2 under the retired subtraction) or 22,361 |
+| `codex-recorded-success.json`, `codex-recorded-structured.json`, `codex-recorded-worktree.json` (recordings) | a trivial prompt, a `--output-schema` reply, and a file edit carried by two `command_execution` items: the plain `derived` path on real 0.153.4 streams | `derived`, `complete: true`; totals **16,817**, **16,900**, **34,445** |
+| `codex-recorded-turn-failed.json` (recording) | the backend's HTTP 400 for an unknown model: `error` then `turn.failed`, exit 1, no `turn.completed` | `unavailable`, `eventKind: "turn.failed"`, `complete: false`; must not equal 0 |
+| `codex-recorded-sigint.json`, `codex-recorded-sigterm.json` (recordings) | SIGINT (exit 1) and SIGTERM (**exit 0**) eight seconds into a turn: the stream stops after `turn.started` | `unavailable`, `complete: false`; the SIGTERM case is why exit 0 alone never means success |
 | `codex-fresh-thread.json` | fresh thread; subset arithmetic; reasoning as reference | `derived`, fresh = `max(0, 24,763−24,448−0)` = 315, total **25,973**; must not equal 50,421 or 26,913 |
 | `codex-turn-failed.json` | `turn.failed` with no `turn.completed`; quota classification kept off the usage record | `unavailable`, `complete: false`; must not equal 0 |
 | `observed-unavailable.json` | `observed` backend (**reserved**, unreachable in the MVP), `usage: none`, node `SUCCEEDED` anyway; budget attribution | `unavailable`; counts 0 toward `maxMeasuredTokens` and 1 toward `maxUnmeasuredExecutions` |
@@ -1085,11 +1106,13 @@ any level, and no aggregate carries a `reasoningTokens` field at all.
 `listPriceEquivalentUsd` are `null`, and `complete === false`. No storage path, no export and no
 render may turn it into `0`. It displays as `—`.
 
-**I5 — No double counting on a cumulative runtime.**
-For one Codex thread: `Σ over attempts of delta === lastCumulative − firstAttemptStartCumulative`,
-field by field. With a fresh first attempt this reduces to
-`Σ totalTokens === lastCumulative.input_tokens + lastCumulative.output_tokens`. Attempt deltas on one
-thread are pairwise disjoint.
+**I5 — No double counting across processes.**
+A codex attempt record equals its own process's last `turn.completed.usage` after the subset
+arithmetic: `totalInputTokens === input_tokens` and `outputTokens === output_tokens` of that object,
+with `usageAtAttemptStart` all-zero. A node execution, cycle or run total over codex attempts is the
+plain sum of those records; no figure from one process is ever subtracted from, or added to, another.
+(v0.5 stated this invariant for a thread-cumulative counter; SPIKE-4 D4 measured per-process counting
+on 0.153.4 and the invariant was re-scoped.)
 
 **I6 — One basis per claude-code record.**
 Exactly one of `result.usage` and `modelUsage` contributes; `usageBasis` names it. If `modelUsage` is
