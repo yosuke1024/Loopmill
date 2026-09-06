@@ -454,15 +454,18 @@ check_C5b() {
 # tools. Plan mode is deliberately NOT used here: in plan mode the model may
 # decline a non-planning request in ~2s, so the signal would reach an already
 # exited process and the check would measure nothing (observed on 2026-09-06).
-C6_PROMPT="Write out the integers from 1 to 600, one per line, with no other text before, between or after them."
+C6_PROMPT="Write out the integers from 1 to 1500, one per line, with no other text before, between or after them. Do not use any tool; produce the numbers yourself."
 
 check_C6_bg() {
   local variant="$1" signal="$2"
   local id="C6-${variant}"
   local desc="signal handling: background + ${signal} after 8s"
   local prompt="$C6_PROMPT"
+  # --tools "" disables every built-in tool: without it the model answers a
+  # "write out the integers" request by running a shell command, which under
+  # --max-turns 1 ends the run in ~2.5s, again before the 8s signal.
   local cmd=(claude -p "$prompt" \
-    --output-format json --max-turns 1 \
+    --output-format json --max-turns 1 --tools "" \
     --permission-mode default --permission-prompts none)
   cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
@@ -532,7 +535,7 @@ check_C6_timeout_int() {
   local desc="signal handling: timeout -s INT 8 (coreutils wrapper)"
   local prompt="$C6_PROMPT"
   local cmd=(timeout -s INT 8 claude -p "$prompt" \
-    --output-format json --max-turns 1 \
+    --output-format json --max-turns 1 --tools "" \
     --permission-mode default --permission-prompts none)
   cmd+=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
 
