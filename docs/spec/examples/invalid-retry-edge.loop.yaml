@@ -1,0 +1,86 @@
+# expect: LM-VAL-007
+#
+# Negative fixture for docs/spec/loop-file.md. This file is schema-valid and
+# fails exactly one semantic rule.
+#
+# The author meant to send a failed test run back to the implementation node and
+# wrote `to: has-diff` instead -- the condition that guards it. Re-entering the
+# loop at a condition re-reads the SAME structured output of the SAME unchanged
+# Node Execution, takes the same branch, runs the same tests, and burns all three
+# iterations without ever redoing the work. Loopmill rejects it at validation
+# time rather than at 04:00 on the third night:
+#
+#   LM-VAL-007  retry edge targets non-retryable backend
+#     edges[0] "retry-implementation": to "has-diff" is a condition node, which
+#     runs on the control plane (retryable: false). Retry edges may only target a
+#     node whose backend declares retryable: true.
+#
+# The fix is one word: `to: implement`.
+
+schemaVersion: "0.5.0"
+slug: invalid-retry-edge
+name: Invalid retry edge (negative fixture)
+description: Retry edge pointed at a condition node instead of the agent node it guards.
+
+trigger:
+  kind: manual
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  backend: github-actions
+  runtime: claude-code
+  authMode: subscription-oauth
+
+entry: implement
+
+nodes:
+  implement:
+    kind: agent
+    prompt: Fix the failing tests in this repository.
+    structuredOutput:
+      type: object
+      properties:
+        changed: { type: boolean }
+      required: [changed]
+    next: has-diff
+
+  has-diff:
+    kind: condition
+    inputs:
+      changed: nodes.implement.structured.changed
+    expr: changed == true
+    then: run-tests
+    else: end-no-change
+
+  run-tests:
+    kind: command
+    argv: [npm, test]
+    onFailure: continue
+    next: verdict
+
+  verdict:
+    kind: condition
+    inputs:
+      tests_exit: nodes.run-tests.exitCode
+    expr: tests_exit == 0
+    then: end-ok
+    else: retry-implementation
+
+  end-ok:
+    kind: end
+    outcome: success
+
+  end-no-change:
+    kind: end
+    outcome: no_change
+
+edges:
+  - id: retry-implementation
+    from: verdict
+    to: has-diff          # <-- LM-VAL-007: should be `implement`
+    when: tests_exit != 0
+    maxIterations: 3
