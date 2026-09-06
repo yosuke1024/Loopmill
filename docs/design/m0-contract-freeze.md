@@ -1,8 +1,8 @@
 # m0 contract freeze — 2026-09-06
 
 **Status:** recorded 2026-09-06, at the end of milestone m0 (`docs/design/mvp-design.md` §20.2), on
-branch `claude/loopmill-mvp-design-feul8d`. Five decisions in section 4 await the maintainer's
-confirmation; everything else below is frozen as written.
+branch `claude/loopmill-mvp-design-feul8d`. The five decisions in section 4 were confirmed by the
+maintainer the same day; everything below is frozen as written, and m1 may start against it.
 
 **Why this file exists.** m0's cut-line reads "contracts frozen; nothing in m1 starts before they are
 written down". This is the writing-down: which documents are the contracts, at which version, backed
@@ -77,9 +77,9 @@ the evidence attached.
 
 ## 4. Decisions awaiting the maintainer's confirmation
 
-These five are design choices the documents already state, which the maintainer flagged as needing
-their explicit yes. Each is frozen *as proposed* pending that answer; a "no" is an amendment (section
-1) before m1 touches the affected part.
+These five are design choices the documents already state, which the maintainer had flagged as
+needing their explicit yes. **All five were confirmed by the maintainer on 2026-09-06**; they are frozen
+as written, and reversing one later is an amendment (section 1).
 
 | # | Decision, as frozen | Where | Why the design chose it | If reversed |
 |---|---|---|---|---|
@@ -89,8 +89,7 @@ their explicit yes. Each is frozen *as proposed* pending that answer; a "no" is 
 | 4.4 | **A second `run` of the same loop while a lock row is live finishes `SKIPPED(overlapping_run)`, exit 15**, and touches nothing | `mvp-design.md` §7.5, §7.3; `state-machine.md` D-17, D-18; A10 | The driver is non-resident, so there is nothing to queue into; skipping is honest and visible in `loopmill runs`, and `minInterval` / `maxRunsPerWindow` bound the cadence anyway | A queued or waiting second run means a process that waits, i.e. a resident component — the thing D9 forbids; the alternative is a documented "retry on the next fire" |
 | 4.5 | **`resume --due` is registered with the OS scheduler every 15 minutes** as the documented default cadence, next to the loop's own schedule | `mvp-design.md` §12 ("Draining the gates"), §24 item 2 | Approved gates and passed quota windows need a process to notice them, and the OS scheduler is the only thing allowed to start one; 15 minutes bounds the latency of a decision without a resident poller | Only the documented default changes; the mechanism (idempotent, concurrency-safe, A37) does not |
 
-Maintainer's answers: **pending** (fill in the date and the answer per row; a reversal becomes a
-section 6 entry).
+Maintainer's answers: **yes to all five, 2026-09-06.** A later reversal becomes a section 6 entry.
 
 ---
 

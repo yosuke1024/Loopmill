@@ -862,5 +862,5 @@ verbatim, forbid the single-user unattended use Loopmill relies on — **not tri
    privilege separation between the control-plane and agent jobs. The `snapshot.json` O(n²) growth
    defect is the one SPIKE-3 finding that does carry over: the SQLite store keeps its idempotency index in
    the `events` table, never as id lists inside the snapshot (design §9.1).
-5. **The m0 contract freeze is recorded** (`docs/design/m0-contract-freeze.md`, 2026-09-06), SPIKE-4 and
-   R11 having closed; the five decisions listed there await the maintainer before m1 starts.
+5. **The m0 contract freeze is recorded and confirmed** (`docs/design/m0-contract-freeze.md`, 2026-09-06),
+   SPIKE-4 and R11 having closed; m1 may start.
