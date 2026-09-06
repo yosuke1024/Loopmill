@@ -1,0 +1,93 @@
+name: SPIKE-1 - Claude Code on subscription OAuth only
+
+# SPIKE-1: prove that the Claude Code CLI can run non-interactively on a
+# GitHub-hosted runner authenticated ONLY with a Claude subscription OAuth
+# token (`claude setup-token`), with no ANTHROPIC_API_KEY anywhere in the
+# job. See spikes/spike-1-claude-subscription/README.md for prerequisites,
+# what each check (C1-C10) proves for Loopmill, and how to read the results.
+#
+# This workflow never echoes CLAUDE_CODE_OAUTH_TOKEN or any other secret.
+# All of the actual work happens in run.sh, which redacts token-looking
+# strings from everything it writes under out/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: >-
+          Optional --model override for every check (alias like "sonnet" or
+          a full model id). Leave empty to use the account's default model.
+        required: false
+        type: string
+        default: ""
+      scrub_test:
+        description: >-
+          Run C8 (exports an invalid ANTHROPIC_API_KEY alongside the OAuth
+          token to prove API-key precedence, then confirms OAuth-only still
+          works). Safe to leave on; disable only if you want a shorter run.
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  spike-1:
+    name: Run SPIKE-1 checks (C1-C10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code CLI
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          echo "Installed claude version:"
+          claude --version
+          echo "CLAUDE_CODE_VERSION=$(claude --version)" >> "$GITHUB_ENV"
+
+      - name: Run SPIKE-1 checks
+        env:
+          # The one credential this whole spike is about: a long-lived OAuth
+          # token minted locally by `claude setup-token` on a Pro/Max
+          # account, stored as a repository secret. GitHub Actions masks
+          # secret values in logs automatically; run.sh additionally redacts
+          # any token-looking string from every file it writes under out/.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SCRUB_TEST: ${{ inputs.scrub_test }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          # Belt and suspenders: in Claude Code's non-interactive (-p) mode,
+          # ANTHROPIC_API_KEY is always used when present, with no fallback
+          # to the subscription login. This job authenticates with the
+          # subscription OAuth token ONLY, so make sure no inherited
+          # environment (org/repo variable, runner image default, etc.) can
+          # smuggle an API key in.
+          unset ANTHROPIC_API_KEY
+          bash spikes/spike-1-claude-subscription/run.sh
+
+      - name: Publish RESULTS.md to the job summary
+        if: always()
+        run: |
+          if [ -f spikes/spike-1-claude-subscription/out/RESULTS.md ]; then
+            cat spikes/spike-1-claude-subscription/out/RESULTS.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## SPIKE-1: out/RESULTS.md was not produced" >> "$GITHUB_STEP_SUMMARY"
+            echo "run.sh did not get far enough to write a results file. Check the step logs above." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload out/ as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spike-1-results
+          path: spikes/spike-1-claude-subscription/out/
+          if-no-files-found: warn
+          retention-days: 30

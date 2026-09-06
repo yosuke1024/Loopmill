@@ -1,0 +1,5 @@
+# out/ is generated fresh by each workflow run and uploaded as a build
+# artifact; it is not meant to be committed. Keep the directory itself
+# (via out/.gitkeep) so `run.sh` always has somewhere to write.
+out/*
+!out/.gitkeep
