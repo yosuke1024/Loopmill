@@ -1,0 +1,29 @@
+# SPIKE-2 R8 - throwaway. Lives only on the spike2/r8-mention branch and is
+# deleted with it. Posts an @codex comment on PR #1 using nothing but the
+# automatic GITHUB_TOKEN, to measure (a) whether the Codex GitHub connector
+# reacts to a comment authored by github-actions[bot] and (b) whether the
+# reply carries a fenced `loopmill` JSON block Loopmill could parse (R5).
+name: SPIKE-2 R8 mention from Actions
+
+on:
+  push:
+    branches: [spike2/r8-mention]
+    paths: [.github/workflows/spike-2-r8-mention.yml, r8-trigger.txt]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  mention:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post the @codex comment with GITHUB_TOKEN only
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BODY='@codex Review the file r8.txt on this branch. Reply with exactly one fenced code block tagged `loopmill` and nothing else outside it. The block must contain one JSON object: {"schemaVersion":"1.0.0","eventType":"node-observed","verdict":"pass" or "fail","reason":"<one sentence>","reviewedSha":"<the commit sha you reviewed>"}. Do not push anything, do not ask for confirmation.'
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/1/comments" -f body="$BODY" \
+            --jq '"posted comment id=\(.id) at \(.created_at) as \(.user.login)"'
