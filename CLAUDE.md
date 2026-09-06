@@ -11,6 +11,6 @@
 
 ## Current state
 - Design documents live under `docs/design/` (`mvp-design.md` is the source of truth, v0.5), decisions under `docs/adr/`,
-  contracts under `docs/spec/`, prior-art and build-vs-adopt analysis under `docs/research/`, spike plans and results under `docs/spikes/`.
+  contracts under `docs/spec/`, spike plans and results under `docs/spikes/`.
 - `spikes/` holds throwaway prototypes and harnesses; they are not the product and may be deleted once their question is answered.
 - No product code exists yet. Do not start implementing the engine before the spikes listed in `docs/spikes/README.md` have results.
