@@ -156,7 +156,7 @@ type Outcome =
 ```
 
 `SUCCEEDED` is rendered `SUCCEEDED(end:<label>)` (decision sheet §3, End node). The two labels the
-reference loop uses are `no_change` and `shipped`; custom labels are allowed by the loop file.
+reference loop uses are `success` and `no_change`; custom labels are allowed by the loop file.
 
 `FailureReason` (closed enum, extendable only by a schema version bump):
 
@@ -172,7 +172,7 @@ schema_invalid       an agent node's structured output did not conform to its de
 no_progress_stalled  two consecutive NO_PROGRESS cycles (section 6.6)
 quota_unclassifiable classification was QUOTA but no reset time could be resolved (section 7.3)
 quota_parks_exhausted  maxQuotaParks reached for one node execution
-human_rejected       a human gate was rejected and onReject was fail_run
+human_rejected       a human gate was rejected and the node's onFailure was fail_run
 interrupted_abandoned  a human resumed an INTERRUPTED run with decision=fail
 validation_error     an inbound envelope that was structurally valid was rejected against the pinned loop
 ```
@@ -227,23 +227,30 @@ fields; the table lists what each type adds.
 
 | # | eventType | Producer(s) | Adds (required) | Drives |
 |---|---|---|---|---|
-| 1 | `run-requested` | `trigger`, `control-plane` (reconcile) | `trigger{kind: manual\|schedule\|event, source?, dedupeKey?, requestedAt}` | Run |
+| 1 | `run-requested` | `trigger`, `control-plane` (reconcile) | `trigger{kind: manual\|schedule\|event, source?, actor?, dedupeKey?, scheduledFor?}` | Run |
 | 2 | `run-started` | `control-plane` | — | Run |
-| 3 | `node-dispatched` | `control-plane` | `cycle`, `nodeId`, `attempt`, `dispatch{backendId, runtimeId?, authMode, deadlineAt, dedupeKey}` | Run, Node, Attempt |
-| 4 | `node-started` | `backend:<id>` | `cycle`, `nodeId`, `attempt`, `runHandle?` | Node, Attempt (heartbeat) |
-| 5 | `node-completed` | `backend:<id>`, `control-plane` (condition/end/synthetic) | `cycle`, `nodeId`, `attempt`, `result{status: 'SUCCESS', exitCode?, structured?, summary?}`; `filesChanged[]?`, `usage?` | Run, Node, Attempt |
-| 6 | `node-failed` | `backend:<id>` | `cycle`, `nodeId`, `attempt`, `result{status: 'FAILED'\|'QUOTA'\|'CANCELLED', exitCode?}`, `error{code, message, classified}`; for QUOTA also `error{quotaResetsAt, quotaWindow, quotaSource}` | Run, Node, Attempt |
-| 7 | `node-timed-out` | `backend:<id>`, `control-plane` (sweep) | `cycle`, `nodeId`, `attempt?`, `error{code: 'node_timeout'\|'observe_deadline'\|'human_timeout'}` | Run, Node, Attempt (when `attempt` present) |
-| 8 | `node-observed` | `backend:observed` | `cycle`, `nodeId`, `attempt`, `matcher{kind: 'comment-block'\|'file-in-diff'\|'cloud-status', ref, outcome: 'found_valid'\|'found_invalid'}`, `result` when `found_valid` | Run, Node, Attempt |
-| 9 | `human-requested` | `control-plane` | `cycle`, `nodeId`, `attempt`, `gate{mode, subject{kind, ref, digest}, expiresAt}` | Run, Node |
-| 10 | `human-decided` | `human` (via the `ingest` workflow) | `cycle`, `nodeId`, `decision: 'approve'\|'reject'\|'cancel'`, `subjectDigest`, `actor` | Run, Node |
-| 11 | `quota-parked` | `control-plane` | `cycle`, `nodeId`, `attempt`, `quota{quotaResetsAt, resumeDueAt, window, source, parks}` | Run |
-| 12 | `retry-edge-taken` | `control-plane` | `edgeId`, `fromNodeId`, `toNodeId`, `fromCycle`, `toCycle`, `traversals`, `budgetConsumed: bool` | Run |
-| 13 | `run-finished` | `control-plane` | `outcome` (section 2.2), `artifactRefs[]`, `summary` (section 12.3) | Run |
-| 14 | `ignored-stale` | `control-plane` | `ignored{eventId, eventType, cycle?, nodeId?, attempt?}`, `reason: StaleReason` | none (audit only) |
-| 15 | `dispatch-failed` | `control-plane` | `cycle`, `nodeId`, `attempt`, `error{code, message}` | Run, Node, Attempt |
-| 16 | `resumed` | `human`, `control-plane` (`resume --due`) | `resume{kind: 'due'\|'manual'\|'interrupted', decision?: 'retry'\|'skip'\|'fail', actor?}` | Run |
+| 3 | `node-dispatched` | `control-plane` | `cycle`, `nodeId`, `attempt`, `dispatch{backendId, runtimeId?, transport, expectedProducer, deadline, dedupeKey}` | Run, Node, Attempt |
+| 4 | `node-started` | `backend:<id>` | `cycle`, `nodeId`, `attempt` | Node, Attempt (heartbeat) |
+| 5 | `node-completed` | `backend:<id>`, `control-plane` (condition/end/synthetic) | `cycle`, `nodeId`, `attempt`, `result{status: 'succeeded'\|'skipped'\|'no_progress', exitCode?, structured?, summary?}`; `artifactRefs[]?`, `usage?` | Run, Node, Attempt |
+| 6 | `node-failed` | `backend:<id>`, `control-plane` (condition errors, D-13) | `cycle`, `nodeId`, `attempt`, `result{status: 'failed'\|'cancelled', exitCode?}`, `error{code, message, classified}`; for `classified: quota` also `quotaResetsAt` | Run, Node, Attempt |
+| 7 | `node-timed-out` | `backend:<id>`, `control-plane` (sweep) | `cycle`, `nodeId`, `attempt`, `error{code: 'node_timeout'\|'observe_deadline'\|'human_timeout'}` | Run, Node, Attempt |
+| 8 | `node-observed` | `backend:observed` | `cycle`, `nodeId`, `attempt`, `matcher{kind: 'comment-block'\|'file-in-diff'\|'cloud-status', ref, outcome: 'found_valid'\|'found_invalid'}`, `artifactRefs[]` (≥ 1); `result` when `found_valid` | Run, Node, Attempt |
+| 9 | `human-requested` | `control-plane` | `cycle`, `nodeId`, `attempt` (0, D-13), `human{mode, subjectDigest, deadline}` | Run, Node |
+| 10 | `human-decided` | `human` (via the `ingest` workflow) | `cycle`, `nodeId`, `attempt` (0), `human{decision: 'approve'\|'reject'\|'cancel', subjectDigest, decidedBy}` | Run, Node |
+| 11 | `quota-parked` | `control-plane` | `cycle`, `nodeId`, `attempt`, `quotaResetsAt`, `reason` | Run |
+| 12 | `retry-edge-taken` | `control-plane` | `cycle` (the cycle entered), `retryEdge{edgeId, fromNodeId, toNodeId, fromCycle, toCycle, maxIterations, traversals, budgetConsumed}` | Run |
+| 13 | `run-finished` | `control-plane` | `outcome` (section 2.2), `artifactRefs[]` | Run |
+| 14 | `ignored-stale` | `control-plane` | `reason: StaleReason`, `causationId` (the `eventId` of the declined envelope); the node coordinates when the declined envelope carried them | none (audit only) |
+| 15 | `dispatch-failed` | `control-plane` | `cycle`, `nodeId`, `attempt`, `dispatch`, `error{code, message}` | Run, Node, Attempt |
+| 16 | `resumed` | `human`, `control-plane` (`resume --due`) | `resume{kind: 'due'\|'manual'\|'interrupted', decision?: 'retry'\|'skip'\|'fail', actor?}`, `reason` | Run |
 | 17 | `lease-expired` | `control-plane` (sweep) | `cycle`, `nodeId`, `attempt`, `reason: 'attempt_deadline'\|'control_plane_lease'\|'observe_deadline'` | Run, Node, Attempt |
+
+Field names and shapes are the envelope's, not this document's: `docs/spec/envelope.md` §3-§5 and
+`envelope.schema.json` are normative for the wire form, and every payload object named above
+(`trigger`, `dispatch`, `result`, `matcher`, `human`, `retryEdge`, `resume`, `outcome`, `usage`,
+`error`) is defined there. `result.status` uses the envelope's lowercase Node Execution vocabulary;
+the `Classification` of section 7.1 is this engine's internal verdict and reaches the wire as
+`error.classified`.
 
 ### 3.2 Producer allowlist
 
@@ -267,13 +274,15 @@ consequences worth stating:
 `node-dispatched`, `human-requested`, `quota-parked`, `retry-edge-taken`, `run-finished`,
 `ignored-stale`, `dispatch-failed`.
 
-`node-completed` and `node-timed-out` appear in both lists: the control plane synthesises them for
-control-plane-local nodes and for the sweep respectively (see 3.4 and section 10).
+`node-completed`, `node-failed` and `node-timed-out` appear in both lists: the control plane
+synthesises `node-completed`/`node-failed` for control-plane-local nodes (a condition that evaluates,
+or a condition whose input is missing — 3.4) and `node-timed-out` for the sweep (section 10).
 
 ### 3.4 Two modelling rules that the catalogue depends on
 
-**Decision (not in sheet) D-14 — a verdict is not a failure.** `node-completed` carries
-`result.status: 'SUCCESS'` only. A node that ran correctly and reported a *negative verdict* (the
+**Decision (not in sheet) D-14 — a verdict is not a failure.** `node-completed` carries a
+succeeded-shaped `result.status` only (`succeeded`, or the two control-plane spellings `skipped` /
+`no_progress`). A node that ran correctly and reported a *negative verdict* (the
 reviewer rejected the change, the condition evaluated false) is `SUCCEEDED`; the verdict lives in
 `result.structured` and drives **routing**, not the node state. Failures use `node-failed` /
 `node-timed-out`. This removes the ambiguity the SPIKE-3 prototype had, where a single `status` field
@@ -286,7 +295,7 @@ approved gate's completion record), produce a Node Execution that goes `PENDING`
 step, with a synthetic `node-completed` whose `producer` is `control-plane` and whose `attempt` is `0`.
 They create **no Attempt record**, consume no `maxAttempts`, and carry no usage. `attempt: 0` is
 reserved for exactly this and is never dispatched. A condition whose input is missing or non-conforming
-emits `node-completed` with `result.status: 'SUCCESS'` **only** when it evaluates; otherwise the step
+emits `node-completed` with `result.status: 'succeeded'` **only** when it evaluates; otherwise the step
 emits `node-failed` with `error.code: condition_error` and producer `control-plane` — never a silent
 `false` (decision sheet §3).
 
@@ -352,8 +361,8 @@ Common guard blocks referenced by name:
 | R-32 | `RUNNING` | `lease-expired` | `node.onInterrupted = ask`, **or** not retryable and `node.effects = external` | `INTERRUPTED` | — | `wait(∞)` |
 | R-33 | `RUNNING` | `lease-expired` | not retryable; `node.effects = none`; `node.onFailure = fail_run` | `FAILED` | `run-finished(FAILED, attempts_exhausted)` | `finish` |
 | R-34 | `WAITING_HUMAN` | `human-decided` | `decision = approve`; `subjectDigest` matches `pendingApproval.subject.digest`; `route(next)`; `preDispatch` = ok | `RUNNING` | `node-completed(control-plane)`, `node-dispatched` | `dispatch` |
-| R-35 | `WAITING_HUMAN` | `human-decided` | `decision = reject`; digest matches; `node.onReject = fail_run` | `FAILED` | `node-completed(control-plane)`, `run-finished(FAILED, human_rejected)` | `finish` |
-| R-36 | `WAITING_HUMAN` | `human-decided` | `decision = reject`; digest matches; `node.onReject = retry_edge:e`; `traversals[e] < max` | `RUNNING` | `node-completed`, `retry-edge-taken(true)`, `node-dispatched` | `dispatch` |
+| R-35 | `WAITING_HUMAN` | `human-decided` | `decision = reject`; digest matches; `node.onFailure = fail_run` | `FAILED` | `node-completed(control-plane)`, `run-finished(FAILED, human_rejected)` | `finish` |
+| R-36 | `WAITING_HUMAN` | `human-decided` | `decision = reject`; digest matches; `node.onFailure = retry_edge:e`; `traversals[e] < max` | `RUNNING` | `node-completed`, `retry-edge-taken(true)`, `node-dispatched` | `dispatch` |
 | R-37 | `WAITING_HUMAN` | `human-decided` | `decision = cancel`; digest matches | `CANCELLED` | `node-completed(CANCELLED)`, `run-finished(CANCELLED, human)` | `finish` |
 | R-38 | `WAITING_HUMAN` | `human-decided` | `subjectDigest` does **not** match | `WAITING_HUMAN` | `ignored-stale(approval_subject_mismatch)` | — |
 | R-39 | `WAITING_HUMAN` | `node-timed-out` | `error.code = human_timeout`; `ctx.now >= pendingApproval.expiresAt` | `EXPIRED` | `run-finished(EXPIRED, human_timeout)` | `finish` |
@@ -405,8 +414,8 @@ stateDiagram-v2
     RUNNING --> CANCELLED : node-failed (classified CANCELLED)
 
     WAITING_HUMAN --> RUNNING : human-decided (approve)
-    WAITING_HUMAN --> RUNNING : human-decided (reject, onReject = retry_edge)
-    WAITING_HUMAN --> FAILED : human-decided (reject, onReject = fail_run)
+    WAITING_HUMAN --> RUNNING : human-decided (reject, onFailure = retry_edge / continue)
+    WAITING_HUMAN --> FAILED : human-decided (reject, onFailure = fail_run)
     WAITING_HUMAN --> CANCELLED : human-decided (cancel)
     WAITING_HUMAN --> EXPIRED : node-timed-out (human_timeout)
     WAITING_HUMAN --> WAITING_HUMAN : human-decided (digest mismatch, ignored-stale)
@@ -441,9 +450,9 @@ stateDiagram-v2
 | N-05 | `∅` | `node-completed` | `producer = control-plane`, `result.structured.skipped = true` | `SKIPPED` | — | — |
 | N-06 | `PENDING` | `node-dispatched` | un-parked from quota, or re-driven by the sweep | `DISPATCHED` / `OBSERVING` | — | `dispatch` / `observe` |
 | N-07 | `DISPATCHED` | `node-started` | attempt matches `current` | `RUNNING` | — | heartbeat |
-| N-08 | `DISPATCHED`, `RUNNING` | `node-completed` | `result.status = SUCCESS`; structured output validates; NO_PROGRESS rule (6.6) does **not** fire | `SUCCEEDED` | — | — |
-| N-09 | `DISPATCHED`, `RUNNING` | `node-completed` | `result.status = SUCCESS`; NO_PROGRESS rule fires | `NO_PROGRESS` | — | — |
-| N-10 | `DISPATCHED`, `RUNNING` | `node-completed` | `result.status = SUCCESS`; declared `structuredOutput` does not validate | `FAILED` (`schema_invalid`) | — | — |
+| N-08 | `DISPATCHED`, `RUNNING` | `node-completed` | `result.status = succeeded`; structured output validates; NO_PROGRESS rule (6.6) does **not** fire | `SUCCEEDED` | — | — |
+| N-09 | `DISPATCHED`, `RUNNING` | `node-completed` | `result.status = succeeded`; NO_PROGRESS rule fires | `NO_PROGRESS` | — | — |
+| N-10 | `DISPATCHED`, `RUNNING` | `node-completed` | `result.status = succeeded`; declared `structuredOutput` does not validate | `FAILED` (`schema_invalid`) | — | — |
 | N-11 | `DISPATCHED`, `RUNNING` | `node-failed` | `classified = FAILED`; `retryable` | `DISPATCHED` (attempt+1) | — | `dispatch` |
 | N-12 | `DISPATCHED`, `RUNNING` | `node-failed` | `classified = FAILED`; not retryable | `FAILED` | — | — |
 | N-13 | `DISPATCHED`, `RUNNING` | `node-failed` | `classified = QUOTA`, park accepted | `PENDING` | — | `wait` |
@@ -455,8 +464,8 @@ stateDiagram-v2
 | N-19 | `DISPATCHED`, `RUNNING`, `OBSERVING` | `lease-expired` | `onInterrupted = ask` | unchanged (frozen) | — | Run → `INTERRUPTED` |
 | N-20 | `DISPATCHED` | `dispatch-failed` | retryable | `DISPATCHED` (attempt+1) | — | `dispatch` |
 | N-21 | `DISPATCHED` | `dispatch-failed` | not retryable | `FAILED` (`dispatch_failed`) | — | — |
-| N-22 | `OBSERVING` | `node-observed` | `outcome = found_valid`; structured output validates | `SUCCEEDED` | — | — |
-| N-23 | `OBSERVING` | `node-observed` | `outcome = found_invalid`, or found but non-conforming; not retryable | `FAILED` (`artifact_invalid`) | — | — |
+| N-22 | `OBSERVING` | `node-observed` | `outcome = found_valid` (the matcher's JSON object parsed) | `SUCCEEDED` | — | — |
+| N-23 | `OBSERVING` | `node-observed` | `outcome = found_invalid`; not retryable | `FAILED` (`artifact_invalid`) | — | — |
 | N-24 | `OBSERVING` | `node-observed` | `outcome = found_invalid`; retryable | `OBSERVING` (attempt+1) | — | `observe` |
 | N-25 | `OBSERVING` | `node-timed-out` | `observe_deadline`; not retryable | `TIMED_OUT` | — | — |
 | N-26 | `WAITING_HUMAN` | `human-decided` | `decision = approve`, digest matches | `SUCCEEDED` (`structured.decision = "approve"`) | — | — |
@@ -672,6 +681,8 @@ approval_subject_mismatch human-decided's subjectDigest does not bind the pendin
 not_due                   resumed(kind: due) before quota.resumeDueAt
 lease_not_expired         lease-expired while ctx.now < lease.expiresAt
 wrong_wait_state          e.g. resumed(kind: due) while the Run is not WAITING_FOR_QUOTA
+producer_not_expected     the producer is not the expectedProducer recorded at dispatch (envelope.md 4.4)
+unknown_event_type        an eventType this control plane does not know (envelope.md 12, minor-version carve-out)
 ```
 
 ### 5.4 What an `ignored-stale` event may change
@@ -792,7 +803,7 @@ earlier node), and `maxIterations >= 1`. Its **body** is the set of nodes on eve
 `cycleIndex` is a **membership label on a Node Execution**, not a sequence number.
 
 - Nodes outside every Retry Edge body execute in **cycle 0**. That includes nodes *after* the body:
-  in the reference loop, `open-pr` and the `end` nodes carry cycle 0 even though they run last. This
+  in the reference loop, `approve-pr`, `create-pr` and the `end` nodes carry cycle 0 even though they run last. This
   is counter-intuitive and deliberate — cycle 0 is the "setup and teardown" bucket the decision sheet
   defines, and per-cycle averages exclude it while Run totals include it (decision sheet §2).
 - The first entry into a body — reached by an ordinary forward edge — sets `cycleIndex = 1`. It does
@@ -945,6 +956,20 @@ function classifyFailure(input: {
       quotaSource?: string; code: string; message: string }
 ```
 
+The `Classification` above is **internal**. On the wire an inbound failure carries the envelope's own
+`error.classified` enum (`envelope.md` §4.7), and the two are related by a fixed mapping that every
+guard in section 4 is written against:
+
+| envelope `error.classified` | `Classification` |
+|---|---|
+| `quota` **with** `quotaResetsAt` | `QUOTA` |
+| `timeout` | `TIMEOUT` |
+| `cancelled` | `CANCELLED` |
+| `auth`, `invalid_input`, `artifact_invalid`, `backend_error`, `runtime_error`, `transient`, `unknown`, or `quota` without `quotaResetsAt` | `FAILED` |
+
+`LOST` and `SUCCESS` have no `error.classified` counterpart: `LOST` is minted by the sweep and
+`SUCCESS` is the absence of an `error` block on a `node-completed`.
+
 `classifyFailure` is **pure, versioned and data-driven**: the patterns live in a table keyed by
 `runtimeId` and a runtime-version range, and the table is a test fixture, not code. This is a direct
 response to review finding runtime-integration-2 ("as specified it is not implementable") — neither
@@ -1053,14 +1078,15 @@ the mechanisms of decision sheet §9:
 |---|---|---|
 | `environment-reviewers` | a job pinned to the `loopmill-agent-external` GitHub Environment with required reviewers; the job waits, nothing is resident | the gated job, once released, dispatches `human-decided` |
 | `pull-request-review` | the PR review on the working branch | the `ingest` workflow converts `pull_request_review` into an envelope |
-| `label` | the `loopmill:hold` / `loopmill:approve` labels, or an explicit `workflow_dispatch` | the `ingest` workflow converts the label event |
+| `label` | removing the `loopmill:hold` label approves, adding `loopmill:reject` rejects, or an explicit `workflow_dispatch` releases the gate | the `ingest` workflow converts the label event |
 
 In all three the Run is `WAITING_HUMAN`, **no lease is held**, and the `maxRuntime` clock is paused
 (decision sheet §10: `maxRuntime` excludes human waits).
 
 ### 8.2 Subject digest binding
 
-`human-requested.gate.subject` is what is being approved, as a content digest:
+`human-requested` carries `human.subjectDigest` — the digest of what is being approved. The snapshot
+keeps the full subject it was computed from:
 
 ```ts
 type Subject =
@@ -1070,7 +1096,7 @@ type Subject =
   | { kind: 'command';    ref: string /* nodeId */;        digest: string /* sha256 of resolved argv */ }
 ```
 
-`human-decided.subjectDigest` **must** equal `snapshot.pendingApproval.subject.digest`. If it does not,
+`human-decided`'s `human.subjectDigest` **must** equal `snapshot.pendingApproval.subject.digest`. If it does not,
 the event is `ignored-stale(approval_subject_mismatch)` and the Run stays `WAITING_HUMAN` (R-38). The
 digest is what makes an approval an approval *of something* rather than a bare "yes", and it is what
 the `effects: external` requirement in decision sheet §3 leans on: a human approved *this* diff, not
@@ -1116,15 +1142,16 @@ nothing closed or deleted.
 
 ### 8.5 Rejection
 
-**Decision (not in sheet) D-02.** A `human` node carries `onReject: fail_run (default) |
-retry_edge:<edgeId> | next:<nodeId>`. A rejection is not a failure — the gate worked — so the Node
-Execution is `SUCCEEDED` with `structured.decision = "reject"` (N-27) and the *Run* consequence is
-`onReject`:
+**Decision (not in sheet) D-02.** A rejection is routed by the human node's **own `onFailure` field**;
+there is no `onReject` field, because the loop file does not have one (`loop-file.md` §8.4, which owns
+the field list, records the same decision). A rejection is not a failure *of the gate* — the gate
+worked — so the Node Execution is `SUCCEEDED` with `structured.decision = "reject"` (N-27) and the
+*Run* consequence is what `onFailure` says:
 
-- `fail_run` → `FAILED(human_rejected)` (R-35).
+- `fail_run` (the default) → `FAILED(human_rejected)` (R-35).
 - `retry_edge:<edgeId>` → the edge is traversed, **consuming** the iteration budget like any other
   traversal (R-36). This is what the reference loop's "if rejected" arc needs.
-- `next:<nodeId>` → an ordinary forward branch.
+- `continue` → an ordinary forward branch to the node's `next`.
 
 **Decision (not in sheet) D-03 — cancel.** `human-decided.decision` additionally accepts `cancel`,
 which terminates the Run `CANCELLED(by: human)` (R-37). This keeps cancellation inside the closed
@@ -1144,7 +1171,7 @@ event catalogue: while a node is in flight, cancelling the backend job produces
 - `dispatch.dedupeKey = sha256(runId | cycleIndex | nodeId | attempt)` — embedded verbatim in the
   trigger text (the `@codex` comment) or the `codex cloud exec` invocation, so a duplicate dispatch is
   a vendor-side no-op (decision sheet §6, duplicate-dispatch prevention);
-- `dispatch.deadlineAt = ctx.now + node.timeout` → `snapshot.observe.deadlineAt`;
+- `dispatch.deadline = ctx.now + node.timeout` → `snapshot.observe.deadlineAt`;
 - the matcher declaration from the node's `artifact` field.
 
 The lease for an observed attempt is the observe deadline; there is no heartbeat, because Loopmill has
@@ -1166,8 +1193,8 @@ only when it has something to say:
 
 | Matcher result | `matcher.outcome` | Node Execution | Notes |
 |---|---|---|---|
-| artifact found, parses, validates against the node's `structuredOutput` (if declared) | `found_valid` | `SUCCEEDED` (N-22) | `usage.provenance = 'unavailable'`; counts toward `maxUnmeasuredExecutions` |
-| artifact found but does not parse, or fails schema validation, or `cloud-status` reports `error` | `found_invalid` | retry if available (N-24), else `FAILED(artifact_invalid)` (N-23) | matches decision sheet §4 verbatim |
+| artifact found and parses as a JSON object | `found_valid` | `SUCCEEDED` (N-22) | its top-level scalars become `captured.*`; an observed node never declares `structuredOutput` (LM-VAL-018), so there is no schema to check it against; `usage.provenance = 'unavailable'`; counts toward `maxUnmeasuredExecutions` |
+| artifact found but does not parse as a JSON object, or `cloud-status` reports `error` | `found_invalid` | retry if available (N-24), else `FAILED(artifact_invalid)` (N-23) | matches decision sheet §4 verbatim |
 | nothing found yet | *no event emitted* | unchanged | the poller stays silent; only the deadline acts |
 | deadline passed with nothing found | (sweep emits `node-timed-out{observe_deadline}`) | retry if available (R-46), else `TIMED_OUT` (N-25) → Run per `onFailure` | matches decision sheet §4 ("deadline → `TIMED_OUT`") |
 
@@ -1248,11 +1275,12 @@ the impure shell — `transition()` receives only the resulting event or non-eve
 `INTERRUPTED` means: the lease expired and the node could **not** be safely re-dispatched without a
 human deciding. It is non-terminal and recoverable by `loopmill resume` (decision sheet §5).
 
-**Decision (not in sheet) D-11 — `onInterrupted`.** Every node carries
-`onInterrupted: retry | ask`, defaulting to `retry` when `effects: none` and `ask` when
-`effects: external`. The asymmetry is the point (review finding daemonless-ops-2): an agent node that
-died mid-turn is safe to re-run with a fresh session; a command node that may already have executed
-`gh pr create` or `git push` is not.
+**Decision (not in sheet) D-11 — the interruption policy is derived, not authored.** The engine
+computes `onInterrupted: retry | ask` per node from `effects`: `retry` when `effects: none`, `ask`
+when `effects: external`. It is **not** a loop file field — the loop file's node fields are closed
+(`loop-file.md` §8) — it is a property of the resolved node that `transition()` reads. The asymmetry is
+the point (review finding daemonless-ops-2): an agent node that died mid-turn is safe to re-run with a
+fresh session; a command node that may already have executed `gh pr create` or `git push` is not.
 
 Routing on `lease-expired`:
 
@@ -1278,7 +1306,7 @@ jobs may exist for one Node Execution. The design tolerates it at three layers:
    `ignored-stale(stale_attempt)` (O-5). Control flow is unaffected; its usage is still banked (D-20).
 2. **Backend layer.** `github-actions` uses a per-run `concurrency` group; `observed` embeds the
    `dedupeKey` in the trigger text so the vendor drops the twin; `local` checks a pid file.
-3. **Node layer.** Nodes with `effects: external` default to `onInterrupted: ask`, so the ambiguous
+3. **Node layer.** Nodes with `effects: external` derive `onInterrupted: ask`, so the ambiguous
    case never auto-duplicates a side effect in the first place.
 
 `dispatch-failed` is the other half: written when the dispatcher call itself fails. It charges an
@@ -1299,14 +1327,15 @@ From decision sheet §10 (loop file `budget:`):
 | `maxIterations` | per Retry Edge | required | `MAX_ITERATIONS_EXCEEDED` |
 | `maxRuntime` | per Run, wall clock **excluding waits** | 4 h | `EXPIRED(max_runtime)` |
 | `maxMeasuredTokens` | per Run, measured tokens only | — | `BUDGET_EXCEEDED(maxMeasuredTokens)` |
-| `maxUnmeasuredExecutions` | per Run | observed nodes × `maxIterations` | `BUDGET_EXCEEDED(maxUnmeasuredExecutions)` |
+| `maxUnmeasuredExecutions` | per Run | `observed agent nodes × (1 + maxIterations)` (`loop-file.md` §7.2) | `BUDGET_EXCEEDED(maxUnmeasuredExecutions)` |
 | `maxStepsPerRun` | per Run | 200 | `BUDGET_EXCEEDED(maxStepsPerRun)` (D-28) |
 | `maxRunsPerWindow` | per Loop | 1 per 5 h | `SKIPPED(runs_per_window)` at request time |
 | `minInterval` | per Loop | 1 h | `SKIPPED(min_interval)` at request time |
 | `maxQuotaParks` | per Node Execution | 3 | `FAILED(quota_parks_exhausted)` (D-06) |
 
 **Decision (not in sheet) D-04 — the active clock.** `maxRuntime` counts `budget.activeMs`, the wall
-clock spent in `RUNNING` and `WAITING_OBSERVED`. Time in `WAITING_HUMAN`, `WAITING_FOR_QUOTA` and
+clock spent in `PENDING`, `RUNNING` and `WAITING_OBSERVED` (dispatch latency is Loopmill's own, and a
+vendor cloud doing the loop's work must be bounded by something — `usage-normalization.md` §6.3). Time in `WAITING_HUMAN`, `WAITING_FOR_QUOTA` and
 `INTERRUPTED` accumulates into `budget.waitMs` and is excluded. The sheet excludes human waits
 explicitly; extending the exclusion to quota parks and interruptions follows the same logic — a
 five-hour quota window is not the loop being slow — and without it every parked run would expire before
@@ -1416,7 +1445,7 @@ GitHub Actions job summary, `loopmill status --json`, and the read-only UI.
 
 | Run terminal state | Headline | Job conclusion |
 |---|---|---|
-| `SUCCEEDED` (`end:shipped`) | `Succeeded — shipped` | success |
+| `SUCCEEDED` (`end:success`) | `Succeeded — success` | success |
 | `SUCCEEDED` (`end:no_change`) | `Succeeded — no change` | success |
 | `FAILED` | `Failed — <failureReason> at <nodeId> (cycle <n>)` | failure |
 | `MAX_ITERATIONS_EXCEEDED` | `Loop budget exhausted — <edgeId>, <traversals>/<maxIterations>` | **neutral** |
@@ -1451,73 +1480,77 @@ headline view (decision sheet §10).
 
 ## 13. Worked traces
 
-All traces use the reference loop (decision sheet §11), with node ids fixed as:
+All traces use the reference loop (`examples/daily-content-improvement.loop.yaml`, decision sheet §11),
+whose node ids are:
 
 ```
-review-content (agent, github-actions/codex)      cycle 0
-needs-issue?   (condition)                        cycle 0
-end-no-change  (end, label: no_change)            cycle 0
-create-issue   (command, effects: external)       cycle 0
-implement      (agent, github-actions/claude-code) cycle 1..N   <- retry edge target
-test           (command, npm test)                 cycle 1..N
-review-pr      (agent, codex)                      cycle 1..N
-pass?          (condition on review-pr.structured.verdict)  cycle 1..N
-approve-pr     (human, mode: pull-request-review)  cycle 0
-open-pr        (command, effects: external)        cycle 0
-end-shipped    (end, label: shipped)               cycle 0
+review-content (agent, codex on observed)              cycle 0
+needs-issue    (condition on review-content.captured)  cycle 0
+end-no-change  (end, label: no_change)                 cycle 0
+create-issue   (command, effects: external)            cycle 0
+implement      (agent, claude-code on github-actions)  cycle 1..N   <- retry edge target
+run-tests      (command, npm test)                     cycle 1..N
+review-changes (agent, codex on observed)              cycle 1..N
+review-verdict (condition on review-changes.captured.approved && run-tests.exitCode)  cycle 1..N
+approve-pr     (human, mode: environment-reviewers)    cycle 0
+create-pr      (command, effects: external)            cycle 0
+end-shipped    (end, label: success)                   cycle 0
 
-retry edge  retry-fix:  from pass? (else) to implement,  maxIterations: 3
+retry edge  retry-implementation:  from review-verdict (else) to implement,  maxIterations: 3
 ```
+
+Both Codex nodes run on the `observed` backend, so their usage is `unavailable` and this loop's
+coverage can never reach 100% (usage-normalization §4).
 
 ### 13.1 Happy path
 
 | # | Event (producer) | Resulting snapshot (deltas) |
 |---|---|---|
-| 1 | `run-requested` (trigger, schedule) | `status: PENDING`, `loopVersion` pinned, `cycleIndex: 0`, `traversals: {retry-fix: 0}` |
-| 2 | `run-started` (control-plane, emitted) | `status: RUNNING`, `current: {review-content, 0, 1, DISPATCHED}`, `lease.expiresAt = t+timeout+120s` |
-| 3 | `node-dispatched` (control-plane, emitted) | attempt `0:review-content:1` = `DISPATCHED` |
-| 4 | `node-started` (backend:github-actions) | node `RUNNING`, `lease.heartbeatAt` updated |
-| 5 | `node-completed` SUCCESS `{needs_issue: true}` (backend) | node `SUCCEEDED`, attempt `COMPLETED`, `usage.provenance: reported`, `measuredTokens += 41,208`, `measuredExecutions: 1/1` |
-| 6 | `node-completed` (control-plane, `needs-issue?`, attempt 0) | condition node `SUCCEEDED`, `structured.branch: "then"` |
+| 1 | `run-requested` (trigger, schedule) | `status: PENDING`, `loopVersion` pinned, `cycleIndex: 0`, `traversals: {retry-implementation: 0}` |
+| 2 | `run-started` (control-plane, emitted) | `status: WAITING_OBSERVED` (R-07: the entry node's backend is `result: observed`), `current: {review-content, 0, 1, OBSERVING}` |
+| 3 | `node-dispatched` (control-plane, emitted) | attempt `0:review-content:1` = `DISPATCHED`; the Node Execution goes straight to `OBSERVING` (D-21), `observe.deadlineAt = t + PT30M` |
+| 4 | (the vendor works; the matcher finds nothing yet) | nothing is emitted — the poller stays silent until it has something to say (9.2) |
+| 5 | `node-observed` `found_valid` `{needs_issue: true}` (backend:observed) | node `SUCCEEDED`, attempt `COMPLETED`, `usage.provenance: unavailable` (all buckets null), `measuredExecutions: 0/1`, `unmeasuredExecutions: 1` |
+| 6 | `node-completed` (control-plane, `needs-issue`, attempt 0) | condition node `SUCCEEDED`, `structured.branch: "then"` |
 | 7 | `node-dispatched` `create-issue` (emitted) | `current: {create-issue, 0, 1, DISPATCHED}` |
 | 8 | `node-completed` SUCCESS, `artifactRefs: [issue #42]` | node `SUCCEEDED`, `artifactRefs += issue#42` |
 | 9 | `node-dispatched` `implement` cycle **1** (emitted) | **`cycleIndex: 0 → 1`** (first body entry: no `retry-edge-taken`, `traversals` still 0), `maxCycleIndex: 1` |
 | 10 | `node-completed` SUCCESS, `filesChanged: 6` | node `SUCCEEDED`, `changeFingerprints["1:implement"] = <h1>`, `measuredTokens += 512,904` |
-| 11 | `node-dispatched` / `node-completed` `test` (exit 0) | node `SUCCEEDED`, no usage (command node) |
-| 12 | `node-dispatched` / `node-completed` `review-pr` `{verdict: "pass"}` | node `SUCCEEDED`, `measuredExecutions: 3/3`, `verdictFingerprints[1] = <empty set>` |
-| 13 | `node-completed` (control-plane, `pass?`) → then-branch | **`cycleIndex: 1 → 0`** (leaving the body), `maxCycleIndex` stays 1 |
+| 11 | `node-dispatched` / `node-completed` `run-tests` (exit 0) | node `SUCCEEDED`, no usage (command node) |
+| 12 | `node-dispatched` / `node-observed` `review-changes` `{approved: true}` | node `SUCCEEDED`, usage `unavailable`, `measuredExecutions: 1/3`, `unmeasuredExecutions: 2`, `verdictFingerprints[1] = <empty set>` |
+| 13 | `node-completed` (control-plane, `review-verdict`) → then-branch | **`cycleIndex: 1 → 0`** (leaving the body), `maxCycleIndex` stays 1 |
 | 14 | `human-requested` `approve-pr` (emitted) | `status: WAITING_HUMAN`, `lease: null`, `pendingApproval.subject = {kind: diff, digest: <d1>}`, `waitMs` starts |
 | 15 | `human-decided` approve, `subjectDigest = <d1>` (human) | `status: RUNNING`, `approvals["0:approve-pr:0:<d1>"]`, node `SUCCEEDED` |
-| 16 | `node-dispatched` / `node-completed` `open-pr` `artifactRefs: [pr #77]` | node `SUCCEEDED` |
-| 17 | `node-completed` (control-plane, `end-shipped`) → `run-finished` | `status: SUCCEEDED`, `outcome: {state: SUCCEEDED, label: "shipped"}`, `traversals: {retry-fix: 0}`, `freeTraversals: 0`, `maxCycleIndex: 1`, coverage `3/3 (100%)` |
+| 16 | `node-dispatched` / `node-completed` `create-pr` `artifactRefs: [pr #77]` | node `SUCCEEDED` |
+| 17 | `node-completed` (control-plane, `end-shipped`) → `run-finished` | `status: SUCCEEDED`, `outcome: {state: SUCCEEDED, label: "success"}`, `traversals: {retry-implementation: 0}`, `freeTraversals: 0`, `maxCycleIndex: 1`, coverage `1/3 (33%)` — the two observed nodes are unmeasured |
 
 `loopmill step` exits `0` at every hop. `loopmill run` (local) would exit `0`.
 
 ### 13.2 Two retries, then success
 
-Continuing from step 12 of 13.1, with `review-pr` returning `{verdict: "fail", issues: [...]}`:
+Continuing from step 12 of 13.1, with `review-changes` returning `{approved: false, reasons: "..."}`:
 
 | # | Event | Snapshot deltas |
 |---|---|---|
-| 1 | `node-completed` `review-pr` c1 `{verdict: "fail"}` | node `SUCCEEDED` (a verdict is not a failure — D-14), `verdictFingerprints[1] = <v1>` |
-| 2 | `node-completed` (control-plane, `pass?`) → else | routes to `retryEdge(retry-fix)` |
-| 3 | guard: `traversals[retry-fix] = 0 < 3` → ok | — |
-| 4 | `retry-edge-taken` `budgetConsumed: true` (emitted) | `traversals: {retry-fix: 1}`, `cycleIndex: 1 → 2`, `maxCycleIndex: 2` |
-| 5 | `node-dispatched` `implement` c2 a1 | `current: {implement, 2, 1, DISPATCHED}`; inputs carry `${nodes.review-pr.structured.issues}` |
+| 1 | `node-observed` `review-changes` c1 `{approved: false}` | node `SUCCEEDED` (a verdict is not a failure — D-14), `verdictFingerprints[1] = <v1>` |
+| 2 | `node-completed` (control-plane, `review-verdict`) → else | routes to `retryEdge(retry-implementation)` |
+| 3 | guard: `traversals[retry-implementation] = 0 < 3` → ok | — |
+| 4 | `retry-edge-taken` `budgetConsumed: true` (emitted) | `traversals: {retry-implementation: 1}`, `cycleIndex: 1 → 2`, `maxCycleIndex: 2` |
+| 5 | `node-dispatched` `implement` c2 a1 | `current: {implement, 2, 1, DISPATCHED}`; inputs carry `nodes.review-changes.captured.reasons` |
 | 6 | `node-completed` `implement` c2, `filesChanged: 3` | `changeFingerprints["2:implement"] = <h2>` ≠ `<h1>` → **not** NO_PROGRESS |
-| 7 | `test`, `review-pr` c2 → `{verdict: "fail"}` (different evidence) | `verdictFingerprints[2] = <v2>` ≠ `<v1>` |
-| 8 | `retry-edge-taken` (emitted) | `traversals: {retry-fix: 2}`, `cycleIndex: 3` |
-| 9 | `implement`, `test`, `review-pr` c3 → `{verdict: "pass"}` | all `SUCCEEDED` |
-| 10 | `pass?` → then; `approve-pr`; `open-pr`; `end-shipped` | `status: SUCCEEDED`, `outcome: SUCCEEDED(end:shipped)` |
+| 7 | `run-tests`, `review-changes` c2 → `{approved: false}` (different evidence) | `verdictFingerprints[2] = <v2>` ≠ `<v1>` |
+| 8 | `retry-edge-taken` (emitted) | `traversals: {retry-implementation: 2}`, `cycleIndex: 3` |
+| 9 | `implement`, `run-tests`, `review-changes` c3 → `{approved: true}` | all `SUCCEEDED` |
+| 10 | `review-verdict` → then; `approve-pr`; `create-pr`; `end-shipped` | `status: SUCCEEDED`, `outcome: SUCCEEDED(end:success)` |
 
-Final: `traversals: {retry-fix: 2}` of `maxIterations 3`, `maxCycleIndex: 3`, body executed 3 times,
+Final: `traversals: {retry-implementation: 2}` of `maxIterations 3`, `maxCycleIndex: 3`, body executed 3 times,
 summary line `Cycles 3 (traversals 2/3, free 0)`.
 
 ### 13.3 Exhaustion
 
-Same shape, `review-pr` never passing:
+Same shape, `review-changes` never approving:
 
-| Cycle | `pass?` | Guard | Emitted | `traversals` after | `cycleIndex` after |
+| Cycle | `review-verdict` | Guard | Emitted | `traversals` after | `cycleIndex` after |
 |---|---|---|---|---|---|
 | 1 | else | `0 < 3` ok | `retry-edge-taken`, `node-dispatched` | 1 | 2 |
 | 2 | else | `1 < 3` ok | `retry-edge-taken`, `node-dispatched` | 2 | 3 |
@@ -1528,15 +1561,15 @@ Resulting snapshot:
 
 ```
 status:  MAX_ITERATIONS_EXCEEDED
-outcome: { state: 'MAX_ITERATIONS_EXCEEDED', edgeId: 'retry-fix', traversals: 3, maxIterations: 3 }
+outcome: { state: 'MAX_ITERATIONS_EXCEEDED', edgeId: 'retry-implementation', traversals: 3, maxIterations: 3 }
 maxCycleIndex: 4        # body executed 4 times = maxIterations + 1
 current: null
-artifactRefs: [ branch loopmill/run_01K.../fix, issue #42, 4 commits ]
+artifactRefs: [ branch loopmill/daily-content-improvement/run_01K..., issue #42, 4 commits ]
 ```
 
 Side effects on finish: issue #42 labelled `loopmill:max-iterations` and commented with the Run
 summary; the working branch is **kept**; no PR is opened, closed or merged; nothing is deleted
-(section 6.5). Job summary: `Loop budget exhausted — retry-fix, 3/3`, conclusion **neutral**.
+(section 6.5). Job summary: `Loop budget exhausted — retry-implementation, 3/3`, conclusion **neutral**.
 `loopmill step` exits `0`; `loopmill run` exits `11`.
 
 ### 13.4 Quota park and resume
@@ -1544,12 +1577,12 @@ summary; the working branch is **kept**; no PR is opened, closed or merged; noth
 | # | Event | Snapshot deltas |
 |---|---|---|
 | 1 | `node-dispatched` `implement` c1 a1 | `current: {implement, 1, 1, DISPATCHED}`, `lease.expiresAt = 09:40Z` |
-| 2 | `node-failed` (backend) `result.status: QUOTA`, `error.message: "You've hit your session limit · resets at 3:45pm"`, `error.classified: QUOTA`, `error.quotaResetsAt: 2026-09-06T15:45:00Z`, `quotaSource: reported` | attempt `1:implement:1` = `FAILED`, `classification: QUOTA`, `usage.provenance: unavailable`; `chargedAttempts["1:implement"]` stays **0** (D-07) |
+| 2 | `node-failed` (backend) `result.status: failed`, `error.message: "You've hit your session limit · resets at 3:45pm"`, `error.classified: quota`, `quotaResetsAt: 2026-09-06T15:45:00Z`, `quotaSource: reported` | attempt `1:implement:1` = `FAILED`, `classification: QUOTA`, `usage.provenance: unavailable`; `chargedAttempts["1:implement"]` stays **0** (D-07) |
 | 3 | `quota-parked` (control-plane, emitted) | `status: WAITING_FOR_QUOTA`, node `implement` → `PENDING`, `lease: null`, `quota: {parks: 1, quotaResetsAt: 15:45:00Z, resumeDueAt: 15:46:00Z, window: five_hour, source: reported}`, `waitMs` starts |
 | 4 | `resumed` `{kind: due}` at 15:20Z (`resume --due`) | guard `15:20 < 15:46` fails → `ignored-stale(not_due)`; **no control field changes** |
 | 5 | `resumed` `{kind: due}` at 15:50Z | `preDispatch` ok (waits excluded from `maxRuntime` — D-04); `status: RUNNING` |
 | 6 | `node-dispatched` `implement` c1 **a2** | `current: {implement, 1, 2, DISPATCHED}`, new lease |
-| 7 | `node-completed` SUCCESS | node `SUCCEEDED`, attempt a2 `COMPLETED`, `measuredTokens += 498,113`; run continues to `test` |
+| 7 | `node-completed` SUCCESS | node `SUCCEEDED`, attempt a2 `COMPLETED`, `measuredTokens += 498,113`; run continues to `run-tests` |
 
 Had the message carried no `resets at` suffix, step 2 would resolve `quotaResetsAt` from the documented
 five-hour window (`quotaSource: derived-window`, D-05); had even the limit name been unrecognisable,
@@ -1561,11 +1594,11 @@ Baseline: `current = {implement, 1, 1, DISPATCHED}`.
 
 | # | Delivery | Result | Persisted? | `step` exit |
 |---|---|---|---|---|
-| 1 | `node-completed(implement, 1, 1)` `eventId: E1` | `applied` — node `SUCCEEDED`, `test` dispatched | yes, one commit | 0 |
+| 1 | `node-completed(implement, 1, 1)` `eventId: E1` | `applied` — node `SUCCEEDED`, `run-tests` dispatched | yes, one commit | 0 |
 | 2 | the identical envelope `E1` again | `duplicate` — snapshot unchanged | **no commit** | 0 |
 | 3 | a fresh `eventId: E2`, same `(implement, 1, 1, node-completed)` | `ignored-stale(semantic_duplicate)` | yes (the `ignored-stale` event only) | 0 |
 | 4 | `node-completed(implement, 1, 1)` `E3` arriving after the sweep dispatched attempt 2 | `ignored-stale(stale_attempt)`; its `usage` is appended to attempt `1:implement:1`'s ledger (D-20); no control field changes | yes | 0 |
-| 5 | `node-started(test, 1, 1)` before `test` was dispatched | `ignored-stale(no_attempt_in_flight)` | yes | 0 |
+| 5 | `node-started(test, 1, 1)` before `run-tests` was dispatched | `ignored-stale(no_attempt_in_flight)` | yes | 0 |
 | 6 | `node-completed(implement, 2, 1)` while `cycleIndex` is 1 | `ignored-stale(future_cycle)` | yes | 0 |
 | 7 | `node-completed(implement, 1, 1)` after `run-finished` | `ignored-stale(run_terminal)` (R-53 precedes the stale test — O-6) | yes | 0 |
 | 8 | `node-dispatched` with `producer: backend:github-actions` | `invalid` (producer not allowed) | **no** | 2 |
@@ -1585,16 +1618,16 @@ reported twice and an operator should be able to see that.
 | 5 | (the *original* dispatch had in fact landed and its job now reports) `node-completed(implement, 1, 1)` | `ignored-stale(stale_attempt)`; usage banked on a1; routing untouched (O-5) |
 | 6 | `node-completed(implement, 1, 2)` SUCCESS | applied; run continues |
 
-The external-effects variant, at `open-pr` (`effects: external`, `onInterrupted: ask`):
+The external-effects variant, at `create-pr` (`effects: external`, `onInterrupted: ask`):
 
 | # | Event | Snapshot deltas |
 |---|---|---|
-| 1 | `lease-expired {open-pr, 0, 1}` | attempt `LOST`; R-32 → `status: INTERRUPTED`, `interrupted: {open-pr, 0, 1, attempt_deadline, <t>}`, `lease: null`, node state frozen at `DISPATCHED` |
+| 1 | `lease-expired {create-pr, 0, 1}` | attempt `LOST`; R-32 → `status: INTERRUPTED`, `interrupted: {create-pr, 0, 1, attempt_deadline, <t>}`, `lease: null`, node state frozen at `DISPATCHED` |
 | 2 | operator runs `gh pr list` and sees PR #77 already exists | — |
-| 3 | `resumed {kind: interrupted, decision: skip}` | node `open-pr` → `SKIPPED`, `status: RUNNING`, `node-dispatched end-shipped` |
-| 4 | `run-finished` | `status: SUCCEEDED`, `outcome: SUCCEEDED(end:shipped)`, summary notes one skipped node |
+| 3 | `resumed {kind: interrupted, decision: skip}` | node `create-pr` → `SKIPPED`, `status: RUNNING`, `node-dispatched end-shipped` |
+| 4 | `run-finished` | `status: SUCCEEDED`, `outcome: SUCCEEDED(end:success)`, summary notes one skipped node |
 
-Had the operator chosen `--decision retry`, R-48 would re-dispatch `open-pr` attempt 2 (and `gh pr
+Had the operator chosen `--decision retry`, R-48 would re-dispatch `create-pr` attempt 2 (and `gh pr
 create` would fail on an existing PR, which is why `ask` is the default for external effects). Had they
 chosen `--decision fail`, R-50 terminates `FAILED(interrupted_abandoned)` with every ref recorded.
 
@@ -1697,7 +1730,7 @@ traces in section 13 are the primary vehicle.
 | id | Decision | Where |
 |---|---|---|
 | D-01 | A human gate timeout terminates the Run `EXPIRED(human_timeout)`, not `FAILED` | 8.4 |
-| D-02 | `human` nodes carry `onReject: fail_run \| retry_edge:<id> \| next:<id>`, default `fail_run` | 8.5 |
+| D-02 | A rejected gate is routed by the human node's own `onFailure` (`fail_run` default \| `continue` \| `retry_edge:<id>`); no `onReject` field exists | 8.5 |
 | D-03 | `human-decided.decision` accepts `cancel`, giving cancellation a path while the Run waits | 8.5 |
 | D-04 | `maxRuntime` excludes quota parks and interruptions as well as human waits | 11.1 |
 | D-05 | `quotaResetsAt` is derived from the runtime's documented window when the message omits it; unresolvable → `FAILED(quota_unclassifiable)` | 7.4 |
@@ -1706,11 +1739,11 @@ traces in section 13 are the primary vehicle.
 | D-08 | The NO_PROGRESS fingerprints: change-set digest + verdict digest, requiring a predecessor cycle | 6.6 |
 | D-09 | Two consecutive NO_PROGRESS → `FAILED(no_progress_stalled)`, not a new terminal state | 6.6 |
 | D-10 | `freeTraversals[e] <= maxIterations[e]`; exceeding it is `MAX_ITERATIONS_EXCEEDED` | 6.6 |
-| D-11 | `onInterrupted: retry \| ask`, defaulting by `effects` | 10.3 |
+| D-11 | The interruption policy `retry \| ask` is derived from `effects`, not authored in the loop file | 10.3 |
 | D-12 | The sweep consults the backend's run handle before declaring a lease lost | 10.2 |
 | D-13 | Condition, end and synthetic nodes are control-plane-local, `attempt: 0`, no Attempt record | 3.4 |
 | D-14 | `node-completed` carries only `SUCCESS`; a negative verdict is data, not a failure | 3.4 |
-| D-15 | `result.status` uses the `classifyFailure` vocabulary verbatim | 3.1, 7.1 |
+| D-15 | The envelope's `result.status` uses the lowercase Node Execution vocabulary of `envelope.md` §4.2; `classifyFailure`'s `Classification` is internal and reaches the wire as `error.classified` | 3.1, 7.1 |
 | D-16 | Emitted `eventId`s are deterministic ULIDs derived from `ctx.now` plus a content hash | 5.2 |
 | D-17 | `loopmill run` (local) exit codes: `1..4` engine, `>= 10` Run outcome, `20..23` resumable | 12.2 |
 | D-18 | `minInterval` / `maxRunsPerWindow` breach → `SKIPPED`, with a `skipReason` enum | 11.1 |

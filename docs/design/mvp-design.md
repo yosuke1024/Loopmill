@@ -545,16 +545,20 @@ the job summary and the run report. A run that ends in `MAX_ITERATIONS_EXCEEDED`
 did its job.
 
 **Decision (not in sheet)** — the *local* whole-run driver `loopmill run <slug>` is a different program
-with a different namespace, because a human and a shell script do want the outcome in `$?`:
+with a different namespace, because a human and a shell script do want the outcome in `$?`. The
+normative table is `docs/spec/state-machine.md` §12.2 (decision D-17); it is reproduced here:
 
 | Code | `loopmill run` outcome | Code | `loopmill run` outcome |
 |---|---|---|---|
-| `0` | `SUCCEEDED` | `20` | `WAITING_HUMAN` (parked) |
-| `10` | `MAX_ITERATIONS_EXCEEDED` | `21` | `WAITING_FOR_QUOTA` (parked) |
-| `11` | `BUDGET_EXCEEDED` | `22` | `WAITING_OBSERVED` (parked) |
-| `12` | `FAILED` | `23` | `SKIPPED` (dedupe) |
-| `13` | `CANCELLED` | `2` | Invalid loop file or envelope |
-| `14` | `EXPIRED` (max runtime) | `3` | State conflict (`1` = unexpected error) |
+| `0` | `SUCCEEDED` | `15` | `SKIPPED` (dedupe or rate limit) |
+| `10` | `FAILED` | `20` | exited in `WAITING_HUMAN` |
+| `11` | `MAX_ITERATIONS_EXCEEDED` | `21` | exited in `WAITING_FOR_QUOTA` |
+| `12` | `BUDGET_EXCEEDED` | `22` | exited in `WAITING_OBSERVED` |
+| `13` | `EXPIRED` (max runtime) | `23` | exited in `INTERRUPTED` |
+| `14` | `CANCELLED` | `1`-`4` | the engine codes above, unchanged |
+
+Reading rule: `1`-`4` means the engine misbehaved, `>= 10` means the engine worked and the Run has a
+result, `20`-`23` means the Run is unfinished and resumable.
 
 `loopmill run-node` (the node executor) exits `0` whenever it *successfully reported* a completion of any
 status, and non-zero only when it could not report at all (`4`) or crashed (`1`). Node failure is data,
@@ -582,8 +586,11 @@ re-reads and re-applies. A hard cap `maxStepsPerRun` (default 200) prevents a ru
 SPIKE-3's local harness proves the store half of this today: 20/20 tests passing (2026-09-06) covering
 one-commit-per-event, duplicate delivery creating no commit, stale events recorded as ignored, CAS
 rejection with re-read and re-apply, two concurrent steps where exactly one wins, kills before commit and
-between commit and push, snapshot-equals-fold, and two runs sharing one branch `[V]`. The GitHub half —
-dispatch chaining, `repository_dispatch` restrictions, runner overhead — is SPIKE-3's m0 work `[S]`.
+between commit and push, snapshot-equals-fold, and two runs sharing one branch `[V]`. The GitHub half is
+partly measured: 22 hosted runs on 2026-09-06 confirmed `GITHUB_TOKEN` dispatch chaining, the
+default-branch requirement and per-step overhead (~1.4-1.6 s step body, 13 s job, hop latency up to 38 s
+under the concurrency group) `[V]`; `repository_dispatch` chaining, a forced CAS conflict against GitHub
+and an interrupted job remain SPIKE-3's m0 work `[S]` (`docs/spikes/README.md` §5).
 
 ### 7.6 Portability
 
@@ -612,10 +619,15 @@ Full field list and per-event semantics: `docs/spec/envelope.md`, schema
 
 Required: `schemaVersion`, `eventId` (ULID), `eventType`, `occurredAt` (RFC 3339, producer clock),
 `producer` (`control-plane` | `backend:<id>` | `human` | `trigger`), `loopId`, `loopVersion`, `runId`.
-Per-node events add `cycle`, `nodeId`, `attempt`. Optional: `causationId`, `correlationId` (= `runId`
-unless a sub-run exists), `result` (`{status, exitCode?, structured?, summary?}`), `artifactRefs[]`
+Per-node events add `cycle`, `nodeId`, `attempt` (`attempt: 0` marks a control-plane-local node —
+condition, `end`, human gate — that was never dispatched). Optional: `causationId`, `correlationId`
+(= `runId` unless a sub-run exists), `result` (`{status, exitCode?, structured?, summary?}`, statuses
+lowercase), `artifactRefs[]`
 (`{kind: commit|branch|pr|issue|comment|actions-artifact|file, ref, digest?}`), `usage` (section 14),
-`error` (`{code, message, classified}`), `signature` (reserved).
+`error` (`{code, message, classified}`), `signature` (reserved). Each event type additionally carries
+exactly one event-scoped object where it applies — `trigger`, `dispatch`, `matcher`, `human`,
+`retryEdge`, `resume`, `outcome`, plus `reason` and `quotaResetsAt` — defined in
+`docs/spec/envelope.md` §4 and enforced by the schema.
 
 MVP event types: `run-requested`, `run-started`, `node-dispatched`, `node-started`, `node-completed`,
 `node-failed`, `node-timed-out`, `node-observed`, `human-requested`, `human-decided`, `quota-parked`,
@@ -704,8 +716,9 @@ Summary only; every transition, guard and invariant is in `docs/spec/state-machi
 
 **Run states.** `PENDING`, `RUNNING`, `WAITING_HUMAN`, `WAITING_FOR_QUOTA`, `WAITING_OBSERVED`,
 `INTERRUPTED`; terminal: `SUCCEEDED` (carries `end:<label>`), `FAILED` (carries `failureReason`),
-`CANCELLED`, `MAX_ITERATIONS_EXCEEDED`, `BUDGET_EXCEEDED`, `EXPIRED` (max runtime), `SKIPPED` (an open
-change for the same `dedupeKey` already exists).
+`CANCELLED`, `MAX_ITERATIONS_EXCEEDED`, `BUDGET_EXCEEDED`, `EXPIRED` (max runtime), `SKIPPED` (the Run
+was refused before it started: an open change for the same `dedupeKey`, or `minInterval` /
+`maxRunsPerWindow` — `skipReason` says which).
 
 **Node Execution states.** `PENDING`, `DISPATCHED`, `RUNNING` (only when the backend streams),
 `OBSERVING` (observed backends), `WAITING_HUMAN`; terminal: `SUCCEEDED`, `FAILED`, `TIMED_OUT`,
@@ -786,7 +799,7 @@ A human node is a wait that costs nothing while it waits, because GitHub already
 |---|---|---|
 | `environment-reviewers` | The agent/dispatch job targets a GitHub Environment with required reviewers; the job waits, no Loopmill process exists | GitHub's approval → an `ingest` workflow → `human-decided` |
 | `pull-request-review` | An approving review on the PR the run produced | `pull_request_review` → `ingest` → `human-decided` |
-| `label` | Adding `loopmill:approve` / `loopmill:reject`, or an explicit `workflow_dispatch` | `issues`/`pull_request` labelled → `ingest` |
+| `label` | Removing the `loopmill:hold` label approves; adding `loopmill:reject` rejects; an explicit `workflow_dispatch` also releases the gate | `issues`/`pull_request` (un)labelled → `ingest` |
 
 **The approval subject is a digest, not a vibe.** `subject` names a Node Execution (`nodes.<id>`), and
 `human-requested` records the digest of that execution's artifact — in the reference loop, `nodes.implement`,
@@ -794,11 +807,15 @@ i.e. the change the human is being asked to approve. `human-decided` must carry 
 rejected as stale. **Any retry invalidates every prior approval**, because the thing approved no longer
 exists.
 
-**Timeouts and rejection.** A human node has a `timeout` (reference loop: `PT12H`). Expiry and rejection
-are the same shape — *this gate did not produce an approval* — so both make the node terminal
-(`TIMED_OUT`, or `FAILED` with `failureReason: human_rejected`) and `onFailure` governs what the Run does
-next: `fail_run` by default, `continue` to proceed, or `retry_edge:<id>` to send the work back. The branch
+**Timeouts and rejection.** A human node has a `timeout` (reference loop: `PT12H`). The two ways a gate
+fails to produce an approval are recorded differently, because they mean different things. *Expiry* is
+nobody's fault and nobody's decision: the node is `TIMED_OUT` and the Run ends `EXPIRED` with
+`expiryReason: human_timeout` — never `FAILED`. A *rejection* is a decision, so the gate itself is
+`SUCCEEDED` (it did its job) and the node's own `onFailure` governs what the Run does next: `fail_run`
+by default (Run `FAILED`, `failureReason: human_rejected`), `continue` to proceed, or
+`retry_edge:<id>` to send the work back. There is no `onReject` field. The branch
 and Issue are labelled either way (section 18), and the report names the gate that was waiting.
+Normative detail: `docs/spec/state-machine.md` §8.4-8.5 (decisions D-01, D-02).
 
 **Policy.** `effects: external` nodes require a human gate on every path from the entry node. The loop's
 `approval` object can lift that requirement — `policy: auto` with a mandatory `reason`, optionally narrowed
@@ -831,7 +848,7 @@ Three lists, always applied, always reported:
 
 * **Deny** — every vendor auth-override variable: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
   `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`/`_VERTEX`/`_FOUNDRY`, `OPENAI_API_KEY`, `CODEX_API_KEY`,
-  `CODEX_ACCESS_TOKEN`, `CODEX_CONNECTORS_TOKEN`, plus `GH_TOKEN`/`GITHUB_TOKEN` unless the node is
+  `CODEX_ACCESS_TOKEN`, `CODEX_CONNECTORS_TOKEN`, plus `GH_TOKEN` unless the node is
   `effects: external`. This list is mandatory, not advisory: in `-p` mode `ANTHROPIC_API_KEY` "is always
   used when present" `[V]`, so scrubbing it is the only way a subscription guarantee can be true.
 * **Preserve** — `PATH`, `HOME`, `SHELL`, `LANG`, `TZ`, proxy variables, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`.
@@ -923,7 +940,7 @@ Headline rendering rules, everywhere:
 | `maxIterations` | Retry Edge | required on the edge | Checked before dispatching the edge target; `budget.maxIterations`, when set, is a **cap** no edge may exceed |
 | `maxRuntime` | Run | `PT4H` | Wall clock excluding human waits → `EXPIRED` |
 | `maxMeasuredTokens` | Run | — | Checked **before each dispatch**, against measured tokens only |
-| `maxUnmeasuredExecutions` | Run | observed nodes × maxIterations | The binding guard when coverage < 100% |
+| `maxUnmeasuredExecutions` | Run | `observed agent nodes × (1 + maxIterations)` | The binding guard when coverage < 100% |
 | `maxRunsPerWindow` | Loop | `{count: 1, window: PT5H}` | Aligned to the vendors' rolling windows `[V]` |
 | `minInterval` | Loop | `PT1H` | Mirrors Anthropic Routines' minimum `[V]` |
 
@@ -942,7 +959,7 @@ coverage < 100%, every report marks the token budget `partially observable` and 
 | Metric | Definition | Rendering rule |
 |---|---|---|
 | **Outcome** | The terminal Run state plus its label (`SUCCEEDED(end:success)`, `MAX_ITERATIONS_EXCEEDED`, …) | Exhaustion has its own bucket; it is never counted as a failure |
-| **Retries** | `max(cycleIndex) − 1` per Run, plus the count of `NO_PROGRESS` executions | `NO_PROGRESS` is reported separately: it did not consume the budget |
+| **Retries** | `traversals` per Retry Edge (= `maxCycleIndex − 1` once a body has been entered; 0 for a Run that never entered one), plus the count of `NO_PROGRESS` executions | `NO_PROGRESS` is reported separately: it did not consume the budget |
 | **Duration** | `run-finished.occurredAt − run-requested.occurredAt`, reported as *elapsed* and as *active* (human and quota waits excluded) | Both, always; one number would lie either way |
 | **Measured tokens** | Σ `totalTokens` over attempts with provenance `reported` or `derived` | `+` suffix whenever coverage < 100% |
 | **Coverage** | `measuredExecutions / agentExecutions` in the scope | Printed next to every token figure |
@@ -973,11 +990,11 @@ Illustrative `status` output — the contract is the fields, not the layout:
 run_01JQ4Z2E9K7M3T5V8W1X6Y0B2C   daily-content-improvement   loopVersion 9f2c…a41
 State        MAX_ITERATIONS_EXCEEDED (retry-implementation, 3/3)
 Duration     1h58m elapsed / 1h12m active
-Cycles       4   (NO_PROGRESS: 1)
-Tokens       1,284,003+   Coverage 4/9 (44%)
-Unmeasured   review-content@c0, review-changes@c1..c4   (backend: observed — usage unavailable)
+Cycles       5   (traversals 3/3, free 1 — one NO_PROGRESS cycle, which is not charged)
+Tokens       1,284,003+   Coverage 5/10 (50%)
+Unmeasured   review-content@c0, review-changes@c1,c2,c4,c5   (backend: observed — usage unavailable)
 Artefacts    issue #482 · branch loopmill/daily-content-improvement/run_01JQ4Z… · no PR
-Next         nothing — terminal. `loopmill logs run_01JQ4Z… --node review-changes --cycle 4`
+Next         nothing — terminal. `loopmill logs run_01JQ4Z… --node review-changes --cycle 5`
 ```
 
 ### 15.3 UI scope
@@ -1012,8 +1029,9 @@ The loop of section 5.3, executed for real. Time zone: `Asia/Tokyo`; the schedul
 Two vendors, two execution backends, one Run, one retry budget, one usage account. Cycle 0 holds setup
 (1-3) and teardown (8-9); the Retry Edge body (4-7) runs as cycles 1..4. Per-cycle averages exclude cycle
 0; the Run total includes it. Both Codex nodes are `observed`, therefore unmeasured: they consume
-`maxUnmeasuredExecutions` (8 = 2 nodes x 4) rather than the token budget, and this loop's usage coverage
-can never exceed 4/12 measured agent executions in a full four-cycle run.
+`maxUnmeasuredExecutions` (8 = 2 observed agent nodes x (1 + 3 traversals)) rather than the token
+budget, and this loop's usage coverage can never exceed 4/9 measured agent executions in a full
+four-cycle run (`review-content` once in cycle 0, `implement` and `review-changes` once per cycle 1..4).
 
 ### 16.2 The envelopes exchanged
 
@@ -1126,7 +1144,9 @@ on the existing artefact — this is what stops a daily loop from re-observing t
 morning and opening seven Issues for it.
 
 **Exhaustion leaves labelled artefacts.** On `MAX_ITERATIONS_EXCEEDED`, `EXPIRED` or `BUDGET_EXCEEDED`,
-nothing is deleted: the branch stays, the Issue gets `loopmill:exhausted` plus a comment naming the cycles
+nothing is deleted: the branch stays, the Issue gets the outcome label
+(`loopmill:max-iterations`, `loopmill:expired`, `loopmill:budget-exceeded` — the vocabulary of
+`docs/spec/state-machine.md` §6.5) plus a comment naming the cycles
 used and the unaddressed finding ids, and no PR is opened. `loopmill gc` never touches repository
 artefacts — only the state branch.
 
@@ -1331,7 +1351,7 @@ Not in the MVP, and each for a stated reason:
 | **SPIKE-1** | Does `claude -p` with `CLAUDE_CODE_OAUTH_TOKEN` run headless on a hosted runner, with usage JSON and structured output, never `--bare`? | The `github-actions` backend's primary runtime. Failure → STOP (a) |
 | **SPIKE-2** | Codex Cloud R-runs: R1 task creation from a non-interactive process on subscription auth; R4 the result reaching GitHub without a click; R5 a schema-conforming JSON artifact ≥ 4/5; R7 `ready`/`error` distinguishable and bounded; R3 or R8 a trigger Loopmill can own | The `observed` backend. GO requires R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8) |
 | **SPIKE-2b** | Does a seeded `auth.json` survive refresh-token rotation on ephemeral runners (R11 terms)? | `codex` on `github-actions`. Failure keeps it flag-gated or removes it |
-| **SPIKE-3** | On real GitHub: CAS on the state branch, duplicate and concurrent delivery, an interrupted job, `GITHUB_TOKEN` dispatch chaining, the `repository_dispatch` default-branch restriction, per-step runner overhead | Sections 7-9. Local harness already green (20/20, 2026-09-06) `[V]`; failure changes the mechanism, not the positioning |
+| **SPIKE-3** | On real GitHub: CAS on the state branch, duplicate and concurrent delivery, an interrupted job, `GITHUB_TOKEN` dispatch chaining, the `repository_dispatch` default-branch restriction, per-step runner overhead | Sections 7-9. Local harness green (20/20) and 22 hosted runs on 2026-09-06 confirming chaining, the default-branch requirement and per-step overhead `[V]`; `repository_dispatch`, a forced CAS conflict and an interrupted job still open `[S]`. Failure changes the mechanism, not the positioning |
 
 **STOP conditions.** If one of these is true, the MVP does not ship as designed:
 

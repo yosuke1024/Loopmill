@@ -9,5 +9,9 @@
   "runId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
   "correlationId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
   "causationId": "06G7BWJHJ0A61J00S3CMRCJT4J",
-  "reason": "quota_window_reset"
+  "resume": {
+    "kind": "due",
+    "actor": "loopmill-sweep"
+  },
+  "reason": "due"
 }

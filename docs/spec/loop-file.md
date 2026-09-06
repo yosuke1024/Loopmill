@@ -360,7 +360,7 @@ budget:
 | `maxIterations` | integer ≥ 1 | none | Loop | **Cap** on every Retry Edge's own `maxIterations` (LM-VAL-025). |
 | `maxRuntime` | ISO-8601 duration | `PT4H` | Run | Wall clock, **excluding** time spent in `WAITING_HUMAN`. A gate that waits overnight must not consume the runtime budget. Breach → `EXPIRED`. |
 | `maxMeasuredTokens` | integer ≥ 1 | none | Run | Checked against **measured** tokens only — usage whose provenance is `reported` or `derived`. `estimated` and `unavailable` never count towards it, so the budget can never be satisfied by numbers Loopmill did not actually observe. |
-| `maxUnmeasuredExecutions` | integer ≥ 0 | derived | Run | Agent Node Executions whose usage provenance is `unavailable`. Whenever usage coverage is below 100% this, not the token budget, is the binding guard. |
+| `maxUnmeasuredExecutions` | integer ≥ 0 | derived | Run | Agent Node Executions that are **not measured** — usage provenance `unavailable` or `estimated` (`usage-normalization.md` §6.1). Whenever usage coverage is below 100% this, not the token budget, is the binding guard. |
 | `maxRunsPerWindow` | `{count, window}` | `{count: 1, window: PT5H}` | Loop | Rolling-window rate limit, aligned with the vendors' own rolling usage windows. |
 | `minInterval` | ISO-8601 duration | `PT1H` | Loop | Minimum wall-clock distance between the starts of two Runs. |
 
@@ -560,19 +560,21 @@ approve-pr:
 
 | Field | Type | Semantics |
 |---|---|---|
-| `mode` | `environment-reviewers` \| `pull-request-review` \| `label` | How the approval is asked for. `environment-reviewers`: a GitHub Environment with required reviewers gates the *next* job before it starts. `pull-request-review`: an approving review on the pull request. `label`: removal of the `loopmill:hold` label. |
+| `mode` | `environment-reviewers` \| `pull-request-review` \| `label` | How the approval is asked for. `environment-reviewers`: a GitHub Environment with required reviewers gates the *next* job before it starts. `pull-request-review`: an approving review on the pull request. `label`: removal of the `loopmill:hold` label approves, adding `loopmill:reject` rejects. |
 | `subject` | `nodes.<id>` | The Node Execution whose **artifact digest** is being approved. The digest is recorded in the `human-requested` event; a retry changes the digest and therefore invalidates prior approvals. |
-| `timeout` | duration | Optional. On expiry the node is `TIMED_OUT` and `onFailure` applies. |
+| `timeout` | duration | Optional. On expiry the node is `TIMED_OUT` and the Run ends `EXPIRED` with `expiryReason: human_timeout` — never `FAILED`, and `onFailure` does not apply (`state-machine.md` §8.4, D-01). |
 
 The Run enters `WAITING_HUMAN`. Nothing of Loopmill's is resident while it waits, and
 the wait is excluded from `budget.maxRuntime`.
 
-**Decision (not in sheet):** a *rejection* is a node failure with
-`failureReason: human_rejected`, so `onFailure` governs it — `fail_run` (the default)
-ends the Run `FAILED`, `continue` proceeds to `next`, and `retry_edge:<id>` sends the
-work back for another attempt. No separate `onReject` field is introduced: rejection
-and timeout are both "this gate did not produce an approval", and giving them one
-mechanism means a Loop author cannot handle one and forget the other.
+**Decision (not in sheet):** a *rejection* is routed by the node's own `onFailure` —
+`fail_run` (the default) ends the Run `FAILED` with `failureReason: human_rejected`,
+`continue` proceeds to `next`, and `retry_edge:<id>` sends the work back for another
+attempt. No separate `onReject` field is introduced: rejection and timeout are both
+"this gate did not produce an approval", and giving them one mechanism means a Loop
+author cannot handle one and forget the other. (The gate *itself* is recorded as
+`SUCCEEDED` with `decision: reject` — it did its job; the consequence is the Run's.
+See `docs/spec/state-machine.md` §8.5, decision D-02.)
 
 ### 8.5 End node
 

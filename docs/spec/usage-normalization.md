@@ -743,15 +743,18 @@ and every one has a default, except `maxIterations`, which the sheet makes requi
 | `maxIterations` | integer ≥ 1 | required | Retry Edge | before dispatching the Retry Edge target | traversals of that edge | Run `MAX_ITERATIONS_EXCEEDED` (never `FAILED`) |
 | `maxRuntime` | duration | `4h` | Run | before every dispatch, and by the sweep | Run wall clock **excluding human waits** (section 6.3) | Run `EXPIRED` |
 | `maxMeasuredTokens` | integer tokens | unset (no cap) | Run | before every dispatch | `totalTokens` of measured records only (section 6.2) | Run `BUDGET_EXCEEDED` |
-| `maxUnmeasuredExecutions` | integer ≥ 0 | computed (section 6.2) | Run | before every dispatch | agent Node Executions with `unavailable` or `estimated` provenance | Run `BUDGET_EXCEEDED` |
-| `maxRunsPerWindow` | integer ≥ 1 | `1` per rolling `5h` | Loop | before starting a Run | Run starts in the window (section 6.4) | Run `BUDGET_EXCEEDED`, recorded before it starts |
-| `minInterval` | duration | `1h` | Loop | before starting a Run | time since the previous Run's start | Run `BUDGET_EXCEEDED`, recorded before it starts |
+| `maxUnmeasuredExecutions` | integer ≥ 0 | computed (section 6.2) | Run | before every dispatch | agent Node Executions with `unavailable` or `estimated` provenance | Run `BUDGET_EXCEEDED(maxUnmeasuredExecutions)` |
+| `maxRunsPerWindow` | integer ≥ 1 | `1` per rolling `5h` | Loop | before starting a Run | Run starts in the window (section 6.4) | Run `SKIPPED(runs_per_window)`, recorded before it starts |
+| `minInterval` | duration | `1h` | Loop | before starting a Run | time since the previous Run's start | Run `SKIPPED(min_interval)`, recorded before it starts |
 
 `Reconciliation (both in sheet)`: section 10 of the sheet says a budget breach yields
 `BUDGET_EXCEEDED`, and section 5 assigns `MAX_ITERATIONS_EXCEEDED` and `EXPIRED` to two of these same
 conditions. Where section 5 names a more specific terminal outcome for a condition, that outcome
 wins; `BUDGET_EXCEEDED` covers the remaining fields. `maxAttempts` exhaustion is a node failure, not a
-run-level budget breach, because the sheet's Attempt state machine already defines it that way.
+run-level budget breach, because the sheet's Attempt state machine already defines it that way. The
+two Loop-level rate limits are refusals *before* a Run starts, so they are `SKIPPED` rather than
+`BUDGET_EXCEEDED` (section 6.4); `BudgetKey` is therefore the closed set
+`maxMeasuredTokens | maxUnmeasuredExecutions | maxStepsPerRun` of `state-machine.md` §2.2.
 
 ### 6.2 Token budgets count measured tokens only
 
@@ -773,15 +776,16 @@ normative:
 2. **`maxUnmeasuredExecutions` is the binding guard** under incomplete coverage. It is the only limit
    that can stop a Run whose spend Loopmill cannot see, and it is therefore not optional in practice.
 
-Default for `maxUnmeasuredExecutions` `Decision (not in sheet)` — the sheet says "number of observed
-nodes × maxIterations", which is ambiguous for a Loop with several Retry Edges or with observed nodes
-outside every body. The computed default is:
+Default for `maxUnmeasuredExecutions` — the sheet says "number of observed nodes × maxIterations",
+which undercounts by one whole pass, because a Retry Edge body executes once *before* any traversal.
+The default is the one `docs/spec/loop-file.md` §7.2 defines, which owns the field:
 
 ```
-Σ over agent nodes whose backend capability is `usage: none`
-    ( maxIterations of the innermost enclosing Retry Edge, or 1 if the node is in no body )
+max( 1, observedAgentNodes × (1 + maxEdgeIterations) )
 ```
 
+where `observedAgentNodes` counts `agent` nodes whose resolved backend declares `usage: none` and
+`maxEdgeIterations` is the largest `maxIterations` over all Retry Edges (0 when there are none). It is
 evaluated by `loopmill validate` at load time and recorded on the Run header, so that changing the
 Loop file mid-history does not retroactively change a past Run's budget.
 
@@ -823,10 +827,12 @@ Both are per Loop and both are checked before a Run is created, in `loopmill ste
   MVP runtime exposes no quota percentage to a headless process at all, so the ledger is the only
   quota-shaped number that exists for it. When a vendor-side meter is available, it MAY be consulted
   *in addition*, never instead.
-- `Decision (not in sheet)`: a Run refused by either guard is recorded as a Run in terminal state
-  `BUDGET_EXCEEDED` with the guard named, **not** as `SKIPPED` (reserved for dedupe) and **not** as
-  `FAILED`. A first-class record is what stops `loopmill reconcile` from retrying the refusal in a
-  loop, and what lets the user see that the schedule is over budget rather than broken.
+- A Run refused by either guard is recorded as a Run in terminal state `SKIPPED`, with
+  `skipReason: runs_per_window | min_interval` (`state-machine.md` D-18, R-03), **not** as
+  `BUDGET_EXCEEDED` and **not** as `FAILED`. A first-class record is what stops a repeating trigger
+  from retrying the refusal in a loop, and what lets the user see that the schedule is over budget
+  rather than broken; `SKIPPED` is the sheet's own shape for "this Run was refused before it started",
+  and a nightly schedule that correctly declines must not paint the job red.
 
 ### 6.5 Check point and enforcement shape
 
@@ -1107,8 +1113,9 @@ Decisions taken where the decision sheet is silent, each stated at its point of 
 14. §6.1 — `maxAttempts` exhaustion is a node failure, not a run budget breach.
 15. §6.2 — the precise computed default for `maxUnmeasuredExecutions`, pinned on the Run header.
 16. §6.3 — `WAITING_OBSERVED` counts toward `maxRuntime`; `WAITING_FOR_QUOTA` does not.
-17. §6.4 — a Run refused by `maxRunsPerWindow` or `minInterval` is recorded as a Run in
-    `BUDGET_EXCEEDED`, never `SKIPPED` and never `FAILED`.
+17. §6.4 — a Run refused by `maxRunsPerWindow` or `minInterval` is recorded as a Run in terminal
+    `SKIPPED` with a `skipReason`, never `BUDGET_EXCEEDED` and never `FAILED` (the shape
+    `state-machine.md` D-18 fixes).
 
 Reconciliation of two statements both present in the sheet:
 

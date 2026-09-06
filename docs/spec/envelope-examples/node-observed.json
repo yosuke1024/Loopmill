@@ -12,6 +12,11 @@
   "cycle": 1,
   "nodeId": "pr-review",
   "attempt": 1,
+  "matcher": {
+    "kind": "comment-block",
+    "ref": "3310042117",
+    "outcome": "found_valid"
+  },
   "result": {
     "status": "succeeded",
     "structured": {

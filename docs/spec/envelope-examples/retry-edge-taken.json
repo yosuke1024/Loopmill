@@ -16,6 +16,8 @@
     "toNodeId": "implement",
     "fromCycle": 1,
     "toCycle": 2,
-    "maxIterations": 3
+    "maxIterations": 3,
+    "traversals": 1,
+    "budgetConsumed": true
   }
 }

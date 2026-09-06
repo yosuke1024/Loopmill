@@ -93,17 +93,21 @@ What this forbids, explicitly:
 
 ### 3.2 Node coordinates
 
-`cycle` (integer >= 0), `nodeId` (slug) and `attempt` (integer >= 1) are **required together** for every
+`cycle` (integer >= 0), `nodeId` (slug) and `attempt` (integer >= 0) are **required together** for every
 node-level event type (section 5) and **forbidden** on `run-requested`, `run-started`, `run-finished`
 and `resumed`. `retry-edge-taken` carries `cycle` (the cycle it enters) and no node coordinates.
+`ignored-stale` carries them only when the envelope it declined carried them.
 
 - `cycle` — nodes outside any Retry Edge body execute in cycle 0; body traversals are cycles 1..N. A
   Loop with no Retry Edge only ever has cycle 0.
-- `attempt` — infrastructure-level retry only (a LOST completion, a transient backend error). A loop
-  retry never increments `attempt`; it increments `cycle`. Conflating the two is the single most
-  expensive mistake this field prevents, which is why `attempt` is required rather than defaulted:
-  a completion without an attempt number cannot be told apart from the completion of a re-dispatch, and
-  a control plane that guesses will accept a zombie result.
+- `attempt` — dispatched attempts are numbered from 1, and a higher number means infrastructure-level
+  retry only (a LOST completion, a transient backend error). A loop retry never increments `attempt`;
+  it increments `cycle`. Conflating the two is the single most expensive mistake this field prevents,
+  which is why `attempt` is required rather than defaulted: a completion without an attempt number
+  cannot be told apart from the completion of a re-dispatch, and a control plane that guesses will
+  accept a zombie result. `attempt: 0` is reserved for a **control-plane-local** Node Execution — a
+  condition, an `end` node, a human gate or a synthetic record — which is never dispatched to a backend
+  and owns no Attempt (`state-machine.md` D-13); it is never used for anything that was dispatched.
 
 `(runId, cycleIndex, nodeId)` identifies a Node Execution; `(runId, cycleIndex, nodeId, attempt)`
 identifies an Attempt and is the semantic idempotency key (section 6.2).
@@ -132,6 +136,8 @@ equally invalid.
 | `trigger` | `run-requested` | 4.1 |
 | `human` | `human-requested`, `human-decided` | 4.8 |
 | `retryEdge` | `retry-edge-taken` | 4.5 |
+| `matcher` | `node-observed` | 4.11 |
+| `resume` | `resumed` | 4.12 |
 | `outcome` | `run-finished` | 4.9 |
 | `quotaResetsAt` | `quota-parked`, `node-failed` | 4.10 |
 | `reason` | any control-plane bookkeeping event; required on `ignored-stale`, `resumed`, `lease-expired` | 4.10 |
@@ -192,9 +198,12 @@ dispatch time is what makes that check per-attempt rather than per-type.*
 
 ### 4.5 `retryEdge`
 
-`{ edgeId, fromNodeId, toNodeId, fromCycle, toCycle, maxIterations }`
+`{ edgeId, fromNodeId, toNodeId, fromCycle, toCycle, maxIterations, traversals, budgetConsumed }`
 
-The one backward edge kind. `toCycle` equals the envelope's `cycle` and equals `fromCycle + 1`;
+The one backward edge kind. `traversals` is the edge's budget-consuming traversal count *after* this
+one, and `budgetConsumed` is `false` exactly for the free traversal a `NO_PROGRESS` cycle produces
+(`state-machine.md` §6.6): a reader of the log can therefore tell a charged retry from a free one
+without re-deriving it. `toCycle` equals the envelope's `cycle` and equals `fromCycle + 1`;
 `step` checks both invariants (JSON Schema cannot). Exhausting `maxIterations` never produces a
 `retry-edge-taken`: the check happens *before* dispatching the target, and exhaustion ends the Run with
 `MAX_ITERATIONS_EXCEEDED`, which is a terminal outcome and not a failure.
@@ -272,7 +281,9 @@ wait: only `quota` **with** `quotaResetsAt` can park a Run.
 what is being approved — normally the digest of the artifact recorded in the `human-requested` event.
 A new Attempt produces a new subject digest and therefore **invalidates every earlier approval**;
 approvals are never carried across attempts. `decidedBy` is the authenticated decider as the boundary
-saw it. `decision ∈ approved | rejected | expired`.
+saw it. `decision ∈ approve | reject | cancel` — the three the state machine routes on
+(`state-machine.md` §8.5, D-02/D-03). There is no `expired` decision: a gate that ran out of time is a
+`node-timed-out` with `error.code: human_timeout`, produced by the sweep, not a decision by a human.
 
 ### 4.9 `outcome`
 
@@ -286,17 +297,41 @@ an envelope that asserted them could disagree with the log it is part of.
 
 ### 4.10 `reason` and `quotaResetsAt`
 
-`reason` is a snake_case token explaining a control-plane bookkeeping event. Recommended values:
+`reason` is a snake_case token explaining a control-plane bookkeeping event. The vocabularies are the
+closed enums of `docs/spec/state-machine.md` — this document does not invent a second set:
 
-| Event | `reason` |
-|---|---|
-| `ignored-stale` | `stale_attempt`, `not_current_node`, `terminal_run`, `unknown_event_type`, `producer_not_expected`, `unknown_run` |
-| `resumed` | `quota_window_reset`, `human_resume`, `sweep_recovery`, `lease_recovered` |
-| `lease-expired` | `no_completion_by_deadline`, `job_vanished`, `observed_deadline` |
+| Event | `reason` | Enum |
+|---|---|---|
+| `ignored-stale` | `stale_attempt`, `semantic_duplicate`, `unknown_node`, `run_terminal`, `future_cycle`, `producer_not_expected`, `unknown_event_type`, … | `StaleReason`, state-machine §5.3 |
+| `resumed` | `due`, `manual`, `interrupted` — the same value as `resume.kind`, restated for readers | state-machine §3.1 |
+| `lease-expired` | `attempt_deadline`, `control_plane_lease`, `observe_deadline` | state-machine §3.1 |
+| `quota-parked` | free token naming the quota source, e.g. `runtime_reported_quota_exhausted` | — |
 
 `quotaResetsAt` is when the vendor window is expected to reopen. It is required on `quota-parked`. On a
 `node-failed` classified `quota` it is optional, and its absence is decisive: without it the failure is
 a plain failure, never a wait.
+
+### 4.11 `matcher`
+
+`{ kind, ref, outcome }` with `kind ∈ comment-block | file-in-diff | cloud-status` and
+`outcome ∈ found_valid | found_invalid`.
+
+Only on `node-observed`, and required there. It is what the artifact matcher of an `observed` backend
+actually did: which surface it read (`ref` is the comment id, the file path in the diff, or the cloud
+task id) and whether what it found parsed and validated. `found_valid` carries `result`;
+`found_invalid` carries `error` instead and is what drives the retry-or-fail branch in
+`state-machine.md` §9.2. Without this field a reader could not tell "the vendor answered something
+unusable" from "the vendor answered".
+
+### 4.12 `resume`
+
+`{ kind, decision?, actor? }` with `kind ∈ due | manual | interrupted` and
+`decision ∈ retry | skip | fail`.
+
+Only on `resumed`, and required there. `kind` says why the Run is being un-parked — a due quota
+window, an operator's explicit command, or the recovery of an `INTERRUPTED` Run — and `decision` is
+only meaningful for `kind: interrupted`, where a human has to choose between re-dispatching the node,
+skipping it, and abandoning the Run (`state-machine.md` §10.3). Budgets never reset on a resume.
 
 ---
 
@@ -311,33 +346,34 @@ Node-level types (require `cycle`, `nodeId`, `attempt`) are marked •.
 
 | # | eventType | Producer | Also required | Meaning |
 |---|---|---|---|---|
-| 1 | `run-requested` | `trigger`, `human`, `control-plane` (reconcile) | `trigger` | Someone asked for a Run. Creates the Run; `runId` is allocated here. |
+| 1 | `run-requested` | `trigger`, `control-plane` (reconcile) | `trigger` | Someone asked for a Run. Creates the Run; `runId` is allocated here. A human's request reaches the machine through ingest, which stamps `producer: trigger` (8.1). |
 | 2 | `run-started` | `control-plane` | — | The Run exists, the loop file is validated and `loopVersion` is pinned. |
 | 3 | `node-dispatched` • | `control-plane` | `dispatch` | An Attempt was handed to a backend. Written **before** the dispatch call. |
 | 4 | `node-started` • | `backend:<id>` | — | The backend began executing (only backends that stream emit this). |
 | 5 | `node-completed` • | `backend:<id>` | `result` | The Attempt finished. Agent nodes MUST also carry `usage`. |
 | 6 | `node-failed` • | `backend:<id>`, `control-plane` | `error` | The Attempt failed. `error.classified` decides what happens next. |
 | 7 | `node-timed-out` • | `backend:<id>`, `control-plane` | — | The node's own timeout or an observed deadline elapsed. |
-| 8 | `node-observed` • | `backend:observed` | `artifactRefs` (>= 1), `result` | An artifact matcher found the result of a vendor-side execution. |
-| 9 | `human-requested` • | `control-plane` | `human{mode, subjectDigest}` | A human gate opened. |
-| 10 | `human-decided` • | `human` | `human{decision, subjectDigest}` | A human approved, rejected or let the gate expire. |
-| 11 | `quota-parked` • | `control-plane` | `quotaResetsAt` | The Run entered `WAITING_FOR_QUOTA`. Derived from a `node-failed` classified `quota`; backends never emit it directly. |
-| 12 | `retry-edge-taken` | `control-plane` | `cycle`, `retryEdge` | A Retry Edge was traversed and the cycle index advanced. |
+| 8 | `node-observed` • | `backend:observed` | `matcher`, `artifactRefs` (>= 1); `result` when `matcher.outcome: found_valid` | An artifact matcher looked at the surface an `observed` backend writes to, and found something valid or something unusable. |
+| 9 | `human-requested` • | `control-plane` | `human{mode, subjectDigest}` | A human gate opened. A gate is control-plane-local, so its `attempt` is `0` (3.2). |
+| 10 | `human-decided` • | `human` | `human{decision, subjectDigest}` | A human approved, rejected or cancelled. Same coordinates as the `human-requested` it answers, `attempt: 0`. |
+| 11 | `quota-parked` • | `control-plane` | `quotaResetsAt`, `reason` | The Run entered `WAITING_FOR_QUOTA`. Derived from a `node-failed` classified `quota`; backends never emit it directly. |
+| 12 | `retry-edge-taken` | `control-plane` | `cycle`, `retryEdge` | A Retry Edge was traversed and the cycle index advanced. `retryEdge.budgetConsumed: false` marks the free traversal of a `NO_PROGRESS` cycle. |
 | 13 | `run-finished` | `control-plane` | `outcome` | The Run reached a terminal state. Exactly one per Run. |
-| 14 | `ignored-stale` • | `control-plane` | `reason`, `causationId` | A delivered event was rejected without being applied. Kept for audit. |
+| 14 | `ignored-stale` | `control-plane` | `reason`, `causationId` | A delivered event was rejected without being applied. Kept for audit. It repeats the declined envelope's node coordinates when it had them, and carries none when it did not (a second `run-requested`, a premature `resumed`). |
 | 15 | `dispatch-failed` • | `control-plane` | `dispatch`, `error` | The backend call itself failed (`step` exits 4). |
-| 16 | `resumed` | `control-plane`, `human` | `reason` | A parked or interrupted Run resumed. Budgets do not reset. |
+| 16 | `resumed` | `control-plane`, `human` | `resume`, `reason` | A parked or interrupted Run resumed. Budgets do not reset. |
 | 17 | `lease-expired` • | `control-plane` | `reason` | The sweep declared an in-flight Attempt LOST; a new Attempt may follow up to `maxAttempts`. |
 
 One valid example per type lives in [`envelope-examples/`](./envelope-examples/), named after the type.
-They are drawn from one illustrative Run of the reference loop (`article-review`) but do not form a
-complete trace.
+They are drawn from one illustrative Run of a Loop called `article-review` — an example made for this
+document, not the reference loop of `examples/daily-content-improvement.loop.yaml` — and they do not
+form a complete trace.
 
 Notes that are easy to get wrong:
 
 - `node-completed` means *the attempt ran to completion*, including a run whose verdict is "fail".
   A failing review is a successful node execution with `structured.verdict = "fail"`.
-- `NO_PROGRESS` is a `result.status`, not an event type: the agent ran and changed nothing. It does not
+- `no_progress` is a `result.status`, not an event type: the agent ran and changed nothing. It does not
   consume the iteration budget.
 - `ignored-stale` is the only event that describes another event. Its `causationId` names the rejected
   `eventId`, which is what makes "we saw it and refused it" auditable rather than invisible.
@@ -361,8 +397,8 @@ that a redelivered GitHub event maps to the same `eventId`.
 
 `(runId, cycle, nodeId, attempt, eventType)` is the semantic idempotency key. Two `node-completed`
 events for the same Attempt with different `eventId`s are the same fact told twice (a re-run job, a
-retried HTTP call); the second is recorded as `ignored-stale` with `reason: stale_attempt` and applied
-to nothing.
+retried HTTP call); the second is recorded as `ignored-stale` with `reason: semantic_duplicate` and
+applied to nothing.
 
 The stronger rule the control plane applies to every node-level event: the coordinates must match the
 **expected in-flight Attempt** recorded by the last `node-dispatched`, and `producer` must equal that
@@ -538,12 +574,12 @@ Rules are evaluated top to bottom; the first match wins.
 
 | GitHub event (activity types) | Precondition | Envelope | `producer` |
 |---|---|---|---|
-| `issues` (`labeled`) | the label is the approval label of an in-flight `human` node with `mode: label`, and the labeller has write access | `human-decided` with `human.decision: approved`, `subjectDigest` copied from the open `human-requested` | `human` |
-| `issues` (`unlabeled`) | the removed label is that approval label | `human-decided` with `decision: rejected` | `human` |
+| `issues` (`unlabeled`) | the removed label is `loopmill:hold` on an in-flight `human` node with `mode: label`, and the actor has write access | `human-decided` with `human.decision: approve`, `subjectDigest` copied from the open `human-requested` | `human` |
+| `issues` (`labeled`) | the added label is `loopmill:reject` on that same node | `human-decided` with `human.decision: reject` | `human` |
 | `issues` (`opened`, `labeled`) | the Loop's `trigger.event.types` includes `issues` and the label filter matches; author association is `OWNER`/`MEMBER`/`COLLABORATOR` | `run-requested`, `trigger.kind: event`, `source: github:issues`, `dedupeKey: issue:<number>` | `trigger` |
 | `issue_comment` (`created`) | the body contains a fenced `loopmill` block (7.3), the author is not a control-plane identity, and the body carries no control-plane marker | the parsed envelope, re-stamped (8.2) | `human`, or `backend:observed` for an allow-listed vendor bot |
-| `pull_request_review` (`submitted`) | the PR is the subject of an in-flight `human` node with `mode: pull-request-review` and the review's head sha matches the recorded `subjectDigest` | `human-decided`: `approved` -> approved, `changes_requested` -> rejected, `commented` -> no envelope | `human` |
-| `pull_request` (`opened`, `synchronize`) | an in-flight node is `OBSERVING` with a file matcher, and the PR head contains the declared JSON path | `node-observed` with `artifactRefs` of `kind: pr` and `kind: file` (with digests) | `backend:observed` |
+| `pull_request_review` (`submitted`) | the PR is the subject of an in-flight `human` node with `mode: pull-request-review` and the review's head sha matches the recorded `subjectDigest` | `human-decided`: `approved` -> `approve`, `changes_requested` -> `reject`, `commented` -> no envelope | `human` |
+| `pull_request` (`opened`, `synchronize`) | an in-flight node is `OBSERVING` with a file matcher, and the PR head contains the declared JSON path | `node-observed` with `matcher{kind: file-in-diff, ref: <path>, outcome}` and `artifactRefs` of `kind: pr` and `kind: file` (with digests) | `backend:observed` |
 | `pull_request` (`closed`) | the PR is the working branch's PR of an in-flight Run | no envelope; the node's own completion still governs. A merged PR may produce a `run-requested` for a follow-up Loop when one declares that trigger | `trigger` |
 | `workflow_run` (`completed`) | `workflow_run.name` matches `loopmill:<runId>:<cycle>:<nodeId>:<attempt>` **and** that Attempt is still in flight | `conclusion: timed_out` -> `node-timed-out`; `cancelled` -> `node-failed` (`classified: cancelled`); `failure` -> `node-failed` (`classified: backend_error`); `success` -> **no envelope** | `backend:github-actions` |
 
@@ -559,7 +595,7 @@ be uploading, and inventing a completion would race the real one. That case belo
 ### 8.2 Re-stamping: what ingest keeps and what it overwrites
 
 A comment-borne envelope is user input. Ingest keeps `eventType`, `runId`, `cycle`, `nodeId`,
-`attempt`, `result`, `artifactRefs` and `usage`; it **overwrites**:
+`attempt`, `matcher`, `result`, `artifactRefs` and `usage`; it **overwrites**:
 
 - `producer` — set from the authenticated author, never copied from the payload;
 - `eventId` — replaced by the derivation of 8.3, so a redelivery is a duplicate rather than a new event;
@@ -659,10 +695,10 @@ loop file (`artifact:`), and its outcome is what becomes an envelope:
 
 | Matcher outcome | Envelope | Details |
 |---|---|---|
-| Artifact found, parses, conforms to the node's `structuredOutput` schema | `node-observed` | `artifactRefs` names what was matched (`comment`/`pr`/`file`) **with `digest`**; `result.structured` carries the parsed object; `usage.provenance: unavailable` with all buckets null |
-| Artifact found but invalid (bad JSON, schema mismatch, wrong run) | `node-failed` | `error.code: artifact_invalid`, `error.classified: artifact_invalid`; the artifact is still referenced so a human can see what arrived |
+| Artifact found, parses, conforms to the node's declared shape | `node-observed`, `matcher.outcome: found_valid` | `artifactRefs` names what was matched (`comment`/`pr`/`file`) **with `digest`**; `result.structured` carries the parsed object; `usage.provenance: unavailable` with all buckets null |
+| Artifact found but invalid (bad JSON, schema mismatch, wrong run) | `node-observed`, `matcher.outcome: found_invalid` | `error.code: artifact_invalid`, `error.classified: artifact_invalid`; the artifact is still referenced so a human can see what arrived. The node retries or fails per `state-machine.md` §9.2 (N-23/N-24) |
 | Nothing found by the deadline | `node-timed-out` | `error.classified: timeout`; the attempt may be retried as a new vendor task (observed backends are `retryable: true`) |
-| Vendor status says the task errored (where a status API exists) | `node-failed` | `error.classified: backend_error` |
+| Vendor status says the task errored (`matcher.kind: cloud-status`) | `node-observed`, `matcher.outcome: found_invalid` | `error.classified: backend_error`; an early failure signal that does not wait for the deadline |
 
 Two matcher kinds exist in the MVP: a fenced `loopmill` block in a comment (7.3), and a JSON file at a
 declared path in the PR or diff. Both are content-addressed: the digest recorded in `artifactRefs` is
@@ -705,7 +741,7 @@ coordinates from a public comment.
 | Attempted forgery | Why it fails |
 |---|---|
 | Post a `node-completed` claiming success for the in-flight Attempt | Ingest sets `producer` from the authenticated author (`human`), so it can never equal the `expectedProducer` recorded at dispatch (`backend:github-actions`). The control plane records `ignored-stale` (`producer_not_expected`) and applies nothing. |
-| Post an envelope for an Attempt that is not in flight (an old cycle, a finished node, a finished Run) | Coordinates must equal the expected in-flight Attempt; otherwise `ignored-stale` (`stale_attempt` / `not_current_node` / `terminal_run`). |
+| Post an envelope for an Attempt that is not in flight (an old cycle, a finished node, a finished Run) | Coordinates must equal the expected in-flight Attempt; otherwise `ignored-stale` (`stale_attempt` / `unknown_node` / `run_terminal`). |
 | Impersonate the observed backend by posting a matcher-shaped comment | Comment-borne `node-observed` is accepted only while that node is `OBSERVING`, only from the author allow-list declared for the node, and only with a digest that ingest computes from the fetched comment. |
 | Forge a `human-decided` approval | Ingest never mints `human-decided` from a comment: it mints it only from a `pull_request_review`, an environment approval, or a label change performed by an identity GitHub authenticated and that has write access. The `subjectDigest` must equal the one recorded in `human-requested`; a new Attempt changes that digest and voids old approvals. |
 | Start an expensive Run with `run-requested` | Ingest only mints `run-requested` when the Loop declares that trigger and the actor's association is `OWNER`/`MEMBER`/`COLLABORATOR`. Budgets (`maxRunsPerWindow`, `minInterval`, `maxMeasuredTokens`) are checked before any dispatch. |
@@ -732,7 +768,7 @@ content) and never sanitises it: silently editing an agent's input is unreproduc
 | Control plane (`loopmill step`) | `contents: read`, `actions: write`, plus the state-branch credential from the `loopmill-control` environment | no vendor credential | every `control-plane` event |
 | Agent job (`loopmill run-node`) | `contents: write`; `pull-requests`/`issues: write` only for `effects: external` nodes | the vendor credential from `loopmill-agent` | `node-started`, `node-completed`, `node-failed`, `node-timed-out` for its own Attempt |
 | Ingest workflow | `contents: read` + dispatch | nothing | `run-requested`, `human-decided`, `node-observed`, `node-*` derived from `workflow_run` |
-| Human | GitHub identity | — | `human-decided`, `run-requested` (through ingest) |
+| Human | GitHub identity | — | `human-decided`, `resumed`; a human-requested Run reaches the machine as a `run-requested` that ingest stamps `producer: trigger` |
 
 ### 11.6 The reserved `signature` field
 

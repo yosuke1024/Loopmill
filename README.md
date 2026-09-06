@@ -16,7 +16,7 @@ Status: design phase (v0.5). No runtime code yet apart from spike prototypes und
 | `docs/design/CHANGELOG-v0.5.md` | What changed from v0.4 and which review findings each change resolves |
 | `docs/adr/ADR-001-event-driven-control-plane.md` | The architecture decision: control plane vs execution backends, GitHub as event bus, state on a git branch, security boundary |
 | `docs/spec/loop-file.md`, `docs/spec/loop-file.schema.json` | Loop definition format and JSON Schema |
-| `docs/spec/state-machine.md` | Run, Node Execution and Attempt state machines, events, invariants |
+| `docs/spec/state-machine.md`, `docs/spec/state-machine.json` | Run, Node Execution and Attempt state machines, events, invariants |
 | `docs/spec/envelope.md`, `docs/spec/envelope.schema.json` | The machine-readable event envelope exchanged over GitHub |
 | `docs/spec/usage-normalization.md` | Token usage buckets, provenance, usage coverage, budget |
 | `docs/spikes/README.md` | Spike plan, harnesses and measured results (SPIKE-1, SPIKE-2, SPIKE-3) |

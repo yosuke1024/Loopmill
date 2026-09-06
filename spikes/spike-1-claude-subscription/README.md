@@ -13,9 +13,9 @@ Concretely, it answers:
 - Does `claude auth status` report a subscription (OAuth) login, with no
   `ANTHROPIC_API_KEY` anywhere in the job?
 - Does `-p --output-format json` give machine-readable results, usage, and
-  cost that Loopmill can log per Agent Node Execution?
-- Does `--json-schema` give a validated structured output Loopmill's
-  Condition Node can consume?
+  cost that Loopmill can log per agent Node Execution?
+- Does `--json-schema` give a validated structured output a Loopmill `condition`
+  node can consume?
 - What exactly does the exit-code / result-subtype contract look like when a
   run is cut short (`--max-turns`) or given a bad argument?
 - Does cancelling a run with `SIGINT` preserve token usage, and does
@@ -92,14 +92,14 @@ cat ./spike-1-out/RESULTS.md
 | Check | What it runs | Design question it answers |
 |---|---|---|
 | **C1** | `claude auth status --json` | **Subscription-only auth in CI.** Zero-token, non-interactive proof that the runner is logged in via OAuth (`authMethod`), not an API key, with no interactive `/login` step required. |
-| **C2** | `claude -p "..." --output-format json --max-turns 1 --permission-mode plan --permission-prompts none` piped from `/dev/null` | **Usage/cost JSON.** Confirms the plain non-interactive path works with no TTY at all, and that the result object carries `usage` (input/output/cache tokens), `modelUsage`, `total_cost_usd`, `duration_ms`, `num_turns`, `session_id` — everything Loopmill's Token Observability needs per Agent Node Execution. |
-| **C3** | Same, plus `--json-schema` | **Structured output.** Confirms `structured_output` is present, schema-conformant, and usable as-is by a Condition Node — without Loopmill having to parse free text. |
+| **C2** | `claude -p "..." --output-format json --max-turns 1 --permission-mode plan --permission-prompts none` piped from `/dev/null` | **Usage/cost JSON.** Confirms the plain non-interactive path works with no TTY at all, and that the result object carries `usage` (input/output/cache tokens), `modelUsage`, `total_cost_usd`, `duration_ms`, `num_turns`, `session_id` — everything Loopmill's usage record needs per agent Node Execution (`docs/spec/usage-normalization.md` §2.1). |
+| **C3** | Same, plus `--json-schema` | **Structured output.** Confirms `structured_output` is present, schema-conformant, and usable as-is by a `condition` node — without Loopmill having to parse free text. |
 | **C4** | Same prompt, `--output-format stream-json --verbose` | Confirms the streaming event shape (`system/init`, `assistant`, `result`, …) that Loopmill's `execute(): AsyncIterable<AgentEvent>` would consume, and that the stream still ends in the same `result` object as C2. |
 | **C5a** | A tool-using prompt under `--max-turns 1`, `--permission-mode acceptEdits --permission-prompts none`, in a scratch directory | **Exit-code contract, part 1.** Whether a turn cap on a task that needs tools ends as `success` (finished within the cap) or `error_max_turns` (cut off) — and what the process exit code is either way. |
 | **C5b** | A deliberately invalid `--model` | **Exit-code contract, part 2.** Confirms invalid arguments fail loudly (non-zero exit, readable stderr) rather than silently falling back to something else — important for a runtime that has to tell FAILED apart from SUCCEEDED. |
 | **C6** (`sigint`/`sigterm`/`timeoutint`) | A long-running prompt, killed after 8s with `SIGINT`, then `SIGTERM`, then via `timeout -s INT 8` | **Cancel signal that preserves usage.** The CLI's own docs claim `SIGINT` ends the turn cleanly with a recorded result (and usage), while `SIGTERM` yields exit 143 with *no* result at all. Loopmill's `cancel(runId)` must know which signal to send if a cancelled node is still supposed to report token usage. |
 | **C7** | C2's exact command, run detached (`setsid`) with stdin from `/dev/null`, under a 120s watchdog | **No-TTY hang behaviour.** Directly probes the failure mode reported in [anthropics/claude-code#9026](https://github.com/anthropics/claude-code/issues/9026): a `claude -p` invocation with no controlling terminal hanging instead of exiting. Exit code 124 means the watchdog had to kill it. |
-| **C8** (`bad`/`good`, only if `scrub_test`) | C2's command with an invalid `ANTHROPIC_API_KEY` exported alongside the OAuth token, then again without it | **Env precedence.** The docs state `ANTHROPIC_API_KEY` always wins over the OAuth token in `-p` mode with no fallback. This proves it empirically: the "bad" run is *expected* to fail (an invalid key was used instead of the valid subscription login), and the "good" run confirms the OAuth-only path still works right after. This is the exact mechanism Loopmill's "Subscription Only Mode" depends on when it scrubs `ANTHROPIC_API_KEY` from a child process's environment. |
+| **C8** (`bad`/`good`, only if `scrub_test`) | C2's command with an invalid `ANTHROPIC_API_KEY` exported alongside the OAuth token, then again without it | **Env precedence.** The docs state `ANTHROPIC_API_KEY` always wins over the OAuth token in `-p` mode with no fallback. This proves it empirically: the "bad" run is *expected* to fail (an invalid key was used instead of the valid subscription login), and the "good" run confirms the OAuth-only path still works right after. This is the exact mechanism Loopmill's environment policy depends on when it scrubs `ANTHROPIC_API_KEY` from a child process's environment (`docs/design/mvp-design.md` §13.2, deny list). |
 | **C9** | A trivial prompt, output grepped for `"hit your"` / `"limit"` | **Quota detectability.** There is no dedicated result subtype for a plan-limit hit — it is a generic failure with the limit message embedded in `result`/stderr. This check is informational: it only fires if you happen to be at your limit when you run the spike, but it records the raw text verbatim so a real hit can be matched against Loopmill's `WAITING_FOR_QUOTA` string patterns later. |
 | **C10** | `node --version`, `claude --version`, `uname -a`, TTY check, `CLAUDE_CONFIG_DIR`/`HOME`/`PATH` | Baseline environment record so results are reproducible and comparable across runs/runners. |
 

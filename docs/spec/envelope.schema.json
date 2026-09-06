@@ -59,8 +59,8 @@
     },
     "attempt": {
       "type": "integer",
-      "minimum": 1,
-      "description": "Attempt number of this Node Execution. Attempts above 1 exist only for infrastructure-level retry, never for loop retries."
+      "minimum": 0,
+      "description": "Attempt number of this Node Execution. Dispatched attempts start at 1, and a number above 1 exists only for infrastructure-level retry, never for loop retries. 0 is reserved for a control-plane-local node execution (condition, end, human gate, synthetic record) that is never dispatched to a backend and owns no Attempt."
     },
     "causationId": {
       "$ref": "#/$defs/ulid",
@@ -113,6 +113,14 @@
     "retryEdge": {
       "$ref": "#/$defs/retryEdge",
       "description": "The backward edge traversed. Only on retry-edge-taken."
+    },
+    "matcher": {
+      "$ref": "#/$defs/matcher",
+      "description": "What an observed backend's artifact matcher read, and whether it was usable. Only on node-observed."
+    },
+    "resume": {
+      "$ref": "#/$defs/resume",
+      "description": "Why a parked or interrupted Run is being un-parked, and the operator's decision when one was needed. Only on resumed."
     },
     "human": {
       "$ref": "#/$defs/humanGate",
@@ -196,9 +204,27 @@
         "properties": { "eventType": { "const": "node-observed" } }
       },
       "then": {
-        "required": ["artifactRefs", "result"],
+        "required": ["matcher", "artifactRefs"],
         "properties": { "artifactRefs": { "type": "array", "minItems": 1 } }
       }
+    },
+    {
+      "$comment": "A matcher that found something usable must carry what it found.",
+      "if": {
+        "required": ["eventType", "matcher"],
+        "properties": {
+          "eventType": { "const": "node-observed" },
+          "matcher": { "type": "object", "required": ["outcome"], "properties": { "outcome": { "const": "found_valid" } } }
+        }
+      },
+      "then": { "required": ["result"] }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "resumed" } }
+      },
+      "then": { "required": ["resume"] }
     },
     {
       "if": {
@@ -274,6 +300,20 @@
     {
       "if": {
         "required": ["eventType"],
+        "properties": { "eventType": { "not": { "const": "node-observed" } } }
+      },
+      "then": { "properties": { "matcher": false } }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "not": { "const": "resumed" } } }
+      },
+      "then": { "properties": { "resume": false } }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
         "properties": {
           "eventType": { "not": { "enum": ["node-dispatched", "dispatch-failed"] } }
         }
@@ -317,7 +357,7 @@
         "properties": {
           "eventType": {
             "not": {
-              "enum": ["node-failed", "node-timed-out", "dispatch-failed", "lease-expired"]
+              "enum": ["node-failed", "node-timed-out", "node-observed", "dispatch-failed", "lease-expired"]
             }
           }
         }
@@ -371,7 +411,7 @@
     "runtimeId": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
-      "description": "Agent runtime id. MVP: claude-code, codex, fake."
+      "description": "Agent runtime id. MVP: claude-code, codex. (`fake` is a backend, not a runtime: a fake-backend attempt still records the runtime whose fixture it replayed.)"
     },
     "producer": {
       "type": "string",
@@ -409,7 +449,6 @@
         "human-requested",
         "human-decided",
         "quota-parked",
-        "ignored-stale",
         "dispatch-failed",
         "lease-expired"
       ]
@@ -705,14 +744,65 @@
     "retryEdge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["edgeId", "fromNodeId", "toNodeId", "fromCycle", "toCycle", "maxIterations"],
+      "required": ["edgeId", "fromNodeId", "toNodeId", "fromCycle", "toCycle", "maxIterations", "traversals", "budgetConsumed"],
       "properties": {
         "edgeId": { "$ref": "#/$defs/nodeId" },
         "fromNodeId": { "$ref": "#/$defs/nodeId" },
         "toNodeId": { "$ref": "#/$defs/nodeId" },
         "fromCycle": { "type": "integer", "minimum": 0 },
         "toCycle": { "type": "integer", "minimum": 1 },
-        "maxIterations": { "type": "integer", "minimum": 1 }
+        "maxIterations": { "type": "integer", "minimum": 1 },
+        "traversals": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Budget-consuming traversals of this edge after this one. Never greater than maxIterations."
+        },
+        "budgetConsumed": {
+          "type": "boolean",
+          "description": "False only for the free traversal a NO_PROGRESS cycle produces; true for every ordinary retry."
+        }
+      }
+    },
+    "matcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref", "outcome"],
+      "properties": {
+        "kind": {
+          "enum": ["comment-block", "file-in-diff", "cloud-status"],
+          "description": "Which surface the observed backend's result was read from."
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "$ref": "#/$defs/secretFree",
+          "description": "The comment id, the repository-relative file path, or the vendor task id the matcher looked at."
+        },
+        "outcome": {
+          "enum": ["found_valid", "found_invalid"],
+          "description": "found_valid carries result; found_invalid carries error and drives the retry-or-fail branch."
+        }
+      }
+    },
+    "resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": ["due", "manual", "interrupted"],
+          "description": "Why the Run is being un-parked: a due quota window, an operator command, or recovery of an INTERRUPTED Run."
+        },
+        "decision": {
+          "enum": ["retry", "skip", "fail"],
+          "description": "Only meaningful for kind: interrupted — re-dispatch the node, skip it, or abandon the Run."
+        },
+        "actor": {
+          "type": "string",
+          "maxLength": 128,
+          "$ref": "#/$defs/secretFree"
+        }
       }
     },
     "humanGate": {
@@ -724,7 +814,7 @@
           "$ref": "#/$defs/sha256",
           "description": "Digest of exactly what is being approved. A new attempt produces a new digest and invalidates every earlier approval."
         },
-        "decision": { "enum": ["approved", "rejected", "expired"] },
+        "decision": { "enum": ["approve", "reject", "cancel"] },
         "decidedBy": {
           "type": "string",
           "maxLength": 128,

@@ -226,7 +226,7 @@
     "budget": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Bounds checked BEFORE each dispatch. A breach terminates the Run as BUDGET_EXCEEDED; a token budget never kills an attempt mid-flight.",
+      "description": "Bounds checked BEFORE each dispatch. A breach terminates the Run as BUDGET_EXCEEDED, except where the state machine names a more specific outcome: MAX_ITERATIONS_EXCEEDED for a Retry Edge, EXPIRED for maxRuntime, and SKIPPED for the two Loop-level rate limits, which are checked once at run-requested. A token budget never kills an attempt mid-flight.",
       "properties": {
         "maxAttempts": {
           "type": "integer",
@@ -254,13 +254,13 @@
         "maxUnmeasuredExecutions": {
           "type": "integer",
           "minimum": 0,
-          "description": "Per Run. Number of agent Node Executions whose usage provenance is `unavailable` that the Run may perform. This is the binding guard whenever usage coverage is below 100%."
+          "description": "Per Run. Number of agent Node Executions that are NOT measured (usage provenance `unavailable` or `estimated`) that the Run may perform. Default: max(1, observedAgentNodes * (1 + maxEdgeIterations)) - loop-file.md 7.2. This is the binding guard whenever usage coverage is below 100%."
         },
         "maxRunsPerWindow": {
           "type": "object",
           "additionalProperties": false,
           "required": ["count", "window"],
-          "description": "Per Loop. Default {count: 1, window: PT5H}, aligned with vendor rolling usage windows.",
+          "description": "Per Loop. Default {count: 1, window: PT5H}, aligned with vendor rolling usage windows. A Run over the limit is refused as SKIPPED(runs_per_window), never started.",
           "properties": {
             "count": { "type": "integer", "minimum": 1 },
             "window": { "$ref": "#/$defs/duration" }
@@ -269,7 +269,7 @@
         "minInterval": {
           "$ref": "#/$defs/duration",
           "default": "PT1H",
-          "description": "Per Loop. Minimum wall-clock distance between the start of two Runs."
+          "description": "Per Loop. Minimum wall-clock distance between the start of two Runs. A Run requested sooner is refused as SKIPPED(min_interval), never started."
         }
       }
     },
@@ -517,7 +517,7 @@
         "id": { "$ref": "#/$defs/identifier" },
         "mode": {
           "enum": ["environment-reviewers", "pull-request-review", "label"],
-          "description": "environment-reviewers: a GitHub Environment with required reviewers gates the job before it starts. pull-request-review: an approving PR review. label: the `loopmill:hold` label is removed."
+          "description": "environment-reviewers: a GitHub Environment with required reviewers gates the job before it starts. pull-request-review: an approving PR review. label: removing the `loopmill:hold` label approves, adding `loopmill:reject` rejects."
         },
         "subject": {
           "type": "string",

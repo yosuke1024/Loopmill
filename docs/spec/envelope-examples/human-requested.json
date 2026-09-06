@@ -11,7 +11,7 @@
   "causationId": "06G7BWHT4089ZN8MD96260DEPE",
   "cycle": 2,
   "nodeId": "approve-merge",
-  "attempt": 1,
+  "attempt": 0,
   "human": {
     "mode": "pull-request-review",
     "subjectDigest": "sha256:db7e0fe57b8575bcb7cd232c5c3a6dd8ed3f0a4d79e4bbcdcd04fd533e2ba648",

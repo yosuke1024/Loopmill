@@ -52,7 +52,7 @@ Location: `spikes/spike-1-claude-subscription/` (`README.md`, `run.sh`); workflo
 ### What it proves
 
 Whether the official Claude Code CLI, authenticated with nothing but a subscription
-OAuth token minted by `claude setup-token`, can act as Loopmill's Agent Node
+OAuth token minted by `claude setup-token`, can act as Loopmill's agent node
 executor on a throwaway, non-interactive, no-TTY GitHub Actions runner — with
 machine-readable usage, cost, and structured output, and a legible exit-code
 contract. This is the harness for the `github-actions` execution backend's
@@ -97,7 +97,7 @@ run and still produces a `RESULTS.md`.
 |---|---|---|
 | C1 | `claude auth status --json` | Subscription-only auth in CI, no API key anywhere — the precondition for `authMode: subscription-oauth` (§2, §11). |
 | C2 | `claude -p ... --output-format json`, no TTY | The `usage`/cost/turn/session fields Loopmill's Usage record needs per Attempt (§10, claude-code mapping). |
-| C3 | Same, plus `--json-schema` | Whether structured output is schema-conformant and usable directly by a Condition Node, per the loop file's `structuredOutput` validation rule (§3). |
+| C3 | Same, plus `--json-schema` | Whether structured output is schema-conformant and usable directly by a `condition` node, per the loop file's `structuredOutput` validation rule (§3). |
 | C4 | Same, `--output-format stream-json --verbose` | The streaming event shape a backend's `result: streamed` capability (§4) would expose, and that it still ends in the same result object as C2. |
 | C5a | Tool-using prompt, `--max-turns 1` | Exit-code contract part 1: whether a turn cap ends as success or a distinguishable cutoff — feeds Node Execution / Attempt states (§5). |
 | C5b | Deliberately invalid `--model` | Exit-code contract part 2: invalid arguments must fail loudly, never silently substitute — same state-machine boundary. |
@@ -168,7 +168,7 @@ decidable with a live ChatGPT subscription.
 
 | # | Item | Status | Implication |
 |---|---|---|---|
-| 1a | Cloud tasks run under ChatGPT-plan auth only; API key env vars are structurally rejected | VERIFIED | Enforced by OpenAI itself — matches Loopmill's Subscription Only Mode with no extra work. |
+| 1a | Cloud tasks run under ChatGPT-plan auth only; API key env vars are structurally rejected | VERIFIED | Enforced by OpenAI itself — matches Loopmill's `subscription-login` auth mode and its environment deny list with no extra work. |
 | 1b | Base URL locked to `chatgpt.com`/`chat.openai.com`/`chatgpt-staging.com` | VERIFIED | No self-hosting; "observed" always means OpenAI's own cloud. |
 | 1c | Cloud tasks share the same 5h/weekly plan windows as local Codex and ChatGPT Work | LIKELY | A cloud loop and a local loop compete for one budget — concurrency defaults matter more, not less. |
 | 1d | Codex Cloud is Plus/Pro/Business/Enterprise only | LIKELY | Loopmill must detect plan type (`account/rateLimits/read` → `planType`) before offering the backend. |
@@ -196,7 +196,7 @@ decidable with a live ChatGPT subscription.
 | 7b | `codex cloud list --json` gives a machine-readable four-state enum (pending/ready/applied/error) | VERIFIED | This is the completion signal to poll. |
 | 7c | `codex cloud status` is text-only, no `--json`, and exits 1 for anything but `ready` | VERIFIED | A trap: pending, error, and already-applied all collapse to exit 1 — must poll `list --json` instead. |
 | 7d | No push notification, webhook, or completion callback | VERIFIED (absence) | Polling only; fine for a daemonless design, but costs a process spawn plus a round trip per poll. |
-| 8a | Token usage is not exposed anywhere in the `codex cloud` CLI | VERIFIED (absence) | A direct hit on Loopmill's Token Observability differentiator — cloud nodes would record `usage: unavailable`. |
+| 8a | Token usage is not exposed anywhere in the `codex cloud` CLI | VERIFIED (absence) | A direct hit on Loopmill's loop-observability differentiator — cloud nodes record `usage: unavailable` and lower the Run's usage coverage. |
 | 8b | The private backend does have usage endpoints | VERIFIED (endpoints exist) | Whether a task id works as a `thread_id` there is unverified; do not build on undocumented private routes. |
 | 8c | A usage panel exists in the ChatGPT UI | LIKELY / NEEDS-USER-RUN | Human-visible only, not machine-readable. |
 | 9a | `codex cloud` surfaces no quota signal at all | VERIFIED (absence) | `WAITING_FOR_QUOTA` cannot be detected per-task on this backend. |
@@ -337,6 +337,16 @@ with a retry edge, `maxIterations = 3`, `maxAttempts = 2` per node), and the "AI
 backend" is a deterministic simulation table, not a real agent. Nothing here is
 wired into Loopmill's real domain model yet.
 
+**Prototype-only semantics.** Two things in this harness are deliberately not the
+v0.5 contract, and neither should be read back into the design. Its **exit codes**
+are a wider set chosen for test legibility (0/10/11/12/20/21/22/30/40/50, listed in
+`spikes/spike-3-control-plane/README.md` §3); the normative table is the five codes
+of `docs/spec/state-machine.md` §12.1 (`0/1/2/3/4`) with `loopmill run`'s outcome
+codes in §12.2. And its **iteration counting** treats `maxIterations = 3` as three
+body executions (it stops at cycle 3), while v0.5 counts *traversals of the edge*,
+so a body with `maxIterations: 3` executes four times, in cycles 1..4
+(`docs/spec/loop-file.md` §12.2, `docs/spec/state-machine.md` §6.3).
+
 ### Properties proven locally
 
 `node --test test/*.test.mjs` — 20 tests, 20 pass, 0 fail, stable across three
@@ -347,16 +357,16 @@ consecutive runs (~9.5s each):
 3. A completion for a node not in flight is ignored (`NOT_CURRENT_NODE`).
 4. A stale event, once recorded, is idempotent on redelivery.
 5. Concurrent steps serialize: exactly one push wins per race, the loser re-reads and re-plans, both events end up applied in order.
-6. A lost CAS race never half-persists — exit 40 leaves the branch untouched.
+6. A lost CAS race never half-persists — prototype exit 40 (the v0.5 code is `3`) leaves the branch untouched.
 7. CAS actually compares: a foreign writer's commit between read and push survives; the step rebases onto it rather than overwriting it.
 8. An interrupted job killed after commit but before push leaves the remote untouched and reruns cleanly.
 9. Same for a kill after writing files but before committing.
-10. The retry edge is exercised and bounded: `always-fail` reaches `MAX_ITERATIONS_EXCEEDED` (exit 11) at cycle 3.
-11. Node-level attempts are bounded: `NODE_FAILED` (exit 12) after `maxAttempts`.
+10. The retry edge is exercised and bounded: `always-fail` reaches `MAX_ITERATIONS_EXCEEDED` (prototype exit 11) at cycle 3 — the prototype's own counting rule, not v0.5's (see the note above).
+11. Node-level attempts are bounded: `NODE_FAILED` (prototype exit 12) after `maxAttempts`.
 12. `snapshot.json == fold(events)` byte-for-byte, both via `rebuild-snapshot` and in process.
 13. Audit trail: one commit per applied event, `eventId` in every commit subject, in applied order.
 14. The state branch is an orphan carrying only `runs/...`, no source tree.
-15. Events after a terminal run, and invalid envelopes, are rejected without touching state (exit 22 / 30).
+15. Events after a terminal run, and invalid envelopes, are rejected without touching state (prototype exit 22 / 30).
 16. Two runs share one state branch without interfering.
 17. `usage-reported` applies in any order without advancing the loop.
 
@@ -406,8 +416,8 @@ Other sampled steps: 1,621 ms and 1,143 ms step bodies, push attempts 1, conflic
 0 in both.
 
 **Duplicate delivery (job `101454496055`).** Re-dispatching an already-applied
-event (`eventId evt_137c05eb3fc9e8c0449d2f55`) was classified DUPLICATE, exit code
-20, push attempts 0, no new commit, no next-step dispatch, snapshot unchanged.
+event (`eventId evt_137c05eb3fc9e8c0449d2f55`) was classified DUPLICATE, prototype exit code
+20 (the v0.5 code is `0`, disposition `duplicate`), push attempts 0, no new commit, no next-step dispatch, snapshot unchanged.
 
 **Concurrent chains.** Two runs, `gha-34021365549` and `gha-34021366751`, started
 2 s apart and interleaved commits on the same state branch (alternating between

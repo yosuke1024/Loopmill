@@ -1,7 +1,8 @@
 # ADR-001: Event-driven, non-resident control plane with pluggable execution backends
 
 - **Status:** Proposed, 2026-09-06
-- **Supersedes:** `docs/design/mvp-design.md` (MVP Design v0.4) for everything in the appendix mapping
+- **Supersedes:** the MVP Design v0.4 for everything in the appendix mapping; the v0.5 rewrite of it is
+  `docs/design/mvp-design.md`, and `docs/design/CHANGELOG-v0.5.md` records the rewrite section by section
 - **Binding input:** the v0.5 decision sheet (2026-09-06). Where this ADR and the sheet disagree, the sheet wins.
   Decisions this ADR had to make because the sheet is silent are labelled **Decision (not in sheet)** so the
   maintainer can reconcile them.
@@ -114,8 +115,10 @@ is not Loopmill infrastructure.
 - **GitHub, the two rules the design turns on.** `repository_dispatch` triggers workflows only on the
   repository's default branch. Events created with the automatic `GITHUB_TOKEN` do not start new workflow runs,
   **except** `workflow_dispatch` and `repository_dispatch`. (Both carried from GitHub Docs; docs.github.com was
-  unreachable from this environment, so both are re-verified by the SPIKE-3 GitHub run, not by a fetched page —
-  see `.github/workflows/spike-3-step.yml` header.)
+  unreachable from this environment, so both were re-verified by the SPIKE-3 GitHub run rather than by a
+  fetched page. As of 2026-09-06 that run confirms `GITHUB_TOKEN` `workflow_dispatch` chaining and the
+  default-branch registration requirement; `repository_dispatch` itself is still unmeasured —
+  `docs/spikes/README.md` §5, and the `.github/workflows/spike-3-step.yml` header.)
 
 ### 5. What is already settled, and what this ADR has to settle
 
@@ -226,8 +229,9 @@ runaway chains.
 **Portability.** `step` depends only on a `StateStore` interface (`git-branch`, `local-dir`) and a `Dispatcher`
 interface. GitHub Actions is the MVP executor, not the design.
 
-**Decision (not in sheet):** a dispatch records a **lease** = the node's `timeout` plus a 15-minute grace,
-carried on the `node-dispatched` event; a scheduled sweep workflow on the default branch emits `lease-expired`
+**Decision (not in sheet):** a dispatch records a **lease** = the node's `timeout` plus a dispatch grace
+(`policy.dispatchGraceSeconds`, default 120 s — `docs/spec/state-machine.md` §10.1, D-24), carried on the
+`node-dispatched` event; a scheduled sweep workflow on the default branch emits `lease-expired`
 envelopes for expired leases, which is what moves a Run to `INTERRUPTED` and re-dispatches up to `maxAttempts`.
 The sheet names the sweep and the lease but not the grace period or the sweep's trigger.
 
@@ -516,8 +520,9 @@ with worktree isolation and missed-run catch-up, free with the subscription (`cl
 ### Negative
 
 - **One step is one job.** Every event pays job-queue and runner-startup latency and consumes Actions minutes; a
-  seven-step run is seven jobs. The per-step overhead has not been measured on real GitHub infrastructure
-  (SPIKE-3, open).
+  seven-step run is seven jobs. Measured on GitHub-hosted runners on 2026-09-06 (SPIKE-3, 22 runs): a step
+  body takes ~1.4-1.6 s, a whole job ~13 s, and the per-run concurrency group added up to 38 s of queueing,
+  so hop latency is a distribution, not a constant (`docs/spikes/README.md` §5).
 - **Contention is on the branch, not the run.** Unrelated runs collide on the state branch head, and the
   measured conflict curve is quadratic in concurrent writers. The per-run concurrency group keeps N at 1 in
   normal operation, but the design must never depend on it.
@@ -612,7 +617,8 @@ These are the constraints on what the project may *say*, which are stricter than
 
 ## Appendix A — How this changes the v0.4 document
 
-`docs/design/mvp-design.md` (v0.4) stays in the repository as a superseded document. The mapping:
+The v0.4 MVP design has been rewritten in place as v0.5 (`docs/design/mvp-design.md`); its section-level
+disposition is `docs/design/CHANGELOG-v0.5.md`. The mapping this ADR is responsible for:
 
 | v0.4 section | Disposition | Where it now lives |
 | --- | --- | --- |

@@ -12,7 +12,7 @@
   "cycle": 2,
   "nodeId": "test",
   "attempt": 1,
-  "reason": "no_completion_by_deadline",
+  "reason": "attempt_deadline",
   "error": {
     "code": "attempt_lost",
     "message": "No node-completed, node-failed or node-timed-out arrived before the lease deadline 2026-09-06T10:30:05.902Z; attempt 1 is declared LOST",

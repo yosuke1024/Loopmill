@@ -40,6 +40,12 @@ observe --> implement --> review --> pass? --> end
 * `review` reporting `fail` traverses the **retry edge** back to `implement` and
   increments the **cycle**. Cycle 4 would exceed `maxIterations`, so the run ends with
   `MAX_ITERATIONS_EXCEEDED`.
+* **Prototype-only counting.** Here `maxIterations = 3` means *three body executions*
+  (cycles 1..3). v0.5 counts traversals of the edge instead, so `maxIterations: 3`
+  executes the body four times, in cycles 1..4 (`docs/spec/loop-file.md` §12.2,
+  `docs/spec/state-machine.md` §6.3). The harness was written before that was settled
+  and is not being retro-fitted; read it as a store-and-delivery experiment, not as the
+  loop semantics.
 
 ### The simulated backend
 
@@ -164,6 +170,12 @@ file appears), plus `LOOPMILL_NOW` to freeze the clock.
 
 ## 3. Exit codes
 
+**These codes are prototype-only.** They exist so the test suite and a shell can branch without parsing
+JSON, and they are deliberately wider than the shipping contract. The normative tables are
+`docs/spec/state-machine.md` §12.1 — `loopmill step` exits `0` handled, `1` unexpected, `2` invalid,
+`3` state conflict, `4` dispatch failed — and §12.2 for `loopmill run`'s outcome codes. Nothing in the
+design may be derived from the table below.
+
 `step` maps outcomes onto the exit code so a shell can branch without parsing JSON.
 The full result is still printed as JSON on stdout; a one-line summary goes to stderr.
 
@@ -255,8 +267,8 @@ workflow_dispatch(event = started)
 | 16 | Two runs share one state branch without interfering. | git |
 | 17 | `usage-reported` is applicable in any order and does not advance the loop - this is the order-independent event used to build the concurrency test. | local + git |
 
-Measured facts (this sandbox, local bare repo, Node 22.22.2 / git 2.43.0) are in
-`spike-3-local-results.md` alongside the verbatim test output.
+Measured facts — local (this sandbox, local bare repo, Node 22.22.2 / git 2.43.0) and
+from the 22 GitHub-hosted runs of 2026-09-06 — are recorded in `docs/spikes/README.md` §5.
 
 ---
 
@@ -292,8 +304,9 @@ exit 40. Two consequences:
 
 Contention is also on the **branch**, not the run, so unrelated runs collide with
 each other. At many concurrent runs the right move is one state branch per run
-(`loopmill/state/<run-id>`), which removes cross-run contention entirely at the cost
-of a lot of refs.
+(`loopmill/run/<runId>`, archived into `loopmill/state` at terminal state — the
+escalation option `docs/design/mvp-design.md` §9.2 and ADR-001 D5 already document),
+which removes cross-run contention entirely at the cost of a lot of refs.
 
 ### Growth
 Events are genuinely small. Measured on one 7-step run (14 event records):

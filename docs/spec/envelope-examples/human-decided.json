@@ -11,11 +11,11 @@
   "causationId": "06G7BWJ9R0B9ZQ0KQ6BND81NJE",
   "cycle": 2,
   "nodeId": "approve-merge",
-  "attempt": 1,
+  "attempt": 0,
   "human": {
     "mode": "pull-request-review",
     "subjectDigest": "sha256:db7e0fe57b8575bcb7cd232c5c3a6dd8ed3f0a4d79e4bbcdcd04fd533e2ba648",
-    "decision": "approved",
+    "decision": "approve",
     "decidedBy": "yosuke1024",
     "note": "Review state APPROVED on pull request 214."
   },
