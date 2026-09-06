@@ -250,7 +250,7 @@ keys" — is retired: it was a statement about hosted runners.
 | R2 | A scheduler-started process cannot reach the CLI's login state (macOS keychain when the screen is locked or no user session; `CODEX_HOME` not found under a `systemd` unit) | Unattended scheduled runs fail at authentication on that platform until the environment is prepared; `doctor` must detect it before 06:00 | **SPIKE-4** (launchd/systemd probes), a `doctor` check |
 | R3 | `claude -p` behaves differently on the user's host than on the hosted runner | Contract tests catch it | run the SPIKE-1 harness locally (SPIKE-4) |
 | R4 | Two entrypoints race on one repository (scheduler plus a manual `run`, or `resume --due` plus `run`) | A double Run or a torn journal | the `locks` row (D6), acceptance criteria A10/A11 |
-| R5 | Vendor terms forbid unattended single-user use | STOP (c) | R11 of SPIKE-2 (still open) |
+| R5 | Vendor terms forbid unattended single-user use | STOP (c) | R11, done 2026-09-06: the primary texts were read verbatim and do not forbid it; the interpretive residual is recorded in design §19.1 and §22 |
 
 ---
 
@@ -266,7 +266,7 @@ keys" — is retired: it was a statement about hosted runners.
 | D6 two job classes | **Superseded** by the single-host boundary (D8) |
 | D7 backend matrix | **Superseded** (D4) |
 | D8 daemonless = no Loopmill-owned always-on infrastructure | **Narrowed** (D9): also no resident Loopmill process on the host |
-| Compliance notes | Kept; the OpenAI rows stay `[L]` until R11 |
+| Compliance notes | Kept; the OpenAI rows moved from `[L]` to `[V]` when R11 was completed (2026-09-06, design §19.1) |
 
 ## Appendix B — How the spike results are read now
 

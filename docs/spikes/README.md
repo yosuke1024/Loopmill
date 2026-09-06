@@ -266,10 +266,10 @@ decidable with a live ChatGPT subscription.
 | 9c | Reported behaviour at the plan wall mid-task is destructive (quota burned, work reverted, silent failures) | UNVERIFIED / NEEDS-USER-RUN | Must be probed directly (R6) before trusting the backend with real work. |
 | 10a | Automations can trigger on PR commit updates | LIKELY | Shipped, plan-backed, but web-UI-only — not scriptable. |
 | 10b | An Actions job posting `@codex …` with `GITHUB_TOKEN` re-triggers Codex | **REFUTED (R8)** | A comment authored by `github-actions[bot]` got, 7 s later, the connector's reply "To use Codex here, create a Codex account and connect to github" and started no task. The mention must be authored by a GitHub user linked to Codex. The only automatable shape left is a maintainer-owned PAT in the Actions job (R8b, not attempted). |
-| 11a | Primary OpenAI terms/limits pages | PARTLY READ | Reachable from the maintainer's machine on 2026-09-06 (`learn.chatgpt.com/docs/...`): the cloud-environment, internet-access, GitHub-integration and cloud overview pages were read. The terms-of-use and CI/CD-auth pages are still not archived (R11 open). |
-| 11b | ChatGPT Terms of Use prohibit programmatic data extraction and "powering a third-party service" | LIKELY | The clause to stay clear of; the framing that Loopmill drives a user's own CLI for their own repo must be explicit in docs, not assumed. |
-| 11c | OpenAI documents (and discourages) "Maintain Codex account auth in CI/CD (advanced)" | LIKELY (strongest available signal) | The closest thing to permission that exists; quote its caveat verbatim rather than claiming blanket approval. |
-| 11d | Unattended scheduled Codex on a ChatGPT plan (Automations) is a first-party, shipped product | VERIFIED (product exists) | Unattended subscription-backed Codex is something OpenAI itself sells; the residual risk is about who does the scheduling. |
+| 11a | Primary OpenAI terms/limits pages | READ | Reachable from the maintainer's machine on 2026-09-06 (`learn.chatgpt.com/docs/...`): the cloud-environment, internet-access, GitHub-integration and cloud overview pages were read. The Terms of Use, Usage Policies, CI/CD-auth and Scheduled-tasks pages were read verbatim later the same day (R11); quotes and access times are in design §19.1. |
+| 11b | ChatGPT Terms of Use prohibit programmatic data extraction and "powering a third-party service" | **VERIFIED, corrected (R11)** | The Terms (effective 2026-01-01) prohibit "Automatically or programmatically extract data or Output", "Modify, copy, lease, sell or distribute any of our Services" and circumventing rate limits; no "third-party service" wording exists. The framing that Loopmill drives a user's own CLI for their own repo is explicit in design §19.1 and §22, with the interpretive residual named. |
+| 11c | OpenAI documents (and discourages) "Maintain Codex account auth in CI/CD (advanced)" | VERIFIED (R11) | Verbatim: "The right way to authenticate automation is with an API key. Use this guide only if you specifically need to run the workflow as your Codex account." Quoted with its access time in design §19.1; Loopmill implements none of the recipe. |
+| 11d | Unattended scheduled Codex on a ChatGPT plan (Automations) is a first-party, shipped product | VERIFIED (R11; the page now calls it "Scheduled tasks") | "Scheduled tasks run unattended with your default sandbox settings." — with the same keep-the-computer-on constraint Loopmill states; design §19.1. |
 
 ### The `codex cloud` CLI surface (v0.153.4)
 
@@ -365,7 +365,8 @@ secrets, no environment variables. `OPENAI_API_KEY`/`CODEX_API_KEY` unset.
 | R4 | **FAIL** | two formulations, both `ready` with a task-local diff; repository branches, PRs and events unchanged; the agent reports no `make_pr` tool and no remote/GitHub auth; the UI's "Create PR" button is the only exit |
 | R7 | partial | the success side is bounded and machine-readable (`list --json`); the `error` side was not exercised |
 | R8 | **FAIL** (strict) | a `GITHUB_TOKEN`-authored `@codex` comment is refused by the connector ("create a Codex account and connect to github"); a maintainer-authored mention does start a task and gets a reply comment in 84 s — but the change stays unpushed |
-| R2, R3, R5, R6, R9, R10, R11 | not run | superseded by the decision below, except R11 |
+| R2, R3, R5, R6, R9, R10 | not run | superseded by the decision below |
+| R11 | **done** (later on 2026-09-06) | the Terms of Use, Usage Policies, CI/CD-auth and Scheduled-tasks pages read verbatim in a browser on the maintainer's machine; quotes, URLs and access times in design §19.1, evaluation in design §22 |
 
 **Two variants were considered and not run.** (1) A GitHub token in the Codex environment:
 as a *secret* it cannot work — the primary page states secrets are "only available to setup
@@ -767,7 +768,7 @@ Not yet run — the harness at `spikes/spike-4-codex-cli/` does not exist yet.
 | G2 | SPIKE-2: Codex Cloud as an `observed` backend, GO = R1 ∧ R4 ∧ R5 ∧ R7 ∧ (R3 ∨ R8) | **red — NO-GO**; `observed` dropped by maintainer decision (2026-09-06) | R4 FAIL, R8 FAIL with `GITHUB_TOKEN` (§4). Under v0.6 this no longer gates the MVP at all: `observed` is removed from the design outright, not merely left ungated (ADR-002 D4) |
 | G3 | SPIKE-2b: seeded `auth.json` survives ephemeral runners | **superseded** — not run | ADR-002: no credential is ever moved to a runner Loopmill does not own, so the question no longer arises |
 | G4 | SPIKE-3: non-resident, event-sourced `step` on real GitHub | **green — reinterpreted** | 21/21 local, 44 hosted runs (§5); the transition/journal/concurrency properties carry over to the SQLite store (ADR-002 Appendix B); the git-branch store and `GITHUB_TOKEN` chaining measured here are the reserved `github-actions` backend's mechanism, not the MVP's own |
-| G5 | STOP (c): vendor terms read verbatim from primary sources | **open** — R11 not done | design §19 rows still `[L]` for OpenAI |
+| G5 | STOP (c): vendor terms read verbatim from primary sources | **green** — R11 done 2026-09-06 | OpenAI's Terms of Use, Usage Policies, the Codex CI/CD-auth page and the Scheduled-tasks page are quoted verbatim with access times in design §19.1; STOP (c) is evaluated in design §22: not triggered on the text, interpretive residual recorded |
 | G6 | SPIKE-4: `codex exec` on the host, and the scheduler context | **open** — harness not yet built | §6 |
 
 **STOP conditions (v0.6, ADR-002 D10):** **(a)** no supported AI CLI can execute unattended on a
@@ -775,13 +776,16 @@ user-managed host under subscription authentication — **not triggered**, pendi
 confirmation SPIKE-4 D10 is expected to give; **(b)** — "no cross-vendor path exists under subscriptions,
 and the only working shape is GitHub Actions plus API keys" — **retired**: it was a statement about
 hosted runners, and does not survive execution moving to a user-managed host; **(c)** vendor terms, read
-verbatim, forbid the single-user unattended use Loopmill relies on — **open**, undecided until R11.
+verbatim, forbid the single-user unattended use Loopmill relies on — **not triggered on the text read**
+(R11, 2026-09-06; design §19.1 and §22 carry the quotes and the interpretive residual).
 
 1. **Build and run SPIKE-4** (`spikes/spike-4-codex-cli/`): the D1-D10 harness, plus the macOS and Linux
    scheduler-context probes (D9). This is now the one thing standing between STOP (a) and a written
    "not triggered".
-2. **R11 terms reading** (still needed): archive verbatim quotes from OpenAI's terms-of-use and
-   CI/CD-auth pages on an unrestricted machine, for STOP (c).
+2. **R11 terms reading — done 2026-09-06.** OpenAI's Terms of Use, Usage Policies, the Codex CI/CD-auth
+   page and the Scheduled-tasks page were read in a browser on the maintainer's machine (the policy pages
+   answer HTTP 403 to non-browser clients); the quotes, URLs and access times are in design §19.1, and
+   the full-text captures are kept outside the repository by the maintainer.
 3. **Clean up the SPIKE-2 leftovers**, now that `observed` is removed rather than merely ungated: PR
    `#1`, branch `spike2/r8-mention`, and the Codex Cloud environment `loopmill-codex-spike`.
 4. **SPIKE-3's follow-ups are now post-MVP items for the reserved `github-actions` backend**, not
