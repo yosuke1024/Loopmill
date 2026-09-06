@@ -55,6 +55,43 @@ fi
 # Generic helpers
 # ---------------------------------------------------------------------------
 
+# macOS ships no `timeout`. When the binary is absent (SPIKE-4 D10 runs this
+# harness on the operator's Mac), this function stands in for the two shapes
+# the checks use -- `timeout [-s SIG] SECS cmd...` -- and returns coreutils'
+# 124 on expiry. Job control is switched on for the launch so the child does
+# not inherit the ignored SIGINT a non-interactive bash gives background jobs.
+if ! command -v timeout >/dev/null 2>&1; then
+  timeout() {
+    local sig="TERM"
+    if [ "$1" = "-s" ]; then sig="$2"; shift 2; fi
+    local secs="$1"; shift
+    set -m
+    "$@" &
+    local pid=$!
+    set +m
+    local waited=0 expired="no"
+    while kill -0 "$pid" 2>/dev/null; do
+      if [ "$waited" -ge "$secs" ]; then
+        expired="yes"
+        kill -s "$sig" "$pid" 2>/dev/null
+        local grace=0
+        while kill -0 "$pid" 2>/dev/null && [ "$grace" -lt 30 ]; do
+          sleep 1
+          grace=$((grace + 1))
+        done
+        kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
+        break
+      fi
+      sleep 1
+      waited=$((waited + 1))
+    done
+    wait "$pid" 2>/dev/null
+    local code=$?
+    [ "$expired" = "yes" ] && return 124
+    return "$code"
+  }
+fi
+
 # Redact anything that looks like a Claude API key or OAuth token from any
 # output we persist. Applied to every file this script writes under out/.
 redact() {

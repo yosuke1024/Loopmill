@@ -705,7 +705,12 @@ node spikes/spike-3-control-plane/step.mjs rebuild-snapshot \
 
 ## 6. SPIKE-4 — Codex CLI subscription backend and the scheduler context
 
-Location: `spikes/spike-4-codex-cli/` (to be created).
+Location: `spikes/spike-4-codex-cli/` — built 2026-09-06: `run.sh` (checks D0-D8, dry-run capable,
+modelled on the SPIKE-1 harness), `normalize.mjs` with offline tests (the codex usage normaliser D8
+uses, which also writes the recorded-fixture candidates), `schema.json`, and `d9/` (the scheduler-context
+probe plus generators for a `launchd` user agent, a `launchd` daemon and a `systemd --user` timer, none of
+which loads anything by itself). D10 is the SPIKE-1 harness run locally; SPIKE-1's `run.sh` gained a
+`timeout` shim for macOS, which ships no such binary.
 
 ### What it proves
 
@@ -731,6 +736,7 @@ runner SPIKE-1 measured it on).
 
 | Check | What it runs | Design question it answers |
 |---|---|---|
+| D0 | `codex --version`, `codex login status`, the credential-store and forced-login keys of `config.toml`, whether `auth.json` exists, the macOS keyring probe (exit code only) | The environment record, the way SPIKE-1's C1 and C10 were: it flags loudly when the login status is not 0 or an API key is present, since either invalidates the run. |
 | D1 | `codex exec --json "<prompt>"` with stdin from `/dev/null`, no TTY, ChatGPT login only | Whether `subscription-login` runs non-interactively at all — the precondition for `codex` as an MVP runtime (`docs/design/mvp-design.md` §6.4, ADR-002 D5). |
 | D2 | Same, plus `--output-schema <file>` | Whether structured output is schema-conformant and survives Loopmill's own re-validation (design §11). |
 | D3 | A success, a forced failure, and an invalid argument | The terminal-state and exit-code contract: `turn.completed` vs `turn.failed`, and whether exit codes 0/1/2 are legible and distinct (design §6.3, §10). |
@@ -752,11 +758,32 @@ expected to surface useful detail regardless of outcome, the same way C5, C6, C9
 
 ### Results
 
-Not yet run — the harness at `spikes/spike-4-codex-cli/` does not exist yet.
+Not yet run. The harness exists and is verified offline (2026-09-06): `bash -n`, `SPIKE_DRY_RUN=1`,
+the normaliser's tests against the committed hand-written fixtures (5/5), and a full end-to-end run
+against a stand-in `codex` script that emits the documented JSONL shapes — every check graded as
+designed, including the three D5 cancellation paths. The real run spends subscription quota and waits
+for the maintainer's go-ahead.
 
 | Check | Status |
 |---|---|
-| D1-D10 | not yet run |
+| D0-D8 | not yet run (harness ready: `bash spikes/spike-4-codex-cli/run.sh`) |
+| D9 | not yet run (macOS procedure ready in `spikes/spike-4-codex-cli/d9/README.md`; no Linux host available to the maintainer at the time of writing) |
+| D10 | not yet run (`ONLY=C1,C2,C3,C4,C6,C7 bash spikes/spike-1-claude-subscription/run.sh`) |
+
+Facts already measured on the maintainer's host while building the harness, which the D9 write-up
+must take into account: `codex` 0.144.6 keeps its ChatGPT login in the macOS login keychain
+(`cli_auth_credentials_store = "keyring"` in `config.toml`; there is no `auth.json`), `claude` 2.1.245
+keeps its claude.ai login in the keychain item `Claude Code-credentials`, and `gh` uses the keyring
+too — so on this host every one of the three logins a scheduled process needs is a keychain question,
+not a file-permission one. OpenAI's own docs say the keyring store must be switched to file-backed
+storage before any headless use of `auth.json` (design §19.1).
+
+Harness lessons found before any real run, all recorded in `spikes/spike-4-codex-cli/README.md`: a
+background job started by a non-interactive bash inherits an ignored SIGINT (measured on macOS bash
+3.2: `sleep` survives `kill -INT` after a plain `&`, dies with 130 under `set -m`), so both launchers
+switch job control on for the launch — SPIKE-1's C6 was unaffected only because a Node CLI installs
+its own handler; `codex exec resume` accepts fewer flags than `codex exec` (no `-C`, `-s`, `--color`
+in 0.144.6), so D4b runs from the scratch repository's own directory; macOS `date` has no `%N`.
 
 ---
 
@@ -769,7 +796,7 @@ Not yet run — the harness at `spikes/spike-4-codex-cli/` does not exist yet.
 | G3 | SPIKE-2b: seeded `auth.json` survives ephemeral runners | **superseded** — not run | ADR-002: no credential is ever moved to a runner Loopmill does not own, so the question no longer arises |
 | G4 | SPIKE-3: non-resident, event-sourced `step` on real GitHub | **green — reinterpreted** | 21/21 local, 44 hosted runs (§5); the transition/journal/concurrency properties carry over to the SQLite store (ADR-002 Appendix B); the git-branch store and `GITHUB_TOKEN` chaining measured here are the reserved `github-actions` backend's mechanism, not the MVP's own |
 | G5 | STOP (c): vendor terms read verbatim from primary sources | **green** — R11 done 2026-09-06 | OpenAI's Terms of Use, Usage Policies, the Codex CI/CD-auth page and the Scheduled-tasks page are quoted verbatim with access times in design §19.1; STOP (c) is evaluated in design §22: not triggered on the text, interpretive residual recorded |
-| G6 | SPIKE-4: `codex exec` on the host, and the scheduler context | **open** — harness not yet built | §6 |
+| G6 | SPIKE-4: `codex exec` on the host, and the scheduler context | **open** — harness built and verified offline 2026-09-06; the real run (quota-spending) awaits the maintainer | §6 |
 
 **STOP conditions (v0.6, ADR-002 D10):** **(a)** no supported AI CLI can execute unattended on a
 user-managed host under subscription authentication — **not triggered**, pending the trivial host
@@ -779,9 +806,10 @@ hosted runners, and does not survive execution moving to a user-managed host; **
 verbatim, forbid the single-user unattended use Loopmill relies on — **not triggered on the text read**
 (R11, 2026-09-06; design §19.1 and §22 carry the quotes and the interpretive residual).
 
-1. **Build and run SPIKE-4** (`spikes/spike-4-codex-cli/`): the D1-D10 harness, plus the macOS and Linux
-   scheduler-context probes (D9). This is now the one thing standing between STOP (a) and a written
-   "not triggered".
+1. **Run SPIKE-4** (`spikes/spike-4-codex-cli/`, harness built 2026-09-06): D0-D8 on the maintainer's
+   Mac, the macOS D9 probes (`launchd` agent with the screen locked, `launchd` daemon with no session),
+   D10, and — when a Linux host is available — the `systemd --user` half of D9. This is now the one
+   thing standing between STOP (a) and a written "not triggered".
 2. **R11 terms reading — done 2026-09-06.** OpenAI's Terms of Use, Usage Policies, the Codex CI/CD-auth
    page and the Scheduled-tasks page were read in a browser on the maintainer's machine (the policy pages
    answer HTTP 403 to non-browser clients); the quotes, URLs and access times are in design §19.1, and

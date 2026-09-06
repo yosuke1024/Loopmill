@@ -232,3 +232,9 @@ against a subscription you intend to test.
   `${arr[@]+"${arr[@]}"}` idiom rather than a plain `"${arr[@]}"`, so the dry
   run also works under bash 3.2 with `set -u`, where expanding an empty array
   the plain way is an unset-variable error.
+- macOS ships no `timeout` binary. When it is absent, `run.sh` defines a
+  shell function of the same name for the two shapes the checks use
+  (`timeout [-s SIG] SECS cmd...`, exit 124 on expiry), so the harness can be
+  run locally for SPIKE-4 D10 without installing coreutils. The function
+  switches job control on for the launch, because a background job started
+  by a non-interactive bash otherwise inherits an ignored SIGINT.
