@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "1.0.0",
+  "eventId": "06G7BWJ5V056N94SSK77T05TRH",
+  "eventType": "node-observed",
+  "occurredAt": "2026-09-06T09:52:19.408Z",
+  "producer": "backend:observed",
+  "loopId": "article-review",
+  "loopVersion": "sha256:49e8067c2d493d48f6c0e17f2ce1c27f579c945d25d80547506c3d8e79f93488",
+  "runId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "correlationId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "causationId": "06G7BWKWH0HMMXZ2935KZ3AK8B",
+  "cycle": 1,
+  "nodeId": "pr-review",
+  "attempt": 1,
+  "result": {
+    "status": "succeeded",
+    "structured": {
+      "verdict": "fail",
+      "findings": [
+        "retry-edge counter is not reset when the run resumes",
+        "no test covers maxIterations = 1"
+      ]
+    },
+    "summary": "Matched the fenced loopmill block in comment 3310042117; verdict fail with 2 findings."
+  },
+  "artifactRefs": [
+    {
+      "kind": "comment",
+      "ref": "3310042117",
+      "digest": "sha256:d963a8ec02144adfc36244e9e20934c5c372e685c76d46479745c4ecd7ba59be",
+      "url": "https://github.com/yosuke1024/Loopmill/pull/214#issuecomment-3310042117"
+    },
+    {
+      "kind": "pr",
+      "ref": "214",
+      "url": "https://github.com/yosuke1024/Loopmill/pull/214"
+    }
+  ],
+  "usage": {
+    "runtime": "codex",
+    "freshInputTokens": null,
+    "cacheWriteTokens": null,
+    "cacheReadTokens": null,
+    "outputTokens": null,
+    "totalInputTokens": null,
+    "totalTokens": null,
+    "provenance": "unavailable",
+    "provenanceNote": "observed backend: execution happened vendor-side and reports no token usage",
+    "complete": false
+  }
+}

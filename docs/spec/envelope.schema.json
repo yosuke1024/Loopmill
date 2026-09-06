@@ -1,0 +1,791 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yosuke1024/Loopmill/main/docs/spec/envelope.schema.json",
+  "title": "Loopmill Envelope",
+  "description": "The single machine-readable record exchanged between the Loopmill control plane, execution backends, humans and GitHub. One envelope describes exactly one thing that happened. Envelope schema version 1.0.0.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "eventType",
+    "occurredAt",
+    "producer",
+    "loopId",
+    "loopVersion",
+    "runId"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "$ref": "#/$defs/semver",
+      "description": "Envelope schema version this record conforms to. MUST be the first key on the wire (see envelope.md, transport rules)."
+    },
+    "eventId": {
+      "$ref": "#/$defs/ulid",
+      "description": "Globally unique id of this event. ULID (Crockford base32, 26 chars, time-sortable). The exact-duplicate idempotency key."
+    },
+    "eventType": {
+      "$ref": "#/$defs/eventType",
+      "description": "What happened. See the event catalogue in envelope.md."
+    },
+    "occurredAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "RFC 3339 timestamp on the producer's clock, at the moment the described thing happened (never the moment the envelope was transported)."
+    },
+    "producer": {
+      "$ref": "#/$defs/producer",
+      "description": "Who asserts this event: control-plane | backend:<backendId> | human | trigger. Asserted by the receiving boundary (ingest workflow / control plane), never trusted from an unauthenticated source."
+    },
+    "loopId": {
+      "$ref": "#/$defs/loopId",
+      "description": "Loop slug, immutable and user-visible; matches .loopmill/<slug>.loop.yaml."
+    },
+    "loopVersion": {
+      "$ref": "#/$defs/sha256",
+      "description": "sha256 of the canonicalised loop file pinned by this Run."
+    },
+    "runId": {
+      "$ref": "#/$defs/runId",
+      "description": "run_ + 26-char ULID. Allocated by the producer of run-requested and immutable for the life of the Run."
+    },
+    "cycle": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cycle index within the Run. Nodes outside any Retry Edge body run in cycle 0; body traversals are cycles 1..N."
+    },
+    "nodeId": {
+      "$ref": "#/$defs/nodeId",
+      "description": "Node id, unique within the loop file."
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Attempt number of this Node Execution. Attempts above 1 exist only for infrastructure-level retry, never for loop retries."
+    },
+    "causationId": {
+      "$ref": "#/$defs/ulid",
+      "description": "eventId of the event that directly caused this one. Builds the causation chain."
+    },
+    "correlationId": {
+      "$ref": "#/$defs/runId",
+      "description": "Root runId that this event belongs to. Equal to runId unless a sub-run exists."
+    },
+    "result": {
+      "$ref": "#/$defs/result",
+      "description": "Outcome payload of a Node Execution attempt."
+    },
+    "artifactRefs": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/artifactRef" },
+      "description": "Pointers to everything too large, too binary or too mutable to live inside the envelope."
+    },
+    "usage": {
+      "$ref": "#/$defs/usage",
+      "description": "The canonical per-Attempt usage record."
+    },
+    "error": {
+      "$ref": "#/$defs/error",
+      "description": "Failure detail. classified is the coarse bucket the state machine reads; code is the producer's own token."
+    },
+    "signature": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9+/=:._-]+$",
+      "description": "RESERVED. Not used by envelope schema 1.x: receivers MUST ignore it and MUST NOT treat its presence or absence as authentication. Reserved for a later detached HMAC (see envelope.md, security)."
+    },
+    "reason": {
+      "$ref": "#/$defs/machineToken",
+      "description": "Machine token explaining a control-plane bookkeeping event (ignored-stale, resumed, lease-expired)."
+    },
+    "quotaResetsAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When the vendor quota window is expected to reset. Required on quota-parked; without it a quota classification is treated as a plain failure, never as a wait."
+    },
+    "trigger": {
+      "$ref": "#/$defs/trigger",
+      "description": "What asked for the Run. Only on run-requested."
+    },
+    "dispatch": {
+      "$ref": "#/$defs/dispatch",
+      "description": "How an Attempt was handed to a backend. Only on node-dispatched and dispatch-failed."
+    },
+    "retryEdge": {
+      "$ref": "#/$defs/retryEdge",
+      "description": "The backward edge traversed. Only on retry-edge-taken."
+    },
+    "human": {
+      "$ref": "#/$defs/humanGate",
+      "description": "Human gate request or decision. Only on human-requested and human-decided."
+    },
+    "outcome": {
+      "$ref": "#/$defs/outcome",
+      "description": "Terminal result of the Run. Only on run-finished."
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Node-level events carry the full node coordinates.",
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "$ref": "#/$defs/nodeLevelEventType" } }
+      },
+      "then": { "required": ["cycle", "nodeId", "attempt"] }
+    },
+    {
+      "$comment": "Run-level events carry no node coordinates at all.",
+      "if": {
+        "required": ["eventType"],
+        "properties": {
+          "eventType": { "enum": ["run-requested", "run-started", "run-finished", "resumed"] }
+        }
+      },
+      "then": {
+        "properties": { "cycle": false, "nodeId": false, "attempt": false }
+      }
+    },
+    {
+      "$comment": "A Retry Edge traversal names the cycle it enters and the edge, never a node or an attempt.",
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "retry-edge-taken" } }
+      },
+      "then": {
+        "required": ["cycle", "retryEdge"],
+        "properties": { "nodeId": false, "attempt": false }
+      }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "run-requested" } }
+      },
+      "then": { "required": ["trigger"] }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "node-dispatched" } }
+      },
+      "then": { "required": ["dispatch"] }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "dispatch-failed" } }
+      },
+      "then": { "required": ["dispatch", "error"] }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "node-completed" } }
+      },
+      "then": { "required": ["result"] }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "node-failed" } }
+      },
+      "then": { "required": ["error"] }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "node-observed" } }
+      },
+      "then": {
+        "required": ["artifactRefs", "result"],
+        "properties": { "artifactRefs": { "type": "array", "minItems": 1 } }
+      }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "human-requested" } }
+      },
+      "then": {
+        "required": ["human"],
+        "properties": { "human": { "type": "object", "required": ["mode", "subjectDigest"] } }
+      }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "human-decided" } }
+      },
+      "then": {
+        "required": ["human"],
+        "properties": { "human": { "type": "object", "required": ["decision", "subjectDigest"] } }
+      }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "quota-parked" } }
+      },
+      "then": { "required": ["quotaResetsAt"] }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "run-finished" } }
+      },
+      "then": { "required": ["outcome"] }
+    },
+    {
+      "$comment": "A rejected delivery is only auditable if it names what it rejected and why.",
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "const": "ignored-stale" } }
+      },
+      "then": { "required": ["reason", "causationId"] }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "enum": ["resumed", "lease-expired"] } }
+      },
+      "then": { "required": ["reason"] }
+    },
+    {
+      "$comment": "Event-scoped objects appear only on the event types that define them.",
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "not": { "const": "run-requested" } } }
+      },
+      "then": { "properties": { "trigger": false } }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "not": { "const": "run-finished" } } }
+      },
+      "then": { "properties": { "outcome": false } }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": { "eventType": { "not": { "const": "retry-edge-taken" } } }
+      },
+      "then": { "properties": { "retryEdge": false } }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": {
+          "eventType": { "not": { "enum": ["node-dispatched", "dispatch-failed"] } }
+        }
+      },
+      "then": { "properties": { "dispatch": false } }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": {
+          "eventType": { "not": { "enum": ["human-requested", "human-decided"] } }
+        }
+      },
+      "then": { "properties": { "human": false } }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": {
+          "eventType": { "not": { "enum": ["quota-parked", "node-failed"] } }
+        }
+      },
+      "then": { "properties": { "quotaResetsAt": false } }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": {
+          "eventType": {
+            "not": {
+              "enum": ["node-completed", "node-failed", "node-timed-out", "node-observed"]
+            }
+          }
+        }
+      },
+      "then": { "properties": { "result": false, "usage": false } }
+    },
+    {
+      "if": {
+        "required": ["eventType"],
+        "properties": {
+          "eventType": {
+            "not": {
+              "enum": ["node-failed", "node-timed-out", "dispatch-failed", "lease-expired"]
+            }
+          }
+        }
+      },
+      "then": { "properties": { "error": false } }
+    }
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "description": "Semantic version, three numeric components, no pre-release or build metadata."
+    },
+    "ulid": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "ULID in Crockford base32 (I, L, O and U excluded): 48-bit timestamp + 80 bits of entropy."
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^run_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Lowercase hex sha256 digest with an explicit algorithm prefix."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 40
+    },
+    "loopId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "nodeId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "machineToken": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "description": "Lowercase snake_case token meant for machines, stable across releases."
+    },
+    "backendId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+      "description": "Execution backend id. MVP: github-actions, observed, local, fake."
+    },
+    "runtimeId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+      "description": "Agent runtime id. MVP: claude-code, codex, fake."
+    },
+    "producer": {
+      "type": "string",
+      "pattern": "^(control-plane|human|trigger|backend:[a-z0-9][a-z0-9-]{0,31})$"
+    },
+    "eventType": {
+      "enum": [
+        "run-requested",
+        "run-started",
+        "node-dispatched",
+        "node-started",
+        "node-completed",
+        "node-failed",
+        "node-timed-out",
+        "node-observed",
+        "human-requested",
+        "human-decided",
+        "quota-parked",
+        "retry-edge-taken",
+        "run-finished",
+        "ignored-stale",
+        "dispatch-failed",
+        "resumed",
+        "lease-expired"
+      ]
+    },
+    "nodeLevelEventType": {
+      "enum": [
+        "node-dispatched",
+        "node-started",
+        "node-completed",
+        "node-failed",
+        "node-timed-out",
+        "node-observed",
+        "human-requested",
+        "human-decided",
+        "quota-parked",
+        "ignored-stale",
+        "dispatch-failed",
+        "lease-expired"
+      ]
+    },
+    "secretFree": {
+      "$comment": "A cheap, deliberately narrow guard against the credential shapes Loopmill handles. It is a backstop for the producer-side redactor, not a substitute for it.",
+      "not": {
+        "type": "string",
+        "pattern": "(^|[^A-Za-z0-9])(sk-ant-[A-Za-z0-9_-]{6,}|sk-[A-Za-z0-9]{20,}|oat01[A-Za-z0-9_-]{6,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+      }
+    },
+    "shortText": {
+      "type": "string",
+      "maxLength": 500,
+      "$ref": "#/$defs/secretFree"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 2000,
+      "$ref": "#/$defs/secretFree"
+    },
+    "summaryText": {
+      "type": "string",
+      "maxLength": 4000,
+      "$ref": "#/$defs/secretFree"
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "enum": ["succeeded", "failed", "timed_out", "cancelled", "skipped", "no_progress"],
+          "description": "Terminal state of the Node Execution attempt, lowercased. The loop-level verdict (pass/fail) is never carried here; it lives in structured."
+        },
+        "exitCode": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 255,
+          "description": "Process exit code where the backend has one; -1 means killed by a signal."
+        },
+        "structured": {
+          "type": "object",
+          "description": "The node's structuredOutput, already validated by the producer against the node's declared JSON Schema. Objects only. Larger than 8 KiB: move it to an artifact and reference it."
+        },
+        "summary": {
+          "$ref": "#/$defs/summaryText",
+          "description": "Short human-readable summary. Never a log, never a diff."
+        }
+      }
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {
+          "enum": ["commit", "branch", "pr", "issue", "comment", "actions-artifact", "file"]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "$ref": "#/$defs/secretFree",
+          "description": "The identifier within its kind: a commit sha, a branch name, a PR/issue number, a comment id, an Actions artifact name, or a repository-relative path."
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256",
+          "description": "sha256 of the referenced bytes, where the producer can compute it. Required by the control plane for anything a human gate approves."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048,
+          "$ref": "#/$defs/secretFree"
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime",
+        "freshInputTokens",
+        "cacheWriteTokens",
+        "cacheReadTokens",
+        "outputTokens",
+        "totalInputTokens",
+        "totalTokens",
+        "provenance",
+        "complete"
+      ],
+      "properties": {
+        "runtime": { "$ref": "#/$defs/runtimeId" },
+        "model": {
+          "type": "string",
+          "maxLength": 128,
+          "$ref": "#/$defs/secretFree"
+        },
+        "freshInputTokens": { "$ref": "#/$defs/tokenBucket" },
+        "cacheWriteTokens": { "$ref": "#/$defs/tokenBucket" },
+        "cacheReadTokens": { "$ref": "#/$defs/tokenBucket" },
+        "outputTokens": { "$ref": "#/$defs/tokenBucket" },
+        "reasoningTokens": {
+          "$ref": "#/$defs/tokenBucket",
+          "description": "Reference only. Never summed into totalTokens and never shown as a headline figure."
+        },
+        "totalInputTokens": {
+          "$ref": "#/$defs/tokenBucket",
+          "description": "fresh + cacheWrite + cacheRead. Null exactly when the buckets are null."
+        },
+        "totalTokens": {
+          "$ref": "#/$defs/tokenBucket",
+          "description": "totalInputTokens + outputTokens."
+        },
+        "provenance": {
+          "enum": ["reported", "derived", "estimated", "unavailable"],
+          "description": "reported = the runtime stated it; derived = computed from cumulative runtime figures; estimated = heuristic, never summed with reported/derived in a headline; unavailable = not measurable."
+        },
+        "provenanceNote": {
+          "$ref": "#/$defs/shortText",
+          "description": "Why the provenance is what it is. Required for estimated and unavailable."
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runtimeVersion", "eventKind"],
+          "properties": {
+            "runtimeVersion": { "type": "string", "maxLength": 64 },
+            "eventKind": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "The runtime record the numbers came from, e.g. result.usage or turn.completed.usage."
+            }
+          }
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "False when the attempt ended without a usage record the producer trusts."
+        },
+        "listPriceEquivalentUsd": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Internal normalisation only. Never a headline figure, never shown by default; a subscription run has no per-run price."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "An unmeasurable attempt stores nulls, never zeros.",
+          "if": {
+            "required": ["provenance"],
+            "properties": { "provenance": { "const": "unavailable" } }
+          },
+          "then": {
+            "required": ["provenanceNote"],
+            "properties": {
+              "freshInputTokens": { "type": "null" },
+              "cacheWriteTokens": { "type": "null" },
+              "cacheReadTokens": { "type": "null" },
+              "outputTokens": { "type": "null" },
+              "totalInputTokens": { "type": "null" },
+              "totalTokens": { "type": "null" },
+              "complete": { "const": false }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provenance"],
+            "properties": { "provenance": { "const": "estimated" } }
+          },
+          "then": { "required": ["provenanceNote"] }
+        },
+        {
+          "$comment": "Measured usage must say which runtime record it came from.",
+          "if": {
+            "required": ["provenance"],
+            "properties": { "provenance": { "enum": ["reported", "derived"] } }
+          },
+          "then": {
+            "required": ["source"],
+            "properties": {
+              "freshInputTokens": { "type": "integer" },
+              "cacheWriteTokens": { "type": "integer" },
+              "cacheReadTokens": { "type": "integer" },
+              "outputTokens": { "type": "integer" },
+              "totalInputTokens": { "type": "integer" },
+              "totalTokens": { "type": "integer" }
+            }
+          }
+        }
+      ]
+    },
+    "tokenBucket": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "classified"],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/machineToken",
+          "description": "The producer's own token, e.g. artifact_invalid, oauth_token_expired."
+        },
+        "message": {
+          "$ref": "#/$defs/text",
+          "description": "Redacted, human-readable, single paragraph."
+        },
+        "classified": {
+          "enum": [
+            "quota",
+            "auth",
+            "timeout",
+            "transient",
+            "invalid_input",
+            "artifact_invalid",
+            "backend_error",
+            "runtime_error",
+            "cancelled",
+            "unknown"
+          ],
+          "description": "The coarse bucket the state machine reads. Ambiguity is unknown, and unknown never becomes a wait."
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["manual", "schedule", "event"] },
+        "source": {
+          "type": "string",
+          "maxLength": 64,
+          "$ref": "#/$defs/secretFree",
+          "description": "Where the trigger came from, e.g. cli, github:issues, github:issue_comment, sweep."
+        },
+        "actor": {
+          "type": "string",
+          "maxLength": 128,
+          "$ref": "#/$defs/secretFree",
+          "description": "Authenticated identity that caused the trigger, as the boundary saw it."
+        },
+        "ref": {
+          "type": "string",
+          "maxLength": 256,
+          "$ref": "#/$defs/secretFree",
+          "description": "Git ref the Run was requested against."
+        },
+        "dedupeKey": {
+          "type": "string",
+          "maxLength": 256,
+          "$ref": "#/$defs/secretFree",
+          "description": "Key used to decide whether an equivalent open change already exists (SKIPPED)."
+        },
+        "scheduledFor": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backendId", "transport", "expectedProducer"],
+      "properties": {
+        "backendId": { "$ref": "#/$defs/backendId" },
+        "runtimeId": { "$ref": "#/$defs/runtimeId" },
+        "transport": {
+          "enum": ["repository_dispatch", "workflow_dispatch", "comment", "process", "api"]
+        },
+        "expectedProducer": {
+          "$ref": "#/$defs/producer",
+          "description": "The only producer whose node-level events the control plane will accept for this attempt."
+        },
+        "dedupeKey": {
+          "type": "string",
+          "maxLength": 256,
+          "$ref": "#/$defs/secretFree",
+          "description": "Carried into the trigger so a duplicate dispatch is recognisable by the backend."
+        },
+        "deadline": {
+          "$ref": "#/$defs/timestamp",
+          "description": "Lease expiry. After this the sweep may emit lease-expired and re-dispatch."
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 256,
+          "$ref": "#/$defs/secretFree",
+          "description": "Backend-specific target, e.g. a workflow file name, an issue number, a command name."
+        }
+      }
+    },
+    "retryEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edgeId", "fromNodeId", "toNodeId", "fromCycle", "toCycle", "maxIterations"],
+      "properties": {
+        "edgeId": { "$ref": "#/$defs/nodeId" },
+        "fromNodeId": { "$ref": "#/$defs/nodeId" },
+        "toNodeId": { "$ref": "#/$defs/nodeId" },
+        "fromCycle": { "type": "integer", "minimum": 0 },
+        "toCycle": { "type": "integer", "minimum": 1 },
+        "maxIterations": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "humanGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["environment-reviewers", "pull-request-review", "label"] },
+        "subjectDigest": {
+          "$ref": "#/$defs/sha256",
+          "description": "Digest of exactly what is being approved. A new attempt produces a new digest and invalidates every earlier approval."
+        },
+        "decision": { "enum": ["approved", "rejected", "expired"] },
+        "decidedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "$ref": "#/$defs/secretFree",
+          "description": "Authenticated identity of the decider, as the boundary saw it."
+        },
+        "deadline": { "$ref": "#/$defs/timestamp" },
+        "note": { "$ref": "#/$defs/shortText" }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": [
+            "SUCCEEDED",
+            "FAILED",
+            "CANCELLED",
+            "MAX_ITERATIONS_EXCEEDED",
+            "BUDGET_EXCEEDED",
+            "EXPIRED",
+            "SKIPPED"
+          ]
+        },
+        "endLabel": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "description": "The end node's outcome label, reported as SUCCEEDED(end:<label>)."
+        },
+        "failureReason": {
+          "$ref": "#/$defs/machineToken",
+          "description": "Why the Run failed. Never used for MAX_ITERATIONS_EXCEEDED, which is not a failure."
+        },
+        "cycles": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Highest cycle index reached."
+        },
+        "summary": { "$ref": "#/$defs/summaryText" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["state"],
+            "properties": { "state": { "const": "SUCCEEDED" } }
+          },
+          "then": {
+            "required": ["endLabel"],
+            "properties": { "failureReason": false }
+          }
+        },
+        {
+          "if": {
+            "required": ["state"],
+            "properties": { "state": { "const": "FAILED" } }
+          },
+          "then": { "required": ["failureReason"] }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0.0",
+  "eventId": "06G7BWHP70VYNYA22AJ7TCAQKQ",
+  "eventType": "node-started",
+  "occurredAt": "2026-09-06T09:00:41.006Z",
+  "producer": "backend:github-actions",
+  "loopId": "article-review",
+  "loopVersion": "sha256:49e8067c2d493d48f6c0e17f2ce1c27f579c945d25d80547506c3d8e79f93488",
+  "runId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "correlationId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "causationId": "06G7BWHJA04BZ0ZGMKCKH6JRW7",
+  "cycle": 0,
+  "nodeId": "observe",
+  "attempt": 1
+}
