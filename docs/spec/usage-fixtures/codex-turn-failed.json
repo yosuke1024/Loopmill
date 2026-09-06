@@ -1,0 +1,86 @@
+{
+  "fixtureId": "codex-turn-failed",
+  "title": "codex turn.failed: no turn.completed is emitted, so no usage exists",
+  "handWritten": true,
+  "notARecording": "Hand-written from the documented codex exec JSONL event shapes and the documented fact that a failed turn emits turn.failed and never turn.completed. No CLI was executed to produce this file.",
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "github-actions",
+    "runtime": "codex",
+    "authMode": "subscription-login",
+    "runId": "run_01JQ8ZF0Y2Z5B8E1G4J7M0Q3S9",
+    "cycleIndex": 3,
+    "nodeId": "code-review",
+    "attempt": 1,
+    "sessionPolicy": "fresh",
+    "note": "The turn ran, consumed quota, and then failed. The runtime emits no usage for a failed turn, so the record is unavailable. Failure classification (this message classifies as QUOTA and drives WAITING_FOR_QUOTA) is a separate concern from usage and must not be allowed to invent a usage number."
+  },
+  "input": {
+    "invocation": "codex exec --json -C <workspace> -s workspace-write -",
+    "exitCode": 1,
+    "signal": null,
+    "usageAtAttemptStart": {
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_output_tokens": 0
+    },
+    "events": [
+      { "type": "thread.started", "thread_id": "th_01JQ8ZF0Y2Z5B8E1G4J7M0Q3S9" },
+      { "type": "turn.started" },
+      { "type": "item.completed", "item": { "type": "reasoning", "text": "" }, "_ignoreReason": "item events carry no usage" },
+      { "type": "turn.failed", "error": { "message": "You've hit your usage limit." } }
+    ],
+    "note": "No turn.completed line is present anywhere in the stream. That absence is the whole point of this fixture."
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": { "runId": "run_01JQ8ZF0Y2Z5B8E1G4J7M0Q3S9", "cycleIndex": 3, "nodeId": "code-review", "attempt": 1 },
+        "usage": {
+          "runtime": "codex",
+          "model": null,
+          "freshInputTokens": null,
+          "cacheWriteTokens": null,
+          "cacheReadTokens": null,
+          "outputTokens": null,
+          "reasoningTokens": null,
+          "totalInputTokens": null,
+          "totalTokens": null,
+          "provenance": "unavailable",
+          "provenanceNote": "turn.failed with no preceding turn.completed on this thread; the runtime emits usage only on turn.completed. Tokens were consumed.",
+          "source": { "runtimeVersion": "0.153.4", "eventKind": "turn.failed" },
+          "complete": false,
+          "usageBasis": "none",
+          "sessionRef": { "kind": "codex-thread", "id": "th_01JQ8ZF0Y2Z5B8E1G4J7M0Q3S9" },
+          "usageAtAttemptStart": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0
+          },
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": { "totalInputTokens": null, "totalTokens": null, "provenance": "unavailable", "measured": false },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 0,
+      "coverage": 0.0,
+      "unmeasured": [
+        { "cycleIndex": 3, "nodeId": "code-review", "attempt": 1, "runtime": "codex", "reason": "turn.failed, no turn.completed" }
+      ]
+    },
+    "sideChannel": {
+      "failureClassification": "QUOTA",
+      "note": "Classification is recorded on the node-failed event, not on the usage record. It never changes provenance and never fills a bucket."
+    },
+    "mustNotEqual": { "storedAsZero": 0 },
+    "display": { "nodeTotal": "—", "measuredTokens": "0+", "usageCoverage": "0/1 (0%)" }
+  },
+  "assertsInvariants": ["I2", "I4", "I9", "I12"]
+}

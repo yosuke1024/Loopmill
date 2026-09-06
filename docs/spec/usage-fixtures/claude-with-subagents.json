@@ -1,0 +1,139 @@
+{
+  "fixtureId": "claude-with-subagents",
+  "title": "claude-code, subagents present: modelUsage overrides result.usage",
+  "handWritten": true,
+  "notARecording": "Hand-written from the documented claude-code result-message shape. No CLI was executed to produce this file. Values are illustrative and chosen so the modelUsage-vs-usage difference is exactly 111,100 tokens and can be checked by hand.",
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "github-actions",
+    "runtime": "claude-code",
+    "authMode": "subscription-oauth",
+    "runId": "run_01JQ8ZB2N5R8T1Y4U7I0O3P6A2",
+    "cycleIndex": 1,
+    "nodeId": "review",
+    "attempt": 1,
+    "note": "result.usage covers the main loop only. modelUsage covers the whole tree. Reading result.usage here undercounts by 111,100 tokens (14.5%)."
+  },
+  "input": {
+    "invocation": "claude -p --output-format stream-json --verbose --model claude-opus-5 ...",
+    "exitCode": 0,
+    "signal": null,
+    "ignoredStreamLines": [
+      {
+        "type": "assistant",
+        "parent_tool_use_id": "toolu_01SubAgentTaskAbCdEf",
+        "message": {
+          "id": "msg_01SubAgentMessageXyZ123",
+          "usage": { "input_tokens": 4800, "cache_creation_input_tokens": 7200, "cache_read_input_tokens": 96500, "output_tokens": 1 }
+        },
+        "_ignoreReason": "subagent stream line; usage is read from the result message only"
+      }
+    ],
+    "terminalEvent": {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 305012,
+      "duration_api_ms": 244190,
+      "num_turns": 17,
+      "stop_reason": "end_turn",
+      "session_id": "b21d7f60-3c48-4f0a-b0d5-8e9a1c2f4b77",
+      "uuid": "c9a4e1b2-77d3-4a55-8e10-3b6f0d9c2a41",
+      "total_cost_usd": 0.824725,
+      "usage": {
+        "input_tokens": 12100,
+        "cache_creation_input_tokens": 30500,
+        "cache_read_input_tokens": 604300,
+        "output_tokens": 9400
+      },
+      "modelUsage": {
+        "claude-opus-5": {
+          "inputTokens": 12100,
+          "outputTokens": 9400,
+          "cacheReadInputTokens": 604300,
+          "cacheCreationInputTokens": 30500,
+          "costUSD": 0.788275,
+          "costBasis": "list"
+        },
+        "claude-haiku-4-5": {
+          "inputTokens": 4800,
+          "outputTokens": 2600,
+          "cacheReadInputTokens": 96500,
+          "cacheCreationInputTokens": 7200,
+          "costUSD": 0.03645,
+          "costBasis": "list"
+        }
+      },
+      "subagent_stats": { "count": 1 },
+      "permission_denials": []
+    },
+    "note": "costUSD / total_cost_usd are stored verbatim and never recomputed; the values here are illustrative."
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": { "runId": "run_01JQ8ZB2N5R8T1Y4U7I0O3P6A2", "cycleIndex": 1, "nodeId": "review", "attempt": 1 },
+        "usage": {
+          "runtime": "claude-code",
+          "model": null,
+          "freshInputTokens": 16900,
+          "cacheWriteTokens": 37700,
+          "cacheReadTokens": 700800,
+          "outputTokens": 12000,
+          "reasoningTokens": null,
+          "totalInputTokens": 755400,
+          "totalTokens": 767400,
+          "provenance": "reported",
+          "provenanceNote": "modelUsage present and non-empty; summed over 2 models. result.usage (656,300) was discarded because it excludes subagents.",
+          "source": { "runtimeVersion": "2.1.261", "eventKind": "result" },
+          "complete": true,
+          "usageBasis": "modelUsage",
+          "sessionRef": { "kind": "claude-session", "id": "b21d7f60-3c48-4f0a-b0d5-8e9a1c2f4b77" },
+          "usageAtAttemptStart": null,
+          "listPriceEquivalentUsd": 0.824725,
+          "perModel": [
+            {
+              "model": "claude-opus-5",
+              "freshInputTokens": 12100,
+              "cacheWriteTokens": 30500,
+              "cacheReadTokens": 604300,
+              "outputTokens": 9400,
+              "totalInputTokens": 646900,
+              "totalTokens": 656300,
+              "listPriceEquivalentUsd": 0.788275,
+              "costBasis": "list"
+            },
+            {
+              "model": "claude-haiku-4-5",
+              "freshInputTokens": 4800,
+              "cacheWriteTokens": 7200,
+              "cacheReadTokens": 96500,
+              "outputTokens": 2600,
+              "totalInputTokens": 108500,
+              "totalTokens": 111100,
+              "listPriceEquivalentUsd": 0.03645,
+              "costBasis": "list"
+            }
+          ]
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": 755400,
+      "totalTokens": 767400,
+      "provenance": "reported",
+      "measured": true
+    },
+    "coverage": { "agentExecutions": 1, "measuredExecutions": 1, "coverage": 1.0, "unmeasured": [] },
+    "mustNotEqual": {
+      "totalTokensIfResultUsageWereUsed": 656300,
+      "totalTokensIfBothWereSummed": 1423700
+    },
+    "display": {
+      "measuredTokens": "767,400",
+      "usageCoverage": "1/1 (100%)",
+      "model": "claude-opus-5 + claude-haiku-4-5"
+    }
+  },
+  "assertsInvariants": ["I1", "I2", "I6", "I7", "I8", "I9", "I11"]
+}

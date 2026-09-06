@@ -1,0 +1,126 @@
+{
+  "fixtureId": "claude-success",
+  "title": "claude-code, single agent node, no subagents, clean success",
+  "handWritten": true,
+  "notARecording": "Hand-written from the documented claude-code result-message shape. No CLI was executed to produce this file. Field names are taken from the runtime research brief (claude-code 2.1.261, 2026-09-06); the numeric values are illustrative and are chosen so that the normalization rules in docs/spec/usage-normalization.md can be checked by hand.",
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "github-actions",
+    "runtime": "claude-code",
+    "authMode": "subscription-oauth",
+    "runId": "run_01JQ8Z9K7M4P2X6R0T5V3W1H9C",
+    "cycleIndex": 1,
+    "nodeId": "implement",
+    "attempt": 1,
+    "note": "These are exactly the four numbers printed in the v0.4 design section 21 example, so this fixture doubles as the regression test for that correction."
+  },
+  "input": {
+    "invocation": "claude -p --output-format stream-json --verbose --model claude-sonnet-5 ...",
+    "exitCode": 0,
+    "signal": null,
+    "ignoredStreamLines": [
+      {
+        "type": "system",
+        "subtype": "init",
+        "model": "claude-sonnet-5",
+        "session_id": "0f6c1e4a-9b52-4c31-8a77-2d1e5b6c9a04",
+        "_ignoreReason": "system events carry no usage"
+      },
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_01AbCdEfGhIjKlMnOpQrStUv",
+          "usage": {
+            "input_tokens": 3120,
+            "cache_creation_input_tokens": 21442,
+            "cache_read_input_tokens": 118400,
+            "output_tokens": 1
+          }
+        },
+        "_ignoreReason": "per-step output_tokens is a placeholder; stream lines are never a usage source"
+      },
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_01AbCdEfGhIjKlMnOpQrStUv",
+          "usage": {
+            "input_tokens": 3120,
+            "cache_creation_input_tokens": 21442,
+            "cache_read_input_tokens": 118400,
+            "output_tokens": 1
+          }
+        },
+        "_ignoreReason": "parallel tool calls repeat one message id; summing the stream would double count"
+      }
+    ],
+    "terminalEvent": {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 412355,
+      "duration_api_ms": 288104,
+      "num_turns": 23,
+      "stop_reason": "end_turn",
+      "session_id": "0f6c1e4a-9b52-4c31-8a77-2d1e5b6c9a04",
+      "uuid": "6b0f2c8d-4a1e-4d90-9f33-77c2b5a1e0d8",
+      "total_cost_usd": 1.2993254,
+      "usage": {
+        "input_tokens": 486210,
+        "cache_creation_input_tokens": 21442,
+        "cache_read_input_tokens": 420102,
+        "output_tokens": 18928
+      },
+      "permission_denials": [],
+      "structured_output": { "verdict": "pass", "changedFiles": 7 }
+    },
+    "note": "total_cost_usd is stored verbatim and is never recomputed or validated by Loopmill; the value here is illustrative."
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": { "runId": "run_01JQ8Z9K7M4P2X6R0T5V3W1H9C", "cycleIndex": 1, "nodeId": "implement", "attempt": 1 },
+        "usage": {
+          "runtime": "claude-code",
+          "model": "claude-sonnet-5",
+          "freshInputTokens": 486210,
+          "cacheWriteTokens": 21442,
+          "cacheReadTokens": 420102,
+          "outputTokens": 18928,
+          "reasoningTokens": null,
+          "totalInputTokens": 927754,
+          "totalTokens": 946682,
+          "provenance": "reported",
+          "provenanceNote": "result.usage; modelUsage absent, so no subagent tokens exist to fold in",
+          "source": { "runtimeVersion": "2.1.261", "eventKind": "result" },
+          "complete": true,
+          "usageBasis": "result.usage",
+          "sessionRef": { "kind": "claude-session", "id": "0f6c1e4a-9b52-4c31-8a77-2d1e5b6c9a04" },
+          "usageAtAttemptStart": null,
+          "listPriceEquivalentUsd": 1.2993254,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": 927754,
+      "totalTokens": 946682,
+      "provenance": "reported",
+      "measured": true
+    },
+    "coverage": { "agentExecutions": 1, "measuredExecutions": 1, "coverage": 1.0, "unmeasured": [] },
+    "display": {
+      "measuredTokens": "946,682",
+      "usageCoverage": "1/1 (100%)",
+      "cacheReadShare": "45%"
+    },
+    "derivedViews": {
+      "totalInputTokens": 927754,
+      "totalTokens": 946682,
+      "newTokens": 526580,
+      "effectiveTokens": { "weightingProfileId": "loopmill-eq-v1", "value": 573951, "unit": "eq", "provenance": "estimated" }
+    }
+  },
+  "assertsInvariants": ["I1", "I2", "I3", "I6", "I7", "I8", "I9", "I12", "I17"]
+}
