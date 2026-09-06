@@ -1,0 +1,388 @@
+{
+  "$comment": "Machine-readable form of docs/spec/state-machine.md. The two files are asserted to agree (invariant I-30). Row ids match the R-/N-/A- ids in section 4 of the specification.",
+  "schemaVersion": "1.0.0",
+  "spec": "docs/spec/state-machine.md",
+  "specVersion": "v0.5",
+  "updatedAt": "2026-09-06",
+
+  "policyDefaults": {
+    "maxAttempts": 2,
+    "maxIterationsRequired": true,
+    "maxRuntimeMs": 14400000,
+    "maxStepsPerRun": 200,
+    "maxQuotaParks": 3,
+    "dispatchGraceSeconds": 120,
+    "leaseExtensionSeconds": 300,
+    "pendingGraceSeconds": 60,
+    "quotaJitterSeconds": 60,
+    "noProgressStreakLimit": 2,
+    "casPushRetries": 5
+  },
+
+  "enums": {
+    "runState": [
+      "PENDING", "RUNNING", "WAITING_HUMAN", "WAITING_FOR_QUOTA", "WAITING_OBSERVED", "INTERRUPTED",
+      "SUCCEEDED", "FAILED", "CANCELLED", "MAX_ITERATIONS_EXCEEDED", "BUDGET_EXCEEDED", "EXPIRED", "SKIPPED"
+    ],
+    "runStateTerminal": [
+      "SUCCEEDED", "FAILED", "CANCELLED", "MAX_ITERATIONS_EXCEEDED", "BUDGET_EXCEEDED", "EXPIRED", "SKIPPED"
+    ],
+    "nodeExecutionState": [
+      "PENDING", "DISPATCHED", "RUNNING", "OBSERVING", "WAITING_HUMAN",
+      "SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SKIPPED", "NO_PROGRESS"
+    ],
+    "nodeExecutionStateTerminal": [
+      "SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SKIPPED", "NO_PROGRESS"
+    ],
+    "attemptState": ["DISPATCHED", "COMPLETED", "FAILED", "LOST"],
+    "attemptStateTerminal": ["COMPLETED", "FAILED", "LOST"],
+    "classification": ["SUCCESS", "FAILED", "QUOTA", "TIMEOUT", "CANCELLED", "LOST"],
+    "failureReason": [
+      "node_failed", "node_timed_out", "attempts_exhausted", "dispatch_failed", "artifact_invalid",
+      "observe_deadline", "condition_error", "schema_invalid", "no_progress_stalled",
+      "quota_unclassifiable", "quota_parks_exhausted", "human_rejected", "interrupted_abandoned",
+      "validation_error"
+    ],
+    "budgetKey": ["maxMeasuredTokens", "maxUnmeasuredExecutions", "maxStepsPerRun"],
+    "expiryReason": ["max_runtime", "human_timeout"],
+    "skipReason": ["dedupe", "min_interval", "runs_per_window"],
+    "cancelledBy": ["human", "platform", "timeout-escalation"],
+    "staleReason": [
+      "duplicate_event_id", "semantic_duplicate", "run_terminal", "run_not_started",
+      "run_already_started", "unknown_node", "stale_cycle", "future_cycle", "stale_attempt",
+      "future_attempt", "no_attempt_in_flight", "node_terminal", "approval_subject_mismatch",
+      "not_due", "lease_not_expired", "wrong_wait_state"
+    ],
+    "transitionResultKind": ["applied", "duplicate", "ignored-stale", "invalid"],
+    "actionType": ["dispatch", "request-approval", "observe", "wait", "finish"],
+    "producer": ["control-plane", "backend:<id>", "human", "trigger"],
+    "gateMode": ["environment-reviewers", "pull-request-review", "label"],
+    "matcherKind": ["comment-block", "file-in-diff", "cloud-status"],
+    "matcherOutcome": ["found_valid", "found_invalid"],
+    "onFailure": ["fail_run", "continue", "retry_edge:<edgeId>"],
+    "onReject": ["fail_run", "retry_edge:<edgeId>", "next:<nodeId>"],
+    "onInterrupted": ["retry", "ask"],
+    "resumeKind": ["due", "manual", "interrupted"],
+    "resumeDecision": ["retry", "skip", "fail"],
+    "leaseExpiredReason": ["attempt_deadline", "control_plane_lease", "observe_deadline"],
+    "timeoutCode": ["node_timeout", "observe_deadline", "human_timeout"],
+    "usageProvenance": ["reported", "derived", "estimated", "unavailable"]
+  },
+
+  "events": [
+    { "eventType": "run-requested",    "producers": ["trigger", "control-plane"], "inbound": true,  "emitted": false, "requires": ["trigger"],                                              "drives": ["run"] },
+    { "eventType": "run-started",      "producers": ["control-plane"],            "inbound": false, "emitted": true,  "requires": [],                                                       "drives": ["run"] },
+    { "eventType": "node-dispatched",  "producers": ["control-plane"],            "inbound": false, "emitted": true,  "requires": ["cycle", "nodeId", "attempt", "dispatch"],               "drives": ["run", "nodeExecution", "attempt"] },
+    { "eventType": "node-started",     "producers": ["backend:<id>"],             "inbound": true,  "emitted": false, "requires": ["cycle", "nodeId", "attempt"],                           "drives": ["nodeExecution", "attempt"] },
+    { "eventType": "node-completed",   "producers": ["backend:<id>", "control-plane"], "inbound": true, "emitted": true, "requires": ["cycle", "nodeId", "attempt", "result.status=SUCCESS"], "drives": ["run", "nodeExecution", "attempt"] },
+    { "eventType": "node-failed",      "producers": ["backend:<id>"],             "inbound": true,  "emitted": false, "requires": ["cycle", "nodeId", "attempt", "result.status", "error"], "drives": ["run", "nodeExecution", "attempt"] },
+    { "eventType": "node-timed-out",   "producers": ["backend:<id>", "control-plane"], "inbound": true, "emitted": true, "requires": ["cycle", "nodeId", "error.code"],                      "drives": ["run", "nodeExecution", "attempt"] },
+    { "eventType": "node-observed",    "producers": ["backend:observed"],         "inbound": true,  "emitted": false, "requires": ["cycle", "nodeId", "attempt", "matcher"],                "drives": ["run", "nodeExecution", "attempt"] },
+    { "eventType": "human-requested",  "producers": ["control-plane"],            "inbound": false, "emitted": true,  "requires": ["cycle", "nodeId", "attempt", "gate"],                   "drives": ["run", "nodeExecution"] },
+    { "eventType": "human-decided",    "producers": ["human"],                    "inbound": true,  "emitted": false, "requires": ["cycle", "nodeId", "decision", "subjectDigest", "actor"], "drives": ["run", "nodeExecution"] },
+    { "eventType": "quota-parked",     "producers": ["control-plane"],            "inbound": false, "emitted": true,  "requires": ["cycle", "nodeId", "attempt", "quota"],                  "drives": ["run"] },
+    { "eventType": "retry-edge-taken", "producers": ["control-plane"],            "inbound": false, "emitted": true,  "requires": ["edgeId", "fromNodeId", "toNodeId", "fromCycle", "toCycle", "traversals", "budgetConsumed"], "drives": ["run"] },
+    { "eventType": "run-finished",     "producers": ["control-plane"],            "inbound": false, "emitted": true,  "requires": ["outcome", "artifactRefs", "summary"],                   "drives": ["run"] },
+    { "eventType": "ignored-stale",    "producers": ["control-plane"],            "inbound": false, "emitted": true,  "requires": ["ignored", "reason"],                                    "drives": [] },
+    { "eventType": "dispatch-failed",  "producers": ["control-plane"],            "inbound": false, "emitted": true,  "requires": ["cycle", "nodeId", "attempt", "error"],                  "drives": ["run", "nodeExecution", "attempt"] },
+    { "eventType": "resumed",          "producers": ["human", "control-plane"],   "inbound": true,  "emitted": false, "requires": ["resume.kind"],                                          "drives": ["run"] },
+    { "eventType": "lease-expired",    "producers": ["control-plane"],            "inbound": true,  "emitted": true,  "requires": ["cycle", "nodeId", "attempt", "reason"],                 "drives": ["run", "nodeExecution", "attempt"] }
+  ],
+
+  "guards": {
+    "envelopeValid": "schema valid, producer allowed for eventType, loopId/loopVersion match the pinned run",
+    "loopValidates": "the pinned loop file passes `loopmill validate`",
+    "notDeduped": "no open change exists for trigger.dedupeKey",
+    "withinRateLimits": "minInterval and maxRunsPerWindow satisfied for the Loop",
+    "preDispatchOk": "preDispatch(node, cycleIndex, edge?) returns ok (ordered check, spec 11.2)",
+    "preDispatchBreach": "preDispatch returns a terminal Outcome",
+    "entryDispatchable": "the loop's entry node is neither a human node nor an observed-backend node",
+    "nodeIsHuman": "target node kind == 'human'",
+    "backendObserved": "target node's backend capability result == 'observed'",
+    "routeNext": "route(node, result) == next(nodeId)",
+    "routeEnd": "route(node, result) == end(label)",
+    "routeRetryEdge": "route(node, result) == retryEdge(edgeId)",
+    "iterationBudgetOk": "traversals[edgeId] < maxIterations[edgeId]",
+    "iterationBudgetExhausted": "traversals[edgeId] >= maxIterations[edgeId]",
+    "freeTraversalBudgetExhausted": "freeTraversals[edgeId] >= maxIterations[edgeId]",
+    "noProgressFires": "the NO_PROGRESS rule of spec 6.6 holds for this node execution",
+    "noProgressStreakBelowLimit": "noProgressStreak after this event < 2",
+    "noProgressStreakAtLimit": "noProgressStreak after this event >= 2",
+    "retryable": "chargedAttempts[cycle:nodeId] < node.maxAttempts AND backend.retryable == true",
+    "notRetryable": "NOT retryable",
+    "classifiedFailed": "error.classified == 'FAILED'",
+    "classifiedQuota": "error.classified == 'QUOTA'",
+    "classifiedCancelled": "error.classified == 'CANCELLED'",
+    "quotaResolvable": "quotaResetsAt is reported or derivable from the runtime's documented window",
+    "quotaUnresolvable": "NOT quotaResolvable",
+    "quotaParksAvailable": "quota.parks < policy.maxQuotaParks",
+    "quotaParksExhausted": "quota.parks >= policy.maxQuotaParks",
+    "structuredOutputValid": "declared structuredOutput schema validates the parsed result",
+    "structuredOutputInvalid": "NOT structuredOutputValid",
+    "onFailureFailRun": "node.onFailure == 'fail_run'",
+    "onFailureContinue": "node.onFailure == 'continue'",
+    "onFailureRetryEdge": "node.onFailure == 'retry_edge:<edgeId>'",
+    "onInterruptedRetry": "node.onInterrupted == 'retry'",
+    "onInterruptedAsk": "node.onInterrupted == 'ask'",
+    "effectsNone": "node.effects == 'none'",
+    "effectsExternal": "node.effects == 'external'",
+    "digestMatches": "event.subjectDigest == snapshot.pendingApproval.subject.digest",
+    "digestMismatch": "NOT digestMatches",
+    "decisionApprove": "event.decision == 'approve'",
+    "decisionReject": "event.decision == 'reject'",
+    "decisionCancel": "event.decision == 'cancel'",
+    "onRejectFailRun": "node.onReject == 'fail_run'",
+    "onRejectRetryEdge": "node.onReject == 'retry_edge:<edgeId>'",
+    "gateExpired": "ctx.now >= snapshot.pendingApproval.expiresAt",
+    "resumeDue": "resume.kind == 'due' AND ctx.now >= snapshot.quota.resumeDueAt",
+    "resumeNotDue": "resume.kind == 'due' AND ctx.now < snapshot.quota.resumeDueAt",
+    "resumeManual": "resume.kind == 'manual'",
+    "resumeDecisionRetry": "resume.decision == 'retry'",
+    "resumeDecisionSkip": "resume.decision == 'skip'",
+    "resumeDecisionFail": "resume.decision == 'fail'",
+    "matcherFoundValid": "matcher.outcome == 'found_valid'",
+    "matcherFoundInvalid": "matcher.outcome == 'found_invalid'",
+    "timeoutCodeNode": "error.code == 'node_timeout'",
+    "timeoutCodeObserve": "error.code == 'observe_deadline'",
+    "timeoutCodeHuman": "error.code == 'human_timeout'",
+    "controlPlaneLocal": "producer == 'control-plane' AND attempt == 0 (condition, end, synthetic)",
+    "attemptMatchesCurrent": "(cycle, nodeId, attempt) == snapshot.current",
+    "attemptDoesNotMatchCurrent": "NOT attemptMatchesCurrent",
+    "eventIdSeen": "event.eventId is in appliedEventIds, ignoredEventIds or emittedEventIds",
+    "producerNotAllowed": "producer is not in the allowlist for this eventType",
+    "leaseExpired": "snapshot.lease != null AND ctx.now >= snapshot.lease.expiresAt"
+  },
+
+  "preDispatchOrder": [
+    { "step": 1, "check": "traversals[edgeId] >= maxIterations[edgeId]",              "outcome": "MAX_ITERATIONS_EXCEEDED" },
+    { "step": 2, "check": "freeTraversals[edgeId] >= maxIterations[edgeId]",          "outcome": "MAX_ITERATIONS_EXCEEDED" },
+    { "step": 3, "check": "budget.measuredTokens >= budget.maxMeasuredTokens",        "outcome": "BUDGET_EXCEEDED(maxMeasuredTokens)" },
+    { "step": 4, "check": "budget.unmeasuredExecutions >= budget.maxUnmeasuredExecutions", "outcome": "BUDGET_EXCEEDED(maxUnmeasuredExecutions)" },
+    { "step": 5, "check": "budget.activeMs >= budget.maxRuntime",                     "outcome": "EXPIRED(max_runtime)" },
+    { "step": 6, "check": "budget.stepsUsed >= policy.maxStepsPerRun",                "outcome": "BUDGET_EXCEEDED(maxStepsPerRun)" },
+    { "step": 7, "check": "otherwise",                                                "outcome": "ok" }
+  ],
+
+  "classifyFailureOrder": [
+    { "order": 1, "result": "LOST",      "condition": "deadlineMissed (sweep only)" },
+    { "order": 2, "result": "TIMEOUT",   "condition": "timeoutFired, or error.code in [node_timeout, observe_deadline, human_timeout]" },
+    { "order": 3, "result": "CANCELLED", "condition": "cancelRequested and the process ended, or the backend reports a job cancel" },
+    { "order": 4, "result": "QUOTA",     "condition": "positive quota pattern match AND no retryable look-alike match" },
+    { "order": 5, "result": "SUCCESS",   "condition": "exit 0 AND well-formed terminal result AND structured output validates when declared" },
+    { "order": 6, "result": "FAILED",    "condition": "everything else (the ambiguity rule)" }
+  ],
+
+  "quotaPatterns": {
+    "claude-code": {
+      "positive": [
+        "/You've hit your (session|weekly|Opus|Sonnet|Fable|usage credit) limit/",
+        "stream event system/api_retry with error 'rate_limit' or 'billing_error' (leading indicator only)"
+      ],
+      "negative": [
+        "Server is temporarily limiting requests",
+        "Request rejected (429)"
+      ],
+      "resetSuffix": "· resets at <time>",
+      "derivedWindowSeconds": { "session limit": 18000, "weekly limit": 604800, "Opus limit": 604800, "Sonnet limit": 604800, "Fable limit": 604800 }
+    },
+    "codex": {
+      "positive": [
+        "case-insensitive substring 'usage limit' in turn.failed.error.message or error.message",
+        "app-server codexErrorInfo == 'usageLimitExceeded'"
+      ],
+      "negative": ["rate_limit_exceeded with willRetry true"],
+      "resetSource": "app-server RateLimitWindow.resetsAt (epoch seconds) and windowDurationMins",
+      "derivedWindowSeconds": { "primary": 18000, "secondary": 604800 }
+    }
+  },
+
+  "exitCodes": {
+    "loopmill step": {
+      "0": "handled: applied, duplicate, or ignored-stale",
+      "1": "unexpected error",
+      "2": "invalid envelope or invalid loop file",
+      "3": "state conflict not resolved after CAS retries",
+      "4": "backend dispatch failed (state records dispatch-failed)"
+    },
+    "loopmill run (local)": {
+      "0": "Run SUCCEEDED",
+      "1": "unexpected error",
+      "2": "invalid loop file or trigger input",
+      "3": "state conflict not resolved",
+      "4": "backend dispatch failed",
+      "10": "Run FAILED",
+      "11": "Run MAX_ITERATIONS_EXCEEDED",
+      "12": "Run BUDGET_EXCEEDED",
+      "13": "Run EXPIRED",
+      "14": "Run CANCELLED",
+      "15": "Run SKIPPED",
+      "20": "exited in WAITING_HUMAN",
+      "21": "exited in WAITING_FOR_QUOTA",
+      "22": "exited in WAITING_OBSERVED",
+      "23": "exited in INTERRUPTED"
+    }
+  },
+
+  "jobSummaryMapping": [
+    { "runState": "SUCCEEDED",               "headline": "Succeeded — <label>",                                    "conclusion": "success" },
+    { "runState": "FAILED",                  "headline": "Failed — <failureReason> at <nodeId> (cycle <n>)",        "conclusion": "failure" },
+    { "runState": "MAX_ITERATIONS_EXCEEDED", "headline": "Loop budget exhausted — <edgeId>, <traversals>/<max>",    "conclusion": "neutral" },
+    { "runState": "BUDGET_EXCEEDED",         "headline": "Budget exceeded — <budgetKey> (<observed>/<limit>)",      "conclusion": "neutral" },
+    { "runState": "EXPIRED",                 "headline": "Expired — <expiryReason>",                                "conclusion": "neutral" },
+    { "runState": "CANCELLED",               "headline": "Cancelled — by <by>",                                     "conclusion": "cancelled" },
+    { "runState": "SKIPPED",                 "headline": "Skipped — <skipReason>",                                  "conclusion": "neutral" }
+  ],
+
+  "machines": {
+    "run": {
+      "initial": "PENDING",
+      "states": {
+        "PENDING":                 { "terminal": false, "holdsLease": false, "clock": "active",  "definition": "Run record exists, loopVersion pinned, dedupe and rate checks passed; no node selected yet." },
+        "RUNNING":                 { "terminal": false, "holdsLease": true,  "clock": "active",  "definition": "Exactly one node execution is PENDING/DISPATCHED/RUNNING; the attempt lease is held." },
+        "WAITING_HUMAN":           { "terminal": false, "holdsLease": false, "clock": "wait",    "definition": "A human node awaits a decision; no lease; maxRuntime paused." },
+        "WAITING_FOR_QUOTA":       { "terminal": false, "holdsLease": false, "clock": "wait",    "definition": "Last attempt classified QUOTA with a quotaResetsAt; parked until resumeDueAt." },
+        "WAITING_OBSERVED":        { "terminal": false, "holdsLease": true,  "clock": "active",  "definition": "An observed-backend node was triggered; the artifact matcher runs until a deadline." },
+        "INTERRUPTED":             { "terminal": false, "holdsLease": false, "clock": "wait",    "definition": "The attempt lease expired and the node cannot be safely auto-re-dispatched." },
+        "SUCCEEDED":               { "terminal": true,  "outcome": "SUCCEEDED(end:<label>)",             "definition": "The Run reached an end node." },
+        "FAILED":                  { "terminal": true,  "outcome": "FAILED(<failureReason>)",            "definition": "A node failure propagated under onFailure: fail_run, or the loop stalled." },
+        "CANCELLED":               { "terminal": true,  "outcome": "CANCELLED(<by>)",                    "definition": "A human or the platform cancelled the Run or its in-flight job." },
+        "MAX_ITERATIONS_EXCEEDED": { "terminal": true,  "outcome": "MAX_ITERATIONS_EXCEEDED(<edgeId>,<traversals>/<max>)", "definition": "A Retry Edge would have been traversed beyond maxIterations. Never FAILED." },
+        "BUDGET_EXCEEDED":         { "terminal": true,  "outcome": "BUDGET_EXCEEDED(<budgetKey>)",       "definition": "A pre-dispatch budget check breached." },
+        "EXPIRED":                 { "terminal": true,  "outcome": "EXPIRED(<expiryReason>)",            "definition": "maxRuntime elapsed, or a human gate passed its timeout." },
+        "SKIPPED":                 { "terminal": true,  "outcome": "SKIPPED(<skipReason>)",              "definition": "Refused at request time: dedupe hit, or the Loop's rate limits forbid starting." }
+      }
+    },
+    "nodeExecution": {
+      "initial": "PENDING",
+      "states": {
+        "PENDING":       { "terminal": false, "definition": "Selected for this cycle (or un-parked from quota); no node-dispatched recorded for the pending attempt." },
+        "DISPATCHED":    { "terminal": false, "definition": "node-dispatched recorded; an Attempt is DISPATCHED." },
+        "RUNNING":       { "terminal": false, "definition": "node-started received; only streaming backends produce this." },
+        "OBSERVING":     { "terminal": false, "definition": "An observed backend was triggered; the matcher runs until observeDeadlineAt." },
+        "WAITING_HUMAN": { "terminal": false, "definition": "human-requested recorded, awaiting human-decided." },
+        "SUCCEEDED":     { "terminal": true,  "definition": "Produced a valid result, including a negative verdict." },
+        "FAILED":        { "terminal": true,  "definition": "Attempts exhausted with a FAILED classification, or a matcher/schema rejection." },
+        "TIMED_OUT":     { "terminal": true,  "definition": "The node timeout, observe deadline, or human gate timeout elapsed." },
+        "CANCELLED":     { "terminal": true,  "definition": "The attempt was cancelled." },
+        "SKIPPED":       { "terminal": true,  "definition": "Not executed: onFailure continue, resume --decision skip, or an untaken branch record." },
+        "NO_PROGRESS":   { "terminal": true,  "definition": "An agent node in a Retry Edge body produced a change-set byte-identical to its own previous cycle. Does not consume the iteration budget." }
+      }
+    },
+    "attempt": {
+      "initial": "DISPATCHED",
+      "states": {
+        "DISPATCHED": { "terminal": false, "definition": "node-dispatched recorded; owns the lease until deadlineAt." },
+        "COMPLETED":  { "terminal": true,  "definition": "Terminal report with classification SUCCESS." },
+        "FAILED":     { "terminal": true,  "definition": "Terminal report with classification FAILED, QUOTA, TIMEOUT or CANCELLED (classification is a field, not a state)." },
+        "LOST":       { "terminal": true,  "definition": "No completion by deadlineAt; the sweep declared it lost." }
+      }
+    }
+  },
+
+  "transitions": {
+    "run": [
+      { "id": "R-01", "from": null,                "event": "run-requested",   "guards": ["envelopeValid", "loopValidates", "notDeduped", "withinRateLimits"], "to": "PENDING",                 "emits": ["run-started"], "actions": [] },
+      { "id": "R-02", "from": null,                "event": "run-requested",   "guards": ["NOT notDeduped"],                                                     "to": "SKIPPED",                 "emits": ["run-finished(SKIPPED,dedupe)"], "actions": ["finish"] },
+      { "id": "R-03", "from": null,                "event": "run-requested",   "guards": ["NOT withinRateLimits"],                                               "to": "SKIPPED",                 "emits": ["run-finished(SKIPPED,min_interval|runs_per_window)"], "actions": ["finish"] },
+      { "id": "R-04", "from": null,                "event": "run-requested",   "guards": ["NOT loopValidates"],                                                  "to": null,                      "emits": [], "actions": [], "result": "invalid", "exitCode": 2 },
+      { "id": "R-05", "from": "PENDING",           "event": "run-started",     "guards": ["entryDispatchable", "preDispatchOk"],                                 "to": "RUNNING",                 "emits": ["node-dispatched"], "actions": ["dispatch"] },
+      { "id": "R-06", "from": "PENDING",           "event": "run-started",     "guards": ["nodeIsHuman"],                                                        "to": "WAITING_HUMAN",           "emits": ["human-requested"], "actions": ["request-approval"] },
+      { "id": "R-07", "from": "PENDING",           "event": "run-started",     "guards": ["backendObserved", "preDispatchOk"],                                   "to": "WAITING_OBSERVED",        "emits": ["node-dispatched"], "actions": ["observe"] },
+      { "id": "R-08", "from": "PENDING",           "event": "run-started",     "guards": ["preDispatchBreach"],                                                  "to": "<outcome.state>",         "emits": ["run-finished"], "actions": ["finish"] },
+      { "id": "R-09", "from": "RUNNING",           "event": "node-completed",  "guards": ["routeNext", "preDispatchOk", "NOT nodeIsHuman", "NOT backendObserved"], "to": "RUNNING",                "emits": ["node-dispatched"], "actions": ["dispatch"] },
+      { "id": "R-10", "from": "RUNNING",           "event": "node-completed",  "guards": ["routeNext", "nodeIsHuman"],                                           "to": "WAITING_HUMAN",           "emits": ["human-requested"], "actions": ["request-approval"] },
+      { "id": "R-11", "from": "RUNNING",           "event": "node-completed",  "guards": ["routeNext", "backendObserved", "preDispatchOk"],                      "to": "WAITING_OBSERVED",        "emits": ["node-dispatched"], "actions": ["observe"] },
+      { "id": "R-12", "from": "RUNNING",           "event": "node-completed",  "guards": ["routeEnd"],                                                           "to": "SUCCEEDED",               "emits": ["run-finished(SUCCEEDED,<label>)"], "actions": ["finish"] },
+      { "id": "R-13", "from": "RUNNING",           "event": "node-completed",  "guards": ["routeRetryEdge", "iterationBudgetOk", "preDispatchOk"],               "to": "RUNNING",                 "emits": ["retry-edge-taken(budgetConsumed=true)", "node-dispatched"], "actions": ["dispatch"] },
+      { "id": "R-14", "from": "RUNNING",           "event": "node-completed",  "guards": ["routeRetryEdge", "iterationBudgetExhausted"],                         "to": "MAX_ITERATIONS_EXCEEDED", "emits": ["run-finished(MAX_ITERATIONS_EXCEEDED)"], "actions": ["finish"] },
+      { "id": "R-15", "from": "RUNNING",           "event": "node-completed",  "guards": ["noProgressFires", "noProgressStreakBelowLimit", "NOT freeTraversalBudgetExhausted"], "to": "RUNNING",   "emits": ["retry-edge-taken(budgetConsumed=false)", "node-dispatched"], "actions": ["dispatch"] },
+      { "id": "R-16", "from": "RUNNING",           "event": "node-completed",  "guards": ["noProgressFires", "noProgressStreakAtLimit"],                         "to": "FAILED",                  "emits": ["run-finished(FAILED,no_progress_stalled)"], "actions": ["finish"] },
+      { "id": "R-17", "from": "RUNNING",           "event": "node-completed",  "guards": ["noProgressFires", "freeTraversalBudgetExhausted"],                    "to": "MAX_ITERATIONS_EXCEEDED", "emits": ["run-finished(MAX_ITERATIONS_EXCEEDED)"], "actions": ["finish"] },
+      { "id": "R-18", "from": "RUNNING",           "event": "node-failed",     "guards": ["classifiedFailed", "retryable"],                                      "to": "RUNNING",                 "emits": ["node-dispatched(attempt+1)"], "actions": ["dispatch"] },
+      { "id": "R-19", "from": "RUNNING",           "event": "node-failed",     "guards": ["classifiedFailed", "notRetryable", "onFailureFailRun"],               "to": "FAILED",                  "emits": ["run-finished(FAILED,node_failed)"], "actions": ["finish"] },
+      { "id": "R-20", "from": "RUNNING",           "event": "node-failed",     "guards": ["classifiedFailed", "notRetryable", "onFailureContinue", "preDispatchOk"], "to": "RUNNING",              "emits": ["node-completed(SKIPPED,control-plane)", "node-dispatched"], "actions": ["dispatch"] },
+      { "id": "R-21", "from": "RUNNING",           "event": "node-failed",     "guards": ["classifiedFailed", "notRetryable", "onFailureRetryEdge", "iterationBudgetOk"], "to": "RUNNING",         "emits": ["retry-edge-taken(budgetConsumed=true)", "node-dispatched"], "actions": ["dispatch"] },
+      { "id": "R-22", "from": "RUNNING",           "event": "node-failed",     "guards": ["classifiedFailed", "notRetryable", "onFailureRetryEdge", "iterationBudgetExhausted"], "to": "MAX_ITERATIONS_EXCEEDED", "emits": ["run-finished(MAX_ITERATIONS_EXCEEDED)"], "actions": ["finish"] },
+      { "id": "R-23", "from": "RUNNING",           "event": "node-failed",     "guards": ["classifiedQuota", "quotaResolvable", "quotaParksAvailable"],          "to": "WAITING_FOR_QUOTA",       "emits": ["quota-parked"], "actions": ["wait"] },
+      { "id": "R-24", "from": "RUNNING",           "event": "node-failed",     "guards": ["classifiedQuota", "quotaUnresolvable"],                               "to": "FAILED",                  "emits": ["run-finished(FAILED,quota_unclassifiable)"], "actions": ["finish"] },
+      { "id": "R-25", "from": "RUNNING",           "event": "node-failed",     "guards": ["classifiedQuota", "quotaParksExhausted"],                             "to": "FAILED",                  "emits": ["run-finished(FAILED,quota_parks_exhausted)"], "actions": ["finish"] },
+      { "id": "R-26", "from": "RUNNING",           "event": "node-failed",     "guards": ["classifiedCancelled"],                                                "to": "CANCELLED",               "emits": ["run-finished(CANCELLED,platform)"], "actions": ["finish"] },
+      { "id": "R-27", "from": "RUNNING",           "event": "node-timed-out",  "guards": ["timeoutCodeNode", "retryable", "effectsNone"],                        "to": "RUNNING",                 "emits": ["node-dispatched(attempt+1)"], "actions": ["dispatch"] },
+      { "id": "R-28", "from": "RUNNING",           "event": "node-timed-out",  "guards": ["timeoutCodeNode", "onFailureFailRun"],                                "to": "FAILED",                  "emits": ["run-finished(FAILED,node_timed_out)"], "actions": ["finish"] },
+      { "id": "R-29", "from": "RUNNING",           "event": "dispatch-failed", "guards": ["retryable"],                                                          "to": "RUNNING",                 "emits": ["node-dispatched(attempt+1)"], "actions": ["dispatch"] },
+      { "id": "R-30", "from": "RUNNING",           "event": "dispatch-failed", "guards": ["notRetryable"],                                                       "to": "FAILED",                  "emits": ["run-finished(FAILED,dispatch_failed)"], "actions": ["finish"] },
+      { "id": "R-31", "from": "RUNNING",           "event": "lease-expired",   "guards": ["onInterruptedRetry", "retryable"],                                    "to": "RUNNING",                 "emits": ["node-dispatched(attempt+1)"], "actions": ["dispatch"] },
+      { "id": "R-32", "from": "RUNNING",           "event": "lease-expired",   "guards": ["onInterruptedAsk OR (notRetryable AND effectsExternal)"],             "to": "INTERRUPTED",             "emits": [], "actions": ["wait"] },
+      { "id": "R-33", "from": "RUNNING",           "event": "lease-expired",   "guards": ["notRetryable", "effectsNone", "onFailureFailRun"],                    "to": "FAILED",                  "emits": ["run-finished(FAILED,attempts_exhausted)"], "actions": ["finish"] },
+      { "id": "R-34", "from": "WAITING_HUMAN",     "event": "human-decided",   "guards": ["decisionApprove", "digestMatches", "routeNext", "preDispatchOk"],      "to": "RUNNING",                 "emits": ["node-completed(control-plane)", "node-dispatched"], "actions": ["dispatch"] },
+      { "id": "R-35", "from": "WAITING_HUMAN",     "event": "human-decided",   "guards": ["decisionReject", "digestMatches", "onRejectFailRun"],                 "to": "FAILED",                  "emits": ["node-completed(control-plane)", "run-finished(FAILED,human_rejected)"], "actions": ["finish"] },
+      { "id": "R-36", "from": "WAITING_HUMAN",     "event": "human-decided",   "guards": ["decisionReject", "digestMatches", "onRejectRetryEdge", "iterationBudgetOk"], "to": "RUNNING",           "emits": ["node-completed(control-plane)", "retry-edge-taken(budgetConsumed=true)", "node-dispatched"], "actions": ["dispatch"] },
+      { "id": "R-37", "from": "WAITING_HUMAN",     "event": "human-decided",   "guards": ["decisionCancel", "digestMatches"],                                    "to": "CANCELLED",               "emits": ["node-completed(CANCELLED)", "run-finished(CANCELLED,human)"], "actions": ["finish"] },
+      { "id": "R-38", "from": "WAITING_HUMAN",     "event": "human-decided",   "guards": ["digestMismatch"],                                                     "to": "WAITING_HUMAN",           "emits": ["ignored-stale(approval_subject_mismatch)"], "actions": [], "result": "ignored-stale" },
+      { "id": "R-39", "from": "WAITING_HUMAN",     "event": "node-timed-out",  "guards": ["timeoutCodeHuman", "gateExpired"],                                    "to": "EXPIRED",                 "emits": ["run-finished(EXPIRED,human_timeout)"], "actions": ["finish"] },
+      { "id": "R-40", "from": "WAITING_FOR_QUOTA", "event": "resumed",         "guards": ["resumeDue", "preDispatchOk"],                                         "to": "RUNNING",                 "emits": ["node-dispatched(attempt+1)"], "actions": ["dispatch"] },
+      { "id": "R-41", "from": "WAITING_FOR_QUOTA", "event": "resumed",         "guards": ["resumeManual", "preDispatchOk"],                                      "to": "RUNNING",                 "emits": ["node-dispatched(attempt+1)"], "actions": ["dispatch"] },
+      { "id": "R-42", "from": "WAITING_FOR_QUOTA", "event": "resumed",         "guards": ["resumeNotDue"],                                                       "to": "WAITING_FOR_QUOTA",       "emits": ["ignored-stale(not_due)"], "actions": [], "result": "ignored-stale" },
+      { "id": "R-43", "from": "WAITING_OBSERVED",  "event": "node-observed",   "guards": ["matcherFoundValid"],                                                  "to": "<R-09..R-17 fan-out>",    "emits": ["<per fan-out>"], "actions": ["<per fan-out>"] },
+      { "id": "R-44", "from": "WAITING_OBSERVED",  "event": "node-observed",   "guards": ["matcherFoundInvalid", "retryable"],                                   "to": "WAITING_OBSERVED",        "emits": ["node-dispatched(attempt+1)"], "actions": ["observe"] },
+      { "id": "R-45", "from": "WAITING_OBSERVED",  "event": "node-observed",   "guards": ["matcherFoundInvalid", "notRetryable", "onFailureFailRun"],            "to": "FAILED",                  "emits": ["run-finished(FAILED,artifact_invalid)"], "actions": ["finish"] },
+      { "id": "R-46", "from": "WAITING_OBSERVED",  "event": "node-timed-out",  "guards": ["timeoutCodeObserve", "retryable"],                                    "to": "WAITING_OBSERVED",        "emits": ["node-dispatched(attempt+1)"], "actions": ["observe"] },
+      { "id": "R-47", "from": "WAITING_OBSERVED",  "event": "node-timed-out",  "guards": ["timeoutCodeObserve", "notRetryable", "onFailureFailRun"],             "to": "FAILED",                  "emits": ["run-finished(FAILED,observe_deadline)"], "actions": ["finish"] },
+      { "id": "R-48", "from": "INTERRUPTED",       "event": "resumed",         "guards": ["resumeDecisionRetry", "preDispatchOk"],                               "to": "RUNNING",                 "emits": ["node-dispatched(attempt+1)"], "actions": ["dispatch"] },
+      { "id": "R-49", "from": "INTERRUPTED",       "event": "resumed",         "guards": ["resumeDecisionSkip", "routeNext"],                                    "to": "RUNNING",                 "emits": ["node-completed(SKIPPED,control-plane)", "node-dispatched"], "actions": ["dispatch"] },
+      { "id": "R-50", "from": "INTERRUPTED",       "event": "resumed",         "guards": ["resumeDecisionFail"],                                                 "to": "FAILED",                  "emits": ["run-finished(FAILED,interrupted_abandoned)"], "actions": ["finish"] },
+      { "id": "R-51", "from": ["RUNNING", "WAITING_HUMAN", "WAITING_FOR_QUOTA", "WAITING_OBSERVED", "INTERRUPTED"], "event": "run-requested", "guards": [],      "to": "<unchanged>",             "emits": ["ignored-stale(run_already_started)"], "actions": [], "result": "ignored-stale" },
+      { "id": "R-52", "from": "PENDING",           "event": "<any except run-started, run-finished>", "guards": [],                                              "to": "<unchanged>",             "emits": ["ignored-stale(run_not_started)"], "actions": [], "result": "ignored-stale" },
+      { "id": "R-53", "from": "<any terminal>",    "event": "<any>",           "guards": ["NOT eventIdSeen"],                                                    "to": "<unchanged>",             "emits": ["ignored-stale(run_terminal)"], "actions": [], "result": "ignored-stale" },
+      { "id": "R-54", "from": "<any>",             "event": "<any>",           "guards": ["eventIdSeen"],                                                        "to": "<unchanged>",             "emits": [], "actions": [], "result": "duplicate", "exitCode": 0, "persist": false },
+      { "id": "R-55", "from": "<any non-terminal>", "event": "<any per-node event>", "guards": ["attemptDoesNotMatchCurrent"],                                    "to": "<unchanged>",             "emits": ["ignored-stale(<stale reason>)"], "actions": [], "result": "ignored-stale" },
+      { "id": "R-56", "from": "<any>",             "event": "<control-plane-only event>", "guards": ["producerNotAllowed"],                                       "to": "<unchanged>",             "emits": [], "actions": [], "result": "invalid", "exitCode": 2 }
+    ],
+    "nodeExecution": [
+      { "id": "N-01", "from": null,                                        "event": "node-dispatched", "guards": ["NOT backendObserved"],                                   "to": "DISPATCHED",              "actions": ["dispatch"] },
+      { "id": "N-02", "from": null,                                        "event": "node-dispatched", "guards": ["backendObserved"],                                       "to": "OBSERVING",               "actions": ["observe"] },
+      { "id": "N-03", "from": null,                                        "event": "human-requested", "guards": ["nodeIsHuman"],                                           "to": "WAITING_HUMAN",           "actions": ["request-approval"] },
+      { "id": "N-04", "from": null,                                        "event": "node-completed",  "guards": ["controlPlaneLocal"],                                     "to": "SUCCEEDED",               "actions": [] },
+      { "id": "N-05", "from": null,                                        "event": "node-completed",  "guards": ["controlPlaneLocal", "result.structured.skipped == true"], "to": "SKIPPED",                "actions": [] },
+      { "id": "N-06", "from": "PENDING",                                   "event": "node-dispatched", "guards": ["quota resume OR sweep re-drive"],                        "to": "DISPATCHED|OBSERVING",    "actions": ["dispatch", "observe"] },
+      { "id": "N-07", "from": "DISPATCHED",                                "event": "node-started",    "guards": ["attemptMatchesCurrent"],                                 "to": "RUNNING",                 "actions": ["heartbeat"] },
+      { "id": "N-08", "from": ["DISPATCHED", "RUNNING"],                   "event": "node-completed",  "guards": ["structuredOutputValid", "NOT noProgressFires"],          "to": "SUCCEEDED",               "actions": [] },
+      { "id": "N-09", "from": ["DISPATCHED", "RUNNING"],                   "event": "node-completed",  "guards": ["structuredOutputValid", "noProgressFires"],              "to": "NO_PROGRESS",             "actions": [] },
+      { "id": "N-10", "from": ["DISPATCHED", "RUNNING"],                   "event": "node-completed",  "guards": ["structuredOutputInvalid"],                               "to": "FAILED",                  "failureReason": "schema_invalid", "actions": [] },
+      { "id": "N-11", "from": ["DISPATCHED", "RUNNING"],                   "event": "node-failed",     "guards": ["classifiedFailed", "retryable"],                         "to": "DISPATCHED",              "attemptDelta": 1, "actions": ["dispatch"] },
+      { "id": "N-12", "from": ["DISPATCHED", "RUNNING"],                   "event": "node-failed",     "guards": ["classifiedFailed", "notRetryable"],                      "to": "FAILED",                  "failureReason": "node_failed", "actions": [] },
+      { "id": "N-13", "from": ["DISPATCHED", "RUNNING"],                   "event": "node-failed",     "guards": ["classifiedQuota", "quotaResolvable", "quotaParksAvailable"], "to": "PENDING",              "actions": ["wait"] },
+      { "id": "N-14", "from": ["DISPATCHED", "RUNNING"],                   "event": "node-failed",     "guards": ["classifiedCancelled"],                                   "to": "CANCELLED",               "actions": [] },
+      { "id": "N-15", "from": ["DISPATCHED", "RUNNING"],                   "event": "node-timed-out",  "guards": ["timeoutCodeNode", "notRetryable"],                       "to": "TIMED_OUT",               "actions": [] },
+      { "id": "N-16", "from": ["DISPATCHED", "RUNNING"],                   "event": "node-timed-out",  "guards": ["timeoutCodeNode", "retryable", "effectsNone"],           "to": "DISPATCHED",              "attemptDelta": 1, "actions": ["dispatch"] },
+      { "id": "N-17", "from": ["DISPATCHED", "RUNNING", "OBSERVING"],      "event": "lease-expired",   "guards": ["retryable", "onInterruptedRetry"],                       "to": "DISPATCHED|OBSERVING",    "attemptDelta": 1, "actions": ["dispatch", "observe"] },
+      { "id": "N-18", "from": ["DISPATCHED", "RUNNING", "OBSERVING"],      "event": "lease-expired",   "guards": ["notRetryable", "effectsNone"],                           "to": "FAILED",                  "failureReason": "attempts_exhausted", "actions": [] },
+      { "id": "N-19", "from": ["DISPATCHED", "RUNNING", "OBSERVING"],      "event": "lease-expired",   "guards": ["onInterruptedAsk"],                                      "to": "<unchanged, frozen>",     "actions": [], "runEffect": "INTERRUPTED" },
+      { "id": "N-20", "from": "DISPATCHED",                                "event": "dispatch-failed", "guards": ["retryable"],                                             "to": "DISPATCHED",              "attemptDelta": 1, "actions": ["dispatch"] },
+      { "id": "N-21", "from": "DISPATCHED",                                "event": "dispatch-failed", "guards": ["notRetryable"],                                          "to": "FAILED",                  "failureReason": "dispatch_failed", "actions": [] },
+      { "id": "N-22", "from": "OBSERVING",                                 "event": "node-observed",   "guards": ["matcherFoundValid", "structuredOutputValid"],            "to": "SUCCEEDED",               "actions": [] },
+      { "id": "N-23", "from": "OBSERVING",                                 "event": "node-observed",   "guards": ["matcherFoundInvalid OR structuredOutputInvalid", "notRetryable"], "to": "FAILED",          "failureReason": "artifact_invalid", "actions": [] },
+      { "id": "N-24", "from": "OBSERVING",                                 "event": "node-observed",   "guards": ["matcherFoundInvalid", "retryable"],                      "to": "OBSERVING",               "attemptDelta": 1, "actions": ["observe"] },
+      { "id": "N-25", "from": "OBSERVING",                                 "event": "node-timed-out",  "guards": ["timeoutCodeObserve", "notRetryable"],                    "to": "TIMED_OUT",               "actions": [] },
+      { "id": "N-26", "from": "WAITING_HUMAN",                             "event": "human-decided",   "guards": ["decisionApprove", "digestMatches"],                      "to": "SUCCEEDED",               "structured": { "decision": "approve" }, "actions": [] },
+      { "id": "N-27", "from": "WAITING_HUMAN",                             "event": "human-decided",   "guards": ["decisionReject", "digestMatches"],                       "to": "SUCCEEDED",               "structured": { "decision": "reject" }, "actions": [] },
+      { "id": "N-28", "from": "WAITING_HUMAN",                             "event": "human-decided",   "guards": ["decisionCancel", "digestMatches"],                       "to": "CANCELLED",               "actions": [] },
+      { "id": "N-29", "from": "WAITING_HUMAN",                             "event": "node-timed-out",  "guards": ["timeoutCodeHuman"],                                      "to": "TIMED_OUT",               "actions": [] },
+      { "id": "N-30", "from": "<any terminal>",                            "event": "<any>",           "guards": [],                                                        "to": "<unchanged>",             "emits": ["ignored-stale(node_terminal)"], "actions": [], "result": "ignored-stale" },
+      { "id": "N-31", "from": null,                                        "event": "<any except node-dispatched, human-requested, control-plane node-completed>", "guards": [], "to": "<unchanged>",       "emits": ["ignored-stale(no_attempt_in_flight)"], "actions": [], "result": "ignored-stale" }
+    ],
+    "attempt": [
+      { "id": "A-01", "from": null,             "event": "node-dispatched", "guards": ["attempt >= 1"],                                     "to": "DISPATCHED", "records": ["backendId", "runtimeId", "authMode", "dispatchedAt", "deadlineAt", "dedupeKey"] },
+      { "id": "A-02", "from": "DISPATCHED",     "event": "node-started",    "guards": ["attemptMatchesCurrent"],                            "to": "DISPATCHED", "records": ["startedAt", "runHandle", "lease.heartbeatAt"] },
+      { "id": "A-03", "from": "DISPATCHED",     "event": "node-completed",  "guards": ["attemptMatchesCurrent"],                            "to": "COMPLETED",  "classification": "SUCCESS", "records": ["usage", "artifactRefs", "filesChanged"] },
+      { "id": "A-04", "from": "DISPATCHED",     "event": "node-observed",   "guards": ["attemptMatchesCurrent", "matcherFoundValid"],       "to": "COMPLETED",  "classification": "SUCCESS", "records": ["usage.provenance=unavailable", "artifactRefs"] },
+      { "id": "A-05", "from": "DISPATCHED",     "event": "node-observed",   "guards": ["attemptMatchesCurrent", "matcherFoundInvalid"],     "to": "FAILED",     "classification": "FAILED",  "records": ["error.code=artifact_invalid"] },
+      { "id": "A-06", "from": "DISPATCHED",     "event": "node-failed",     "guards": ["attemptMatchesCurrent"],                            "to": "FAILED",     "classification": "FAILED|QUOTA|CANCELLED", "records": ["error", "usage if present"] },
+      { "id": "A-07", "from": "DISPATCHED",     "event": "node-timed-out",  "guards": ["attemptMatchesCurrent"],                            "to": "FAILED",     "classification": "TIMEOUT", "records": ["usage.provenance=unavailable"] },
+      { "id": "A-08", "from": "DISPATCHED",     "event": "dispatch-failed", "guards": ["attemptMatchesCurrent"],                            "to": "FAILED",     "classification": "FAILED",  "records": ["error.code=dispatch_failed"] },
+      { "id": "A-09", "from": "DISPATCHED",     "event": "lease-expired",   "guards": ["attemptMatchesCurrent", "leaseExpired"],            "to": "LOST",       "classification": "LOST",    "records": ["usage.provenance=unavailable", "complete=false"] },
+      { "id": "A-10", "from": "<any terminal>", "event": "<any control event>", "guards": [],                                                "to": "<unchanged>", "emits": ["ignored-stale(stale_attempt)"], "result": "ignored-stale" },
+      { "id": "A-11", "from": "<any terminal>", "event": "<any event carrying usage for this attempt>", "guards": ["the attempt has no usage record yet"], "to": "<unchanged>", "records": ["usage appended to the ledger only"], "result": "ignored-stale", "note": "the single permitted non-control effect of an ignored-stale event (spec 5.4, D-20)" }
+    ]
+  }
+}
