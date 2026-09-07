@@ -1347,6 +1347,17 @@ the reviewer refused because `review` does not dominate `implement` (`m1-plan.md
 after this run"). Building A25's schema without also wiring that hand-off would ship a shape nothing
 consumes; m2 is where both land together.
 
+**Decision (not in sheet), m2, 2026-09-08: what the seven nights run.** The cut-line above says "the
+reference loop", which cannot serve as written — the loop under `examples/` is content-site oriented
+and its `mode: label` gate needs the GitHub ingestion m2 is only now building. The maintainer decided
+the seven nights run a Loopmill-owned nightly loop against this repository, scoped to documentation and
+gated by `mode: pull-request-review`: the night opens a pull request and parks with no process; the
+maintainer reviews it on GitHub in the morning; the next `resume --due` ingests the approving review.
+The reason is that this is the approval flow most users will actually want, so the cut-line proves the
+product rather than a stand-in. The consequence is that turning `gh pr create`'s output into a `pr`
+artifactRef stops being an open item from m1 and becomes a prerequisite: a `pull-request-review` gate
+cannot poll a pull request it cannot name. `m2-plan.md` §1 records the rejected alternatives.
+
 ### 20.3 Acceptance criteria
 
 Each criterion is a test, not an aspiration; every one names the milestone that must satisfy it. The
