@@ -200,7 +200,7 @@ m1's conventions (`m1-plan.md` §3) carry over unchanged. Two additions:
 | W0a | The §2.2 defect: `store.sweep()` becomes a read-only scan, and `runSweep` releases the `locks` row only when the resulting snapshot holds no lease | — | **done 2026-09-08** (676 tests; the reproduction is now `test/driver/sweep.test.ts`'s third case, verified to fail against the old code) |
 | W1 | `loopmill resume <runId> [--decision retry\|skip\|fail]` and `resume --due`; its exit codes; the exit-23 resolution; the unreachable `cancel` decision | W0a | not started |
 | W0b | The rest of `state-machine.md` §10.2: index the scan on the snapshot, and emit the bullets that have no producer (`human_timeout`, `max_runtime`, `resumed{due}`, stuck `PENDING`) | **W1** — reordered, see below | not started |
-| W2 | The `gh` read module; `pr` / `branch` / `issue` artifactRefs from the `local` backend; a `Subject.kind: "pr"` producer; `pull-request-review` gate ingestion | W1 | not started |
+| W2 | The `gh` read module; `pr` / `branch` / `issue` artifactRefs from the `local` backend; a `Subject.kind: "pr"` producer; `pull-request-review` gate ingestion (`label` is m3, §6 decision 1) | W1 | not started |
 | W3 | Measure `launchctl print` first (§2.5); then `doctor --scheduler` and the launchd user-agent unit with its environment snapshot; the loop↔unit identity convention | — (may run beside W2) | not started |
 | W4 | Cross-run budget at request time (`minInterval`, `maxRunsPerWindow`); dedupe/`SKIPPED` (A27); the run report and coverage gaps (A29, A32) | W0a, W2 | not started |
 
@@ -217,7 +217,7 @@ v0.6, so that bullet has no producer to write.
 
 The one thing W0a leaves genuinely undone is the index itself — the scan still enumerates `locks`
 rows, which is why it can only ever reach the lease bullet. That moves to W0b with the rest.
-| W5 | The A25 finding schema and the retry-feedback hand-off | W2, and decision 2 of §6 | not started |
+| W5 | The A25 finding schema, the loop-file amendment for a cycle-scoped reference, and the retry-feedback hand-off | W2 | not started |
 | W6 | The nightly loop file, then seven consecutive nights (the cut-line) | W1-W4 | not started |
 
 ## 5. Acceptance criteria this milestone must meet
@@ -228,25 +228,35 @@ red-team gate check under a real unattended run), A26 (human gates), A27 (dedupe
 and traceability, whose UI half is m3), A39 (`doctor --json`, whose full check list is m3). A25 is m2's
 as of the 2026-09-08 decision recorded in `mvp-design.md` §20.2.
 
-A26 says "in all three modes". Whether m2 satisfies that or defers `mode: label` is decision 1 below.
+A26 says "in all three modes"; per decision 1 in §6, m2 meets it for `cli` and `pull-request-review`,
+and `label` moves to m3.
 
-## 6. Open decisions
+## 6. Decisions taken
 
-1. **`mode: label`: build it in m2, or defer it?** The cut-line uses `pull-request-review`, so `label`
-   would ship exercised only by tests. It also cannot be built as specified: three frozen sources say an
-   approval is *adding* `loopmill:approve` (`loop-file.md:579`, `loop-file.schema.json:493`, and the
-   reference loop's own comment), while `envelope.md:656` maps the approval to *removing* a
-   `loopmill:hold` label that appears nowhere else in the repository. Building it therefore costs an
-   amendment to settle the contradiction plus a second ingestion path the seven nights never touch.
-   Deferring it means A26 is met in two modes of three at the end of m2.
-2. **How review findings reach the retried node (A25).** `review` does not dominate `implement`, so
-   `nodes.review.structured` is not a legal input of the node being retried (LM-VAL-014). Candidates: a
-   new cycle-scoped reference namespace for the previous cycle's review — additive to loop-file 0.6, so
-   an amendment, but explicit in the loop file and testable as a reference; or having the engine inject
-   the findings through the existing (currently dead) `retryHint` append-point — no amendment, but
-   invisible to the loop author and not expressible as a reference. Note that `state-machine.md` §6.6
-   already specifies `run.retryHint = "no_progress"` for a NO_PROGRESS retry and it is not implemented
-   as written, so this decision also settles an existing gap.
+**1. `mode: label` moves to m3 (maintainer, 2026-09-08).** The cut-line uses `pull-request-review`, so
+`label` would have shipped exercised only by tests, and it cannot be built as specified in any case:
+three frozen sources say an approval is *adding* `loopmill:approve` (`loop-file.md:579`,
+`loop-file.schema.json:493`, and the reference loop's own comment) while `envelope.md:656` maps it to
+*removing* a `loopmill:hold` label that appears nowhere else in the repository. The reason for
+deferring is m1's own evidence: five defects survived 619 passing tests and were found only by a dry
+run, a pre-flight and one live run, so a gate mode the cut-line never exercises carries exactly that
+risk — and building it would additionally spend an amendment settling a contradiction with no real
+consumer to settle it against. The cost accepted is that A26 is met in two modes of three at the end
+of m2, and that the reference loop under `examples/` stays unrunnable as written until m3.
+
+**2. A25's hand-off is a cycle-scoped reference, and pays for the amendment (maintainer, 2026-09-08).**
+`review` does not dominate `implement`, so `nodes.review.structured` is not a legal input of the node
+being retried (LM-VAL-014). The alternative considered was injecting the findings through the existing
+(currently dead) `retryHint` append-point, which needs no amendment but is invisible to the loop
+author, cannot be validated as a reference, and fails at run time rather than at `validate`. It was
+rejected because A25 does not stop at "the retry can see why the reviewer refused": it requires the
+next cycle to **record which finding ids it addressed**, which is a data flow the loop has to name.
+An appended prompt hint can carry the text but has nowhere to hang the ids, so it would satisfy the
+easier half of A25 and leave the half the criterion is actually about undone. W5 therefore amends
+loop-file 0.6 with a cycle-scoped reference form and reworks LM-VAL-014's wording so the dominance
+rule still says something true. Part of that cost is already owed either way: `state-machine.md` §6.6
+specifies `run.retryHint = "no_progress"` for a NO_PROGRESS retry and it is not implemented as
+written.
 
 Not decisions, recorded so they are not mistaken for them: exit code 23 is resolved as part of W1's
 `resume` design (`mvp-design.md` §7.3's own parenthetical says "only via `status` after a crash", and
