@@ -19,8 +19,9 @@ across vendors, and a record you can read afterwards.
 What Loopmill does not do: it does not run while the host is off (24/7 execution needs an always-on
 machine you manage), it does not host or relay vendor credentials, and it is not a managed cloud.
 
-Status: design phase (v0.6); the m0 contract freeze is recorded in `docs/design/m0-contract-freeze.md`
-(2026-09-06). No runtime code yet apart from spike prototypes under `spikes/`.
+Status: m1 implementation underway (v0.6); the m0 contract freeze is recorded in `docs/design/m0-contract-freeze.md`
+(2026-09-06). Runtime code lives under `src/` (CLI, driver, store, local backend), registered as the
+`loopmill` executable in `package.json`; spike prototypes remain under `spikes/`.
 
 ## Documents
 
@@ -28,7 +29,7 @@ Status: design phase (v0.6); the m0 contract freeze is recorded in `docs/design/
 |---|---|
 | `docs/design/mvp-design.md` | MVP design v0.6 (contracts, schemas, state transitions) |
 | `docs/design/CHANGELOG-v0.6.md` | What changed from v0.5 and why |
-| `docs/design/m0-contract-freeze.md` | The m0 contract freeze (2026-09-06): what is frozen, at which version, on what evidence; the STOP evaluations; the decisions awaiting the maintainer; the amendment rule |
+| `docs/design/m0-contract-freeze.md` | The m0 contract freeze (2026-09-06): what is frozen, at which version, on what evidence; the STOP evaluations; the five decisions, confirmed by the maintainer on 2026-09-06; the amendment rule |
 | `docs/adr/ADR-002-local-self-hosted-execution.md` | The architecture decision: execute on a user-managed host; GitHub is the repository and collaboration surface, not the control plane |
 | `docs/adr/ADR-001-event-driven-control-plane.md` | The superseded v0.5 decision (GitHub-hosted control plane); kept for its context and its still-valid parts |
 | `docs/spec/loop-file.md`, `docs/spec/loop-file.schema.json` | Loop definition format and JSON Schema |
