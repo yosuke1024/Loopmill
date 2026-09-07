@@ -29,7 +29,7 @@ import {
   type Step,
 } from "../fixtures/engine/helpers.ts";
 import { REFERENCE_LOOP, NODES, RETRY_EDGE_ID } from "../fixtures/engine/reference-loop.ts";
-import { ONFAILURE_LOOP, ONFAILURE_CONTINUE_LOOP, NO_PROGRESS_LOOP, NO_PROGRESS_EDGE_ID } from "../fixtures/engine/onfailure-loop.ts";
+import { ONFAILURE_LOOP, ONFAILURE_CONTINUE_LOOP, COMMAND_ONFAILURE_CONTINUE_LOOP, NO_PROGRESS_LOOP, NO_PROGRESS_EDGE_ID } from "../fixtures/engine/onfailure-loop.ts";
 import { transition } from "../../src/engine/transition.ts";
 import { staleReasonFor } from "../../src/engine/stale.ts";
 import { initialSnapshot } from "../../src/engine/snapshot.ts";
@@ -401,6 +401,153 @@ test("R-20 / (N-05-shaped SKIPPED): node-failed exhausted, onFailure continue ->
       ["node-completed", "human-requested"],
     );
     assert.equal(last.emitted[0]!.result?.status, "skipped");
+  }
+});
+
+// -------------------------------------------------------------------------------------------
+// Regression coverage for the bug this task fixes: a `command` node's own `exitCode`/`stdout`
+// used to be discarded on every failure path (`finishNodeWithFailure` built its `updatedNode` as
+// a bare `{...existingNode, state, finishedAt}`, and its `onFailure: continue` branch threw the
+// whole record away in favour of a brand-new one from `recordControlPlaneCompletion`). R-20's own
+// test above covers the *routing* shape (SKIPPED -> next) on an *agent* node
+// (`ONFAILURE_CONTINUE_LOOP`'s own comment says so); these five cover the *data* the reference
+// loop's own `run-tests` / `review-verdict` pair actually depends on, on a real `command` node.
+// -------------------------------------------------------------------------------------------
+
+/** Drives `COMMAND_ONFAILURE_CONTINUE_LOOP` to `run-cmd` exhausting its 2 attempts with a
+ * non-zero exit code (`exitCode: 1`, plus a captured `stdout`), landing `verdict` — whose
+ * `expr: tests_exit == 0` has no `default` — at its `else` branch. */
+function driveCommandOnFailureContinue(): { steps: Step[]; snapshot: ReturnType<typeof drive>["snapshot"]; results: ReturnType<typeof drive>["results"] } {
+  const loop = COMMAND_ONFAILURE_CONTINUE_LOOP;
+  const steps: Step[] = [{ now: T0, event: runRequested(T0, { loopId: loop.slug, loopVersion: loop.loopVersion }) }];
+  steps.push({
+    now: "2026-09-06T06:05:00.000Z",
+    event: nodeFailed("2026-09-06T06:05:00.000Z", {
+      cycle: 0,
+      nodeId: "run-cmd",
+      attempt: 1,
+      error: { code: "exit_1", message: "npm test exited with code 1", classified: "runtime_error" },
+      exitCode: 1,
+      loopId: loop.slug,
+      loopVersion: loop.loopVersion,
+    }),
+  });
+  steps.push({
+    now: "2026-09-06T06:10:00.000Z",
+    event: nodeFailed("2026-09-06T06:10:00.000Z", {
+      cycle: 0,
+      nodeId: "run-cmd",
+      attempt: 2,
+      error: { code: "exit_1", message: "npm test exited with code 1 (again)", classified: "runtime_error" },
+      exitCode: 1,
+      structured: { stdout: "FAIL packages/core/retry-edge.test.ts\n3 failing" },
+      loopId: loop.slug,
+      loopVersion: loop.loopVersion,
+    }),
+    expectKind: "applied",
+  });
+  const { snapshot, results } = drive(steps, loop);
+  return { steps, snapshot, results };
+}
+
+test("m1 fix 1/5: command node, onFailure:continue, exits non-zero -> a downstream condition reading nodes.<id>.exitCode (no default) takes the else branch, not FAILED(condition_error)", () => {
+  const { snapshot } = driveCommandOnFailureContinue();
+  assert.notEqual(snapshot.status, "FAILED", `expected the Run to reach an end node, not FAILED; outcome was ${JSON.stringify(snapshot.outcome)}`);
+  assert.equal(snapshot.status, "SUCCEEDED");
+  assert.deepEqual(snapshot.outcome, { state: "SUCCEEDED", label: "dirty" }, "verdict's else branch (end-dirty) is the branch a nonzero exit code must take");
+});
+
+test("m1 fix 2/5: the failed command's stdout is still readable through nodes.<id>.stdout after onFailure:continue", () => {
+  const { snapshot } = driveCommandOnFailureContinue();
+  assert.equal(snapshot.nodes["0:run-cmd"]?.stdout, "FAIL packages/core/retry-edge.test.ts\n3 failing");
+  assert.equal(snapshot.nodes["0:run-cmd"]?.exitCode, 1);
+});
+
+test("m1 fix 3/5: the SKIPPED record keeps the real startedAt and attemptsUsed, not ctx.now and 0", () => {
+  const { snapshot } = driveCommandOnFailureContinue();
+  const record = snapshot.nodes["0:run-cmd"];
+  assert.equal(record?.state, "SKIPPED");
+  assert.equal(record?.startedAt, T0, "startedAt must be the first dispatch's own time, not the time onFailure:continue happened to run");
+  assert.equal(record?.attemptsUsed, 2, "attemptsUsed must be the real attempt count (2 of maxAttempts:2), not the 0 a fresh synthetic record would carry");
+  assert.equal(record?.finishedAt, "2026-09-06T06:10:00.000Z");
+});
+
+test("m1 fix 4/5: the AttemptRecord of a terminally failed node keeps error and exitCode", () => {
+  const { snapshot } = driveCommandOnFailureContinue();
+  const attempt = snapshot.attempts["0:run-cmd:2"];
+  assert.ok(attempt, "attempt 2's record must exist");
+  assert.equal(attempt?.state, "FAILED");
+  assert.equal(attempt?.exitCode, 1);
+  assert.deepEqual(attempt?.error, { code: "exit_1", message: "npm test exited with code 1 (again)", classified: "runtime_error" });
+});
+
+test("m1 fix 5/5 (regression, reference loop shape): run-tests fails onFailure:continue -> SKIPPED; review-verdict reads its exitCode and takes the retry edge, not FAILED(condition_error)", () => {
+  const { steps } = baselineAtImplement(); // implement dispatched, cycle 1 attempt 1
+  steps.push({
+    now: "2026-09-06T06:15:00.000Z",
+    event: nodeCompleted("2026-09-06T06:15:00.000Z", {
+      cycle: 1,
+      nodeId: NODES.implement,
+      attempt: 1,
+      result: { status: "succeeded", structured: { changed: true, summary: "fixed the bug" } },
+      artifactRefs: [{ kind: "file", ref: "a.ts", digest: "sha256:" + "1".repeat(64) }],
+      usage: wireUsage(fullUsage()),
+    }),
+  });
+  steps.push({
+    now: "2026-09-06T06:20:00.000Z",
+    event: nodeFailed("2026-09-06T06:20:00.000Z", {
+      cycle: 1,
+      nodeId: NODES.runTests,
+      attempt: 1,
+      error: { code: "exit_1", message: "npm test exited with code 1", classified: "runtime_error" },
+      exitCode: 1,
+    }),
+  });
+  steps.push({
+    now: "2026-09-06T06:25:00.000Z",
+    event: nodeFailed("2026-09-06T06:25:00.000Z", {
+      cycle: 1,
+      nodeId: NODES.runTests,
+      attempt: 2,
+      error: { code: "exit_1", message: "npm test exited with code 1 (again)", classified: "runtime_error" },
+      exitCode: 1,
+      structured: { stdout: "3 failing tests in packages/core" },
+    }),
+  });
+  steps.push({
+    now: "2026-09-06T06:30:00.000Z",
+    event: nodeCompleted("2026-09-06T06:30:00.000Z", {
+      cycle: 1,
+      nodeId: NODES.reviewChanges,
+      attempt: 1,
+      result: { status: "succeeded", structured: { approved: true, reasons: "looks good" } },
+      usage: wireUsage(fullUsage()),
+    }),
+    expectKind: "applied",
+  });
+  const { snapshot, results } = drive(steps);
+
+  // run-tests itself: SKIPPED (onFailure:continue), carrying the real exit code forward.
+  assert.equal(snapshot.nodes["1:run-tests"]?.state, "SKIPPED");
+  assert.equal(snapshot.nodes["1:run-tests"]?.exitCode, 1);
+
+  // The Run must not have stopped at review-verdict with condition_error (the bug this test
+  // guards against: a `null` exitCode with no `default` is an unresolved_reference).
+  assert.notEqual(snapshot.status, "FAILED", `outcome was ${JSON.stringify(snapshot.outcome)}`);
+  assert.equal(snapshot.status, "RUNNING", "review-verdict's else branch (tests_exit != 0) takes the retry edge back to implement");
+  assert.deepEqual(snapshot.traversals, { [RETRY_EDGE_ID]: 1 });
+  assert.equal(snapshot.cycleIndex, 2);
+  assert.equal(snapshot.current?.nodeId, NODES.implement);
+  assert.equal(snapshot.current?.attempt, 1);
+
+  const last = results[results.length - 1]!;
+  assert.equal(last.kind, "applied");
+  if (last.kind === "applied") {
+    assert.deepEqual(
+      last.emitted.map((e) => e.eventType),
+      ["node-completed", "retry-edge-taken", "node-dispatched"],
+    );
   }
 });
 

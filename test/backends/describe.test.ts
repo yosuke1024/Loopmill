@@ -34,6 +34,18 @@ test("describe: an agent (claude-code) node's plan carries the rendered argv, cw
     assert.equal(plan.env["ANTHROPIC_API_KEY"], undefined);
     assert.ok(plan.notes.some((n) => n.includes("ANTHROPIC_API_KEY")));
 
+    // `implement` declares structuredOutput; claude-code's `--json-schema` takes the schema's own
+    // JSON text inline (measured against `claude --help` 2.1.263, see `adapters/claude-code.ts`),
+    // never a file path -- unlike codex's `--output-schema`, describe() never has to compute or
+    // touch a temp path for it, so the value here must parse as JSON, not resolve as a filesystem
+    // path.
+    const schemaAt = plan.argv.indexOf("--json-schema");
+    assert.notEqual(schemaAt, -1);
+    const schemaValue = plan.argv[schemaAt + 1]!;
+    assert.doesNotMatch(schemaValue, /^\//, "the --json-schema value must not look like an absolute file path");
+    const parsedSchema = JSON.parse(schemaValue) as { type: string };
+    assert.equal(parsedSchema.type, "object");
+
     // No process was spawned: no log files under this workspace's own (uniquely-named) logsDir.
     assert.ok(!existsSync(ws.layout.logsDir));
   } finally {

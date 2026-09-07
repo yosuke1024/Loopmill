@@ -90,6 +90,13 @@ export function nodeFailed(
     error: NonNullable<Envelope["error"]>;
     quotaResetsAt?: string;
     usage?: Envelope["usage"];
+    /** A command node's own observed output (state-machine.md §3.1 row 6: `result{status,
+     *  exitCode?}` — `structured` is additionally allowed by the generic `result` shape, and is
+     *  how a command's stdout travels per `src/types/state.ts`'s `NodeExecutionRecord.structured`
+     *  doc comment). Lets a test build the exact envelope shape `local/executor.ts` produces for a
+     *  failing `npm test`, without every call site re-deriving `result` by hand. */
+    exitCode?: number;
+    structured?: Record<string, import("../../../src/types/loop.ts").JsonValue>;
   } & LoopTarget,
 ): Envelope {
   const input: EnvelopeInput = {
@@ -98,7 +105,11 @@ export function nodeFailed(
     cycle: fields.cycle,
     nodeId: fields.nodeId,
     attempt: fields.attempt,
-    result: { status: fields.error.classified === "cancelled" ? "cancelled" : "failed" },
+    result: {
+      status: fields.error.classified === "cancelled" ? "cancelled" : "failed",
+      ...(fields.exitCode !== undefined ? { exitCode: fields.exitCode } : {}),
+      ...(fields.structured !== undefined ? { structured: fields.structured } : {}),
+    },
     error: fields.error,
   };
   if (fields.quotaResetsAt) input.quotaResetsAt = fields.quotaResetsAt;

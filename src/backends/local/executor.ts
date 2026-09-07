@@ -148,11 +148,15 @@ export class LocalDispatcher implements Dispatcher {
     try {
       const scalars = toScalarInputs(request.inputs);
       const prompt = this.#resolvePrompt(request, node, scalars);
-      const schemaPath = node.structuredOutput ? this.#schemaTempPath(request) : null;
-      argv =
-        node.runtime === "claude-code"
-          ? buildClaudeArgv(node, prompt, schemaPath)
-          : buildCodexArgv(node, prompt, schemaPath, this.#lastMessageTempPath(request), request.workspace.worktreePath);
+      if (node.runtime === "claude-code") {
+        // claude-code's `--json-schema` takes the schema's JSON text inline, not a path (see
+        // `adapters/claude-code.ts`'s `buildClaudeArgv` doc comment) -- no temp file to plan for.
+        const schemaJson = node.structuredOutput ? JSON.stringify(node.structuredOutput) : null;
+        argv = buildClaudeArgv(node, prompt, schemaJson);
+      } else {
+        const schemaPath = node.structuredOutput ? this.#codexSchemaTempPath(request) : null;
+        argv = buildCodexArgv(node, prompt, schemaPath, this.#lastMessageTempPath(request), request.workspace.worktreePath);
+      }
       argv[0] = node.runtime === "claude-code" ? this.#binaries.claude : this.#binaries.codex;
     } catch (err) {
       notes.push(`could not fully resolve this plan: ${err instanceof Error ? err.message : String(err)}`);
@@ -297,20 +301,24 @@ export class LocalDispatcher implements Dispatcher {
   ): Promise<RuntimeCompletion> {
     const prompt = this.#resolvePrompt(request, node, scalars);
 
-    let schemaPath: string | null = null;
-    if (node.structuredOutput) {
-      schemaPath = this.#schemaTempPath(request);
-      writeFileSync(schemaPath, JSON.stringify(node.structuredOutput), "utf8");
-    }
-
     const runtimeVersion = "unknown"; // Decision (not in sheet), m1 -- see the class doc comment.
     const cancelSequence = node.runtime === "claude-code" ? CLAUDE_CANCEL_SEQUENCE : CODEX_CANCEL_SEQUENCE;
 
+    // The two runtimes take a node's `structuredOutput` schema differently (measured against each
+    // CLI's own `--help`, see `adapters/claude-code.ts`'s `buildClaudeArgv` doc comment): claude's
+    // `--json-schema` wants the schema's JSON text inline, so no temp file is written for it here;
+    // codex's `--output-schema` genuinely wants a file path, so that temp file is still written.
     let argv: string[];
     if (node.runtime === "claude-code") {
-      argv = buildClaudeArgv(node, prompt, schemaPath);
+      const schemaJson = node.structuredOutput ? JSON.stringify(node.structuredOutput) : null;
+      argv = buildClaudeArgv(node, prompt, schemaJson);
       argv[0] = this.#binaries.claude;
     } else {
+      let schemaPath: string | null = null;
+      if (node.structuredOutput) {
+        schemaPath = this.#codexSchemaTempPath(request);
+        writeFileSync(schemaPath, JSON.stringify(node.structuredOutput), "utf8");
+      }
       const lastMessagePath = this.#lastMessageTempPath(request);
       argv = buildCodexArgv(node, prompt, schemaPath, lastMessagePath, request.workspace.worktreePath);
       argv[0] = this.#binaries.codex;
@@ -512,8 +520,11 @@ export class LocalDispatcher implements Dispatcher {
     return prompt;
   }
 
-  #schemaTempPath(request: DispatchRequest): string {
-    return join(tmpdir(), `loopmill-schema-${request.runId}-${request.cycleIndex}-${request.nodeId}-${request.attempt}.json`);
+  /** codex-only: `codex exec --output-schema` takes a file path (unlike claude-code's
+   * `--json-schema`, which takes the schema's JSON text inline -- see `adapters/claude-code.ts`'s
+   * `buildClaudeArgv` doc comment for the measured `--help` evidence behind the split). */
+  #codexSchemaTempPath(request: DispatchRequest): string {
+    return join(tmpdir(), `loopmill-codex-schema-${request.runId}-${request.cycleIndex}-${request.nodeId}-${request.attempt}.json`);
   }
 
   #lastMessageTempPath(request: DispatchRequest): string {

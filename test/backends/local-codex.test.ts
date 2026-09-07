@@ -113,7 +113,20 @@ test(
         loop,
         "review-content",
         { repoRoot: ws.repo.repoRoot, worktreePath: ws.worktreePath, branch: ws.branch, baseCommit: ws.baseCommit },
-        { inputs: REVIEW_CONTENT_INPUTS, env: stubEnvPolicy("sleep"), timeoutMs: 300 },
+        {
+          inputs: REVIEW_CONTENT_INPUTS,
+          env: stubEnvPolicy("sleep"),
+          // The stub sleeps 60s and only reacts to SIGTERM once its own `process.on("SIGTERM",
+          // ...)` handler is installed. A 300ms margin measured to race Node's own stub-process
+          // startup roughly one run in four on a loaded machine (same race as
+          // local-claude-code.test.ts's SIGINT test): the signal could arrive before the handler
+          // was registered, the default disposition would kill the process outright (signal
+          // "SIGTERM" rather than the measured exit-0-no-turn.completed shape), and this test's
+          // own assertions about that shape would fail. 2000ms gives comfortable headroom over
+          // process startup while staying well inside this test's own `{ timeout: 20_000 }`
+          // budget.
+          timeoutMs: 2_000,
+        },
       );
       const envelope = await dispatcher.dispatch(request, fixedClock());
 

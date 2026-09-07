@@ -1,0 +1,303 @@
+# README Freshness -- Loopmill's own first dogfooding loop, and the loop the m1
+# cut-line is measured against: one manual run, driven from the command line,
+# that ends in a pull request.
+#
+# The problem it solves is real and recurring: `README.md` makes checkable claims
+# about this repository (what exists, which documents there are, which spikes ran)
+# and those claims go stale every time the repository moves. This loop asks Codex
+# what is wrong, lets Claude Code fix it, runs the test suite, has Codex review the
+# diff, waits for a human, and only then pushes a branch and opens a pull request.
+#
+#   loopmill run readme-freshness
+#     -> Codex, local, read-only            what does README.md claim that is false?
+#     -> condition                          anything stale?
+#          no  -> end(no_change)
+#          yes -> Claude Code, local        fix exactly those statements
+#     -> npm ci                             (the worktree is a fresh checkout)
+#     -> npm test                           evidence, not a verdict
+#     -> Codex, local, read-only            independent review of the diff
+#     -> condition                          approved AND tests green?
+#          no  -> retry edge (max 1) back to the implementation node
+#          yes -> human gate (`loopmill approve <runId>`)
+#               -> git push                 (external effect, gated)
+#               -> gh pr create             (external effect, gated)
+#               -> end(success)
+#
+# Nothing here merges, and nothing here touches the operator's own checkout: every
+# node runs in this Run's worktree under `.loopmill/worktrees/<runId>`.
+
+schemaVersion: "0.6.0"
+slug: readme-freshness
+name: README Freshness
+description: >-
+  Check README.md against the repository it describes, fix the statements that
+  have gone stale, verify with the test suite and an independent review, and open
+  a pull request once a human approves. Never merges.
+
+trigger:
+  kind: manual
+
+# One repo, and it is this one. `defaultBase` is the branch m1 is being built on:
+# `main` still carries only the spike workflows, so cutting a worktree from it
+# would give the agents a repository that does not contain the code the README is
+# supposed to describe. This becomes `main` when m1 lands there.
+repos:
+  - id: self
+    path: "."
+    defaultBase: claude/loopmill-mvp-design-feul8d
+
+defaults:
+  backend: local
+  runtime: claude-code
+  authMode: subscription-oauth
+  permissionProfile: workspace
+  isolation: worktree
+
+budget:
+  # 1, not the default 2: an Attempt > 1 is an infrastructure-level redispatch of the SAME node,
+  # and two of this loop's nodes are not idempotent. `gh pr create` refuses a second pull request
+  # for the same head branch, so a completion that failed *after* GitHub had already created the
+  # pull request would be silently redispatched, fail again, and report the Run FAILED with a real
+  # pull request open. No node here gains enough from a silent retry to be worth that; a failure
+  # should reach the operator.
+  maxAttempts: 1
+  # One retry, and one only. The retry is blind by construction: `implement` cannot take
+  # `nodes.review.structured.reasons` as an input, because `review` does not dominate it
+  # (LM-VAL-014), so a second cycle sees the same findings, a different `cycle.index`, and nothing
+  # else. That is worth one attempt at self-correction and not more.
+  maxIterations: 1
+  maxRuntime: PT2H
+  maxMeasuredTokens: 1000000
+  # A documentation loop is not worth an unbounded number of unmeasured agent
+  # executions, but it is also not worth failing over one: a CLI that returns a
+  # well-formed answer with no usage block costs the same tokens either way, and
+  # the loop-wide default of 0 would refuse the *next* dispatch after the first
+  # such answer. Two is one hiccup per vendor.
+  maxUnmeasuredExecutions: 2
+  maxRunsPerWindow:
+    count: 4
+    window: PT5H
+  minInterval: PT5M
+
+env:
+  inject:
+    LOOPMILL_LOOP: readme-freshness
+
+# Default (`gated`): every node with `effects: external` needs a human node on
+# every path to it. `push` and `open-pr` both sit behind `approve-pr`.
+approval:
+  policy: gated
+
+entry: survey
+
+nodes:
+
+  # Codex, read-only: this node answers a question about the repository and must
+  # not change it. `-s read-only` is the sandbox that enforces that, not a promise
+  # the prompt makes.
+  survey:
+    kind: agent
+    runtime: codex
+    auth: subscription-login
+    permissionProfile: readonly
+    prompt: |
+      You are checking one file for factual drift: README.md in the repository
+      you are running in.
+
+      Read README.md, then check each of its factual claims against the
+      repository itself: the directory listing, the files named in its
+      "Documents" table, the directories named in its "Spikes" section, and its
+      "Status" paragraph. A claim is stale when the repository contradicts it,
+      or when the repository contains something the claim says is absent.
+
+      Judge only checkable facts. Do not comment on wording, tone, ordering or
+      marketing claims, and do not propose new sections.
+
+      Answer with JSON only. Set stale to true when you found at least one
+      contradiction, and put every one of them in findings as a short numbered
+      list, each naming the README statement and the evidence that contradicts
+      it. When you found none, set stale to false and leave findings empty.
+    structuredOutput:
+      type: object
+      properties:
+        stale:    { type: boolean }
+        findings: { type: string }
+      required: [stale, findings]
+      additionalProperties: false
+    timeout: PT20M
+    next: needs-update
+
+  needs-update:
+    kind: condition
+    inputs:
+      stale: nodes.survey.structured.stale
+    expr: stale == true
+    then: implement
+    else: end-fresh
+
+  # Claude Code, `workspace`: it may edit files in this Run's worktree and it may
+  # not use `gh` or `git push` -- the two things that would take an effect outside
+  # this machine before the human gate below has been passed.
+  implement:
+    kind: agent
+    model: sonnet
+    sessionPolicy: fresh
+    inputs:
+      findings: nodes.survey.structured.findings
+      attempt:  { from: cycle.index, default: 1 }
+    prompt: |
+      A reviewer checked README.md in this repository against the repository
+      itself and reported these contradictions:
+
+      ${findings}
+
+      This is body execution ${attempt}. Fix exactly those statements in
+      README.md and change nothing else -- no other file, no new section, no
+      rewording of anything that is already correct. Verify each fact against
+      the repository before you write it.
+
+      Answer with JSON only: changed is true when you edited README.md, and
+      summary is two or three sentences describing what you corrected, suitable
+      as a pull request body.
+    structuredOutput:
+      type: object
+      properties:
+        changed: { type: boolean }
+        summary: { type: string }
+      required: [changed, summary]
+      additionalProperties: false
+    timeout: PT20M
+    next: install
+
+  # The worktree is a fresh checkout: `node_modules/` is not committed, so the
+  # test suite has nothing to run against until this node has run. Failing here
+  # is a real failure (default `onFailure: fail_run`) -- an unbuildable worktree
+  # is not evidence about the README.
+  install:
+    kind: command
+    argv: [npm, ci]
+    timeout: PT10M
+    next: verify
+
+  # A red suite is evidence, not a loop failure: `verdict` below reads this
+  # node's exit code and decides.
+  verify:
+    kind: command
+    argv: [npm, test]
+    timeout: PT15M
+    onFailure: continue
+    next: review
+
+  # Codex again, and read-only again: the reviewer is a different vendor from the
+  # implementer on every cycle, including retries.
+  #
+  # The diff to review is already committed: the driver commits after every
+  # successful `local` node, so `implement`'s edit is in a commit of its own by
+  # the time this node runs and `git diff` alone would show nothing. The prompt
+  # names the three-dot range against the base branch instead, which is the same
+  # change the pull request will show.
+  review:
+    kind: agent
+    runtime: codex
+    auth: subscription-login
+    permissionProfile: readonly
+    inputs:
+      findings: nodes.survey.structured.findings
+    prompt: |
+      Review this worktree's change against the findings it was meant to fix.
+      The change is committed: read it with
+      `git diff claude/loopmill-mvp-design-feul8d...HEAD`, and check
+      `git status` as well in case anything was left uncommitted.
+
+      The findings:
+
+      ${findings}
+
+      Approve only when every finding is addressed, every new statement is true
+      of this repository, and nothing outside README.md changed. Treat a change
+      that fixes something real but also rewrites unrelated text as not
+      approved, and say so.
+
+      Answer with JSON only: approved, and reasons giving your evidence in two
+      or three sentences.
+    structuredOutput:
+      type: object
+      properties:
+        approved: { type: boolean }
+        reasons:  { type: string }
+      required: [approved, reasons]
+      additionalProperties: false
+    timeout: PT20M
+    next: verdict
+
+  verdict:
+    kind: condition
+    inputs:
+      approved:   nodes.review.structured.approved
+      tests_exit: nodes.verify.exitCode
+    expr: approved == true && tests_exit == 0
+    then: approve-pr
+    else: retry-implementation
+
+  # `mode: cli`: `loopmill approve <runId>` on this host. The label and
+  # pull-request-review modes need the GitHub ingestion that lands in m2; this
+  # one needs nothing but the operator and the command line, which is exactly
+  # what the m1 cut-line asks for. `subject` is the implementation node, so a
+  # retry invalidates an approval given for different work.
+  approve-pr:
+    kind: human
+    mode: cli
+    subject: nodes.implement
+    timeout: PT12H
+    next: push
+
+  # The first external effect. `HEAD` rather than the branch name: the branch is
+  # `loopmill/<slug>/<runId>` and only the driver knows the Run id when the push
+  # happens.
+  push:
+    kind: command
+    argv: [git, push, --set-upstream, origin, HEAD]
+    effects: external
+    timeout: PT5M
+    next: open-pr
+
+  # The second external effect, and the last node before the end. `--head` is
+  # spelled out rather than inferred from the current branch, because `gh`'s
+  # inference inside a linked worktree is not something this repository has
+  # measured, and `gh pr create --help` states that `--head` is what "explicitly
+  # skip[s] any forking or pushing behavior". No merge, ever.
+  open-pr:
+    kind: command
+    argv:
+      - gh
+      - pr
+      - create
+      - --base
+      - claude/loopmill-mvp-design-feul8d
+      - --head
+      - "loopmill/readme-freshness/${run_id}"
+      - --title
+      - "README: correct the statements this run found stale"
+      - --body
+      - "${body}"
+    inputs:
+      run_id: run.id
+      body:   nodes.implement.structured.summary
+    effects: external
+    timeout: PT5M
+    next: end-shipped
+
+  end-shipped:
+    kind: end
+    outcome: success
+
+  end-fresh:
+    kind: end
+    outcome: no_change
+
+edges:
+  - id: retry-implementation
+    from: verdict
+    to: implement
+    when: approved == false || tests_exit != 0
+    maxIterations: 1

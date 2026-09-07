@@ -1122,6 +1122,15 @@ function applyRunningNodeCompleted(snapshot: RunSnapshot, event: Envelope, ctx: 
   // event, except for R-20/R-49/R-34-style completions which are handled by their own callers.
 
   if (node.kind === "agent" && node.structuredOutput && !structuredOutputValid(node, structured)) {
+    // `observedResult` is deliberately NOT passed here, unlike every other `finishNodeWithFailure`
+    // call site that has a `result` to hand. The only thing this event's `result` carries that a
+    // record would keep is `structured` -- and `structured` is precisely the value that just
+    // failed re-validation. mvp-design.md §11 makes Loopmill's own re-validation the contract ("a
+    // runtime's own validation is a convenience, not a contract"); writing the rejected value onto
+    // the Node Execution record would let a downstream `nodes.<id>.structured.*` reference read an
+    // answer this engine has already refused, which is the one outcome that rule exists to
+    // prevent. An agent node has no `exitCode` and no `stdout` of its own (executor.ts populates
+    // `result.exitCode` for command nodes only), so nothing else is lost by withholding it.
     return finishNodeWithFailure(snapshot, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "schema_invalid", event.eventId, emitIdx, existingNode, existingAttempt, event.usage ?? null, "FAILED", "FAILED", "node-completed");
   }
 
@@ -1299,11 +1308,35 @@ function finishNodeWithFailure(
   // semantic-duplicate key must match the real eventType — node-failed, node-timed-out,
   // dispatch-failed or lease-expired — not always "node-failed").
   causationEventType: EventType = "node-failed",
+  // Decision (not in sheet), m1: the failing event's own `result` payload, when the caller has
+  // one to hand — `node-failed`/`node-timed-out`/a schema-invalid `node-completed` all may carry
+  // one; `dispatch-failed` and `lease-expired` never do (state-machine.md §3.1 rows 15/17 list no
+  // `result` field for either, because nothing ever ran to produce one) — carried straight
+  // through rather than re-derived, so this one function is the single place that decides which
+  // outputs a terminal failure gets to keep, for every failure event type at once. Bug fix: the
+  // previous code built `updatedNode` as a bare `{...existingNode, state, finishedAt}`, which
+  // left `exitCode`/`structured`/`stdout` permanently `null` on every failure path — defeating
+  // loop-file.md §9.1's `nodes.<id>.exitCode` accessor and, with it, the `onFailure: continue`
+  // pattern the reference loop's own `run-tests`/`review-verdict` pair depends on (a `condition`
+  // reading a failed command's exit code has nothing to read once this function runs). The
+  // alternative considered — passing the observed outputs already merged into `existingNode`
+  // before the call — was rejected: it would force all five call sites to duplicate the
+  // `structured`/`stdout` derivation `applyRunningNodeCompleted` already does, instead of doing
+  // it once, here, next to the record it feeds.
+  observedResult: NonNullable<Envelope["result"]> | null = null,
 ): HandlerResult {
   const nKey = nodeKey(cycle, nodeId);
   const aKey = attemptKey(cycle, nodeId, attempt);
   const updatedAttempt: AttemptRecord = { ...existingAttempt, state: attemptState, finishedAt: ctx.now, usage: usage ?? existingAttempt.usage };
-  const updatedNode: NodeExecutionRecord = { ...existingNode, state: nodeState, finishedAt: ctx.now };
+  const observedStructured = observedResult?.structured ?? null;
+  const updatedNode: NodeExecutionRecord = {
+    ...existingNode,
+    state: nodeState,
+    finishedAt: ctx.now,
+    structured: observedStructured,
+    stdout: typeof observedStructured?.stdout === "string" ? (observedStructured.stdout as string) : null,
+    exitCode: observedResult?.exitCode ?? null,
+  };
 
   let working: RunSnapshot = {
     ...snapshot,
@@ -1317,12 +1350,25 @@ function finishNodeWithFailure(
   const onFailure = "onFailure" in node ? node.onFailure : "fail_run";
 
   if (onFailure === "continue") {
-    // §2.3's SKIPPED prose ("an onFailure: continue skip-forward"); Decision (not in sheet), m1
-    // — see the file header comment near finishNodeWithFailure's own JSDoc for the reasoning.
-    // R-20's own row lists `node-completed(SKIPPED, control-plane)` as an emitted envelope (matching
-    // R-49's identical shape for `resume --decision skip`), not just a snapshot-only state change.
+    // §2.3's SKIPPED prose ("an onFailure: continue skip-forward"); Decision (not in sheet), m1:
+    // `recordControlPlaneCompletion` is still called, but only for its synthetic
+    // `node-completed(SKIPPED, control-plane)` envelope (R-20's own row lists it, matching R-49's
+    // identical shape for `resume --decision skip`) and its `terminalEventKeys` bookkeeping — the
+    // *record* it would write is a brand-new one (`attemptsUsed: 0`, `startedAt: ctx.now`,
+    // `stdout`/`structured`/`exitCode` all null), appropriate for a condition/end node's own
+    // control-plane-local completion but wrong here: this node genuinely dispatched and ran.
+    // `onFailure: continue` changes what the *Run* does about the failure, not what the Node
+    // Execution actually observed — the SKIPPED record a later `nodes.<id>.exitCode` reference
+    // reads must be the *same* `updatedNode` computed above (real `startedAt`, `attemptsUsed`,
+    // `exitCode`, `stdout`, `summary`, `filesChanged`, `changeFingerprint`, `artifactRefs`), only
+    // relabelled `SKIPPED`. The alternative — teaching `recordControlPlaneCompletion` itself to
+    // accept a base record to build from — was rejected: every one of its other four call sites
+    // (condition entries, `end` nodes, ordinary condition hops) legitimately wants the fresh,
+    // zeroed record it already builds, and threading an unused parameter through all of them just
+    // to special-case this one caller would be the more invasive change.
     const { snapshot: withSkip, emitted: skipEmitted } = recordControlPlaneCompletion(working, ctx, nodeId, cycle, "skipped", causationEventId, emitIdx);
-    working = withSkip;
+    const skippedNode: NodeExecutionRecord = { ...updatedNode, state: "SKIPPED", finishedAt: ctx.now };
+    working = { ...withSkip, nodes: { ...withSkip.nodes, [nKey]: skippedNode } };
     if (!("next" in node) || node.next === undefined) {
       const outcome: Outcome = { state: "FAILED", failureReason, nodeId, cycleIndex: cycle };
       const finished = emitRunFinished(working, ctx, outcome, causationEventId, emitIdx);
@@ -1488,7 +1534,10 @@ function applyRunningNodeFailed(snapshot: RunSnapshot, event: Envelope, ctx: Eng
     return ok(working, [envelope], [action]);
   }
 
-  return finishNodeWithFailure(snapshot, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "node_failed", event.eventId, emitIdx, existingNode, existingAttempt, event.usage ?? null, "FAILED", "FAILED", "node-failed");
+  // Bug fix: this used to pass the stale pre-failure `existingAttempt` (no `error`, no
+  // `exitCode`) instead of the `updatedAttempt` just built above — the `canRetry` branch a few
+  // lines up already threads `updatedAttempt` through correctly; the terminal branch must too.
+  return finishNodeWithFailure(snapshot, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "node_failed", event.eventId, emitIdx, existingNode, updatedAttempt, event.usage ?? null, "FAILED", "FAILED", "node-failed", event.result ?? null);
 }
 
 function enterQuotaPark(
@@ -1588,7 +1637,19 @@ function applyRunningNodeTimedOut(snapshot: RunSnapshot, event: Envelope, ctx: E
 
   const effectsNone = "effects" in node && node.effects === "none";
   const canRetry = retryable(snapshot, ctx.loop, cur.cycleIndex, cur.nodeId);
-  const updatedAttempt: AttemptRecord = { ...existingAttempt, state: "FAILED", classification: "TIMEOUT", finishedAt: ctx.now, error: event.error ?? { code: "node_timeout", message: "node timeout", classified: "timeout" }, usage: existingAttempt.usage ?? unavailableUsage(node) };
+  // `node-timed-out` carries no `result` in state-machine.md §3.1 row 7's "Adds" column, but
+  // `result` is "optional on any event" (§3, common fields) and a command node that timed out
+  // mid-run may still have observed an exit code / partial stdout by the time the sweep declares
+  // it — captured here, when present, the same way `node-failed`'s own `exitCode` already is.
+  const updatedAttempt: AttemptRecord = {
+    ...existingAttempt,
+    state: "FAILED",
+    classification: "TIMEOUT",
+    finishedAt: ctx.now,
+    error: event.error ?? { code: "node_timeout", message: "node timeout", classified: "timeout" },
+    usage: existingAttempt.usage ?? unavailableUsage(node),
+    exitCode: event.result?.exitCode ?? null,
+  };
 
   if (canRetry && effectsNone) {
     let working: RunSnapshot = {
@@ -1601,8 +1662,9 @@ function applyRunningNodeTimedOut(snapshot: RunSnapshot, event: Envelope, ctx: E
     return ok(working, [envelope], [action]);
   }
 
-  // N-15: a timed-out Node Execution's own terminal state is TIMED_OUT, not FAILED.
-  return finishNodeWithFailure(snapshot, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "node_timed_out", event.eventId, emitIdx, existingNode, existingAttempt, null, "FAILED", "TIMED_OUT", "node-timed-out");
+  // N-15: a timed-out Node Execution's own terminal state is TIMED_OUT, not FAILED. Bug fix: pass
+  // `updatedAttempt` (carries `error`/`exitCode`), not the stale pre-timeout `existingAttempt`.
+  return finishNodeWithFailure(snapshot, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "node_timed_out", event.eventId, emitIdx, existingNode, updatedAttempt, null, "FAILED", "TIMED_OUT", "node-timed-out", event.result ?? null);
 }
 
 function applyRunningDispatchFailed(snapshot: RunSnapshot, event: Envelope, ctx: EngineTransitionContext, emitIdx: { n: number }): HandlerResult {
@@ -1629,7 +1691,11 @@ function applyRunningDispatchFailed(snapshot: RunSnapshot, event: Envelope, ctx:
     return ok(working, [envelope], [action]);
   }
 
-  return finishNodeWithFailure(snapshot, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "dispatch_failed", event.eventId, emitIdx, existingNode, existingAttempt, null, "FAILED", "FAILED", "dispatch-failed");
+  // Bug fix: pass `updatedAttempt` (carries `error`), not the stale pre-failure `existingAttempt`.
+  // `dispatch-failed` never carries a `result` (state-machine.md §3.1 row 15: nothing ran), so
+  // `observedResult` is left at its default `null` — nothing to carry, per this task's own
+  // instruction not to invent a value.
+  return finishNodeWithFailure(snapshot, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "dispatch_failed", event.eventId, emitIdx, existingNode, updatedAttempt, null, "FAILED", "FAILED", "dispatch-failed");
 }
 
 function applyRunningLeaseExpired(snapshot: RunSnapshot, event: Envelope, ctx: EngineTransitionContext, emitIdx: { n: number }): HandlerResult {
@@ -1666,6 +1732,10 @@ function applyRunningLeaseExpired(snapshot: RunSnapshot, event: Envelope, ctx: E
 
   if (!onInterruptedRetry || !canRetry) {
     if (!canRetry && !effectsExternal) {
+      // Already correct before this fix: `lostAttempt` (not a stale `existingAttempt`) was
+      // already threaded through here. `lease-expired` never carries a `result` (state-machine.md
+      // §3.1 row 17: the sweep detected an absence, not an outcome), so `observedResult` is left
+      // at its default `null`.
       return finishNodeWithFailure(working, ctx, node, cur.cycleIndex, cur.nodeId, cur.attempt, "attempts_exhausted", event.eventId, emitIdx, existingNode, lostAttempt, null, "LOST", "FAILED", "lease-expired");
     }
     working = {

@@ -1,0 +1,5 @@
+# Written by Loopmill (src/store/layout.ts). Ignores everything below except the loop
+# definitions and this file itself — see docs/design/mvp-design.md §9.1.
+*
+!.gitignore
+!*.loop.yaml

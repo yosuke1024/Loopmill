@@ -18,26 +18,54 @@ import { classificationToCompletion } from "../completion.ts";
  * `local/executor.ts` substitutes the configured binary path (`binaries.claude`) before spawning,
  * so `describe()`'s dry-run plan and the real spawn agree on everything else.
  *
- * `Decision (not in sheet), m1`: the permission-profile mapping below is exactly what this task
- * was briefed with, pending the maintainer's own confirmation against `claude --help` (2.1.263 is
- * the only version this repository has measured, and `--disallowedTools` syntax in particular is
- * unverified here). `readonly` -> `--permission-mode plan` (the CLI never edits or runs a tool
- * with side effects); `workspace` (the loop-file default, loop-file.md §8.1) ->
- * `--permission-mode acceptEdits` plus `--disallowedTools "Bash(gh *)"` and
- * `--disallowedTools "Bash(git push *)"`, matching mvp-design.md §13.1's "the default `workspace`
- * denies `gh` and `git push` tool use to the agent"; `full` -> `--permission-mode
- * bypassPermissions`.
+ * `Decision (not in sheet), m1`: the permission-profile mapping below. `readonly` ->
+ * `--permission-mode plan` (the CLI never edits or runs a tool with side effects); `workspace`
+ * (the loop-file default, loop-file.md §8.1) -> `--permission-mode acceptEdits` plus one
+ * `--disallowedTools "Bash(gh *)" "Bash(git push *)"`, matching mvp-design.md §13.1's "the
+ * default `workspace` denies `gh` and `git push` tool use to the agent"; `full` ->
+ * `--permission-mode bypassPermissions`.
+ *
+ * Verified against `claude --help` on 2026-09-07, CLI 2.1.263, before the first live run:
+ *
+ *  - `--permission-mode <mode>` accepts exactly `acceptEdits`, `auto`, `bypassPermissions`,
+ *    `manual`, `dontAsk`, `plan` -- all three targets above exist under those names.
+ *  - `--disallowedTools, --disallowed-tools <tools...>` is **variadic**: "Comma or
+ *    space-separated list of tool names to deny (e.g. \"Bash(git *) Edit\")". It therefore takes
+ *    both patterns as two values of ONE occurrence. This function originally emitted the flag
+ *    twice, once per pattern; whether a second occurrence of a variadic option appends to or
+ *    replaces the first is a Commander implementation detail this repository has not measured,
+ *    and a replacement would have silently dropped the `Bash(gh *)` denial -- a lost safety
+ *    property, not a cosmetic difference. One occurrence with two values is the CLI's own
+ *    documented form and is unambiguous either way.
+ *  - `--permission-prompts none` means "nobody answers: anything that would prompt is denied
+ *    automatically; the permission mode still decides everything else". Combined with
+ *    `acceptEdits` (which auto-accepts file edits but not command execution) this denies the
+ *    `Bash` tool outright rather than only the two patterns above -- stricter than §13.1's
+ *    wording, and deliberately left that way: a node that needs to run commands declares a
+ *    `command` node, which is where an external effect can be gated.
+ *  - `--json-schema <schema>` takes the schema INLINE, not a file path: `claude --help`'s own
+ *    entry reads "JSON Schema for structured output validation. Example:
+ *    {"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}". This is the
+ *    opposite of `codex exec --output-schema <FILE>` ("Path to a JSON Schema file describing the
+ *    model's final response shape") -- the two runtimes were measured to genuinely differ here,
+ *    not just spelled differently, so `schemaJson` below carries the schema's JSON text and
+ *    `local/executor.ts` never writes it to a temp file (unlike codex's `schemaPath`, which does).
+ *    This repository's own earlier measurement agrees and is the stronger evidence: SPIKE-1's
+ *    check C3 (`spikes/spike-1-claude-subscription/run.sh`, the hosted run recorded PASS in
+ *    `docs/spikes/README.md` §3) builds its command as `claude -p ... --json-schema "$schema"`
+ *    where `$schema` is a JSON literal, and measured `structured_output` coming back conformant.
+ *    The path form this adapter originally passed was never measured against anything.
  */
 export function buildClaudeArgv(
   node: ResolvedAgentNode,
   prompt: string,
-  schemaPath: string | null,
+  schemaJson: string | null,
 ): string[] {
   const argv = ["claude", "-p", prompt, "--output-format", "json"];
   argv.push(...permissionFlags(node.permissionProfile));
   argv.push("--permission-prompts", "none");
-  if (schemaPath) {
-    argv.push("--json-schema", schemaPath);
+  if (schemaJson) {
+    argv.push("--json-schema", schemaJson);
   }
   if (node.model) {
     argv.push("--model", node.model);
@@ -50,14 +78,8 @@ function permissionFlags(profile: PermissionProfile): string[] {
     case "readonly":
       return ["--permission-mode", "plan"];
     case "workspace":
-      return [
-        "--permission-mode",
-        "acceptEdits",
-        "--disallowedTools",
-        "Bash(gh *)",
-        "--disallowedTools",
-        "Bash(git push *)",
-      ];
+      // One occurrence, two values: `--disallowedTools` is variadic (see the doc comment above).
+      return ["--permission-mode", "acceptEdits", "--disallowedTools", "Bash(gh *)", "Bash(git push *)"];
     case "full":
       return ["--permission-mode", "bypassPermissions"];
   }

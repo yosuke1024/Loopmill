@@ -37,17 +37,17 @@ export interface BuildChildEnvResult {
  * not the loop author's to remember (`loop-file/resolve.ts`'s own comment on `BUILTIN_ENV_DENY`
  * makes the same point about where this decision is made).
  *
- * `Decision (not in sheet), m1`: a `command` node's own `env` allowlist defaults to `[]` after
- * resolution (`loop-file/resolve.ts`: `env: node.env ?? []`), which is indistinguishable from an
- * author writing `env: []` explicitly. Read literally, "an allowlist intersected with preserve +
- * inject" would then give every ordinary command node (none of which declares `env:` in the
- * reference loop) a completely empty environment -- no `PATH`, so `node:child_process` cannot even
- * resolve a bare executable name like `npm` or `gh`, which would break `run-tests` and
- * `create-issue`/`create-pr` in `examples/daily-content-improvement.loop.yaml`. The only reading
- * that keeps the reference loop runnable is: the intersection applies only when the node's own
- * `env` array is non-empty; an empty (or omitted) `env` means "no additional restriction beyond
- * deny/preserve/inject", the same as an agent node, which has no such field at all. Flagged for
- * the maintainer to confirm against the intended reading of `loop-file.md` §8.2.
+ * `Decision (not in sheet), m1`: a `command` node's own `env` allowlist resolves to `null`, not
+ * `[]`, when the loop file omits it (`loop-file/resolve.ts`: `env: node.env ?? null`), and
+ * `ResolvedCommandNode.env`'s own field comment (`src/types/loop.ts`) is the authority on what the
+ * two values mean: `null` is "no further restriction" and `[]` is an explicit empty allowlist.
+ * That distinction is exactly what keeps the reference loop runnable -- an ordinary command node
+ * (none of which declares `env:` in `examples/daily-content-improvement.loop.yaml`) resolves to
+ * `null` and therefore gets no additional restriction beyond deny/preserve/inject (in particular
+ * `PATH` survives, so `node:child_process` can still resolve a bare executable name like `npm` or
+ * `gh` for `run-tests`/`create-issue`/`create-pr`); only a node that explicitly writes `env: []`
+ * (or a non-empty list) gets the intersection below applied at all. The check just below,
+ * `node.env !== null`, is this rule in code.
  */
 export function buildChildEnv(
   parentEnv: NodeJS.ProcessEnv,

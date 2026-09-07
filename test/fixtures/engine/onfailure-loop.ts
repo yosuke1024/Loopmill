@@ -52,6 +52,44 @@ const RAW_CONTINUE: LoopFile = {
 
 export const ONFAILURE_CONTINUE_LOOP = resolveLoop(RAW_CONTINUE);
 
+// A `command` node with `onFailure: continue`, feeding a downstream `condition` that reads its
+// `exitCode` with no `default` -- the exact shape the engine bug (transition.ts's
+// `finishNodeWithFailure`/`recordControlPlaneCompletion` discarding a failed execution's own
+// outputs) defeated: `ONFAILURE_CONTINUE_LOOP` above is deliberately an *agent* node (its own
+// comment says so), so it never exercised `nodes.<id>.exitCode`/`.stdout` at all. `run-cmd`'s
+// `argv` is never actually spawned by `transition()` (a pure state machine reacting to scripted
+// envelopes, not a process runner) -- it exists only so the node validates as a real `command`
+// node. `then`/`else` route to distinct `end` nodes so a test can tell which branch a condition
+// actually took without inspecting `snapshot.nodes` at all.
+const COMMAND_ONFAILURE_CONTINUE_RAW: LoopFile = {
+  schemaVersion: "0.6.0",
+  slug: "command-onfailure-continue-fixture",
+  name: "command onFailure:continue fixture",
+  trigger: { kind: "manual" },
+  repos: [{ id: "app", path: ".", defaultBase: "main" }],
+  defaults: { backend: "local", runtime: "claude-code", authMode: "subscription-oauth" },
+  budget: { maxAttempts: 2, maxIterations: 5 },
+  nodes: {
+    "run-cmd": {
+      kind: "command",
+      argv: ["npm", "test"],
+      onFailure: "continue",
+      next: "verdict",
+    },
+    verdict: {
+      kind: "condition",
+      inputs: { tests_exit: "nodes.run-cmd.exitCode" },
+      expr: "tests_exit == 0",
+      then: "end-clean",
+      else: "end-dirty",
+    },
+    "end-clean": { kind: "end", outcome: "clean" },
+    "end-dirty": { kind: "end", outcome: "dirty" },
+  },
+};
+
+export const COMMAND_ONFAILURE_CONTINUE_LOOP = resolveLoop(COMMAND_ONFAILURE_CONTINUE_RAW);
+
 // A small loop with a one-iteration Retry Edge, dedicated to the NO_PROGRESS rows (R-15..R-17):
 // setup -> implement -> verdict(condition on implement's own `changed`) -> then: finish, else:
 // the edge back to implement. `setup` exists only so `implement`'s first execution is reached via

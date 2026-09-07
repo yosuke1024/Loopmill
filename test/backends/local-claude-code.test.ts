@@ -100,7 +100,13 @@ test(
         {
           inputs: IMPLEMENT_INPUTS,
           env: stubEnvPolicy("sleep-then-exit"),
-          timeoutMs: 300, // the stub sleeps 60s and only reacts to SIGINT
+          // The stub sleeps 60s and only reacts to SIGINT once its own `process.on("SIGINT", ...)`
+          // handler is installed. A 300ms margin measured to race Node's own stub-process startup
+          // roughly one run in four on a loaded machine: SIGINT would arrive before the handler
+          // was registered, the default disposition would kill the process outright, and no
+          // result would ever be printed. 2000ms gives comfortable headroom over process startup
+          // while staying well inside this test's own `{ timeout: 20_000 }` budget.
+          timeoutMs: 2_000,
         },
       );
       const envelope = await dispatcher.dispatch(request, fixedClock());
