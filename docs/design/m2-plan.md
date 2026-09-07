@@ -198,11 +198,25 @@ m1's conventions (`m1-plan.md` §3) carry over unchanged. Two additions:
 | Wave | Contents | Depends on | Status |
 |---|---|---|---|
 | W0a | The §2.2 defect: `store.sweep()` becomes a read-only scan, and `runSweep` releases the `locks` row only when the resulting snapshot holds no lease | — | **done 2026-09-08** (676 tests; the reproduction is now `test/driver/sweep.test.ts`'s third case, verified to fail against the old code) |
-| W0b | The rest of `state-machine.md` §10.2: index the scan on the snapshot, and emit the five bullets that have no producer (`human_timeout`, `observe_deadline`, `max_runtime`, `resumed{due}`, stuck `PENDING`) | W0a | not started |
-| W1 | `loopmill resume <runId> [--decision retry\|skip\|fail]` and `resume --due`; its exit codes; the exit-23 resolution; the unreachable `cancel` decision | W0 | not started |
-| W2 | The `gh` read module; `pr` / `branch` / `issue` artifactRefs from the `local` backend; a `Subject.kind: "pr"` producer; `pull-request-review` gate ingestion | W0, W1 | not started |
+| W1 | `loopmill resume <runId> [--decision retry\|skip\|fail]` and `resume --due`; its exit codes; the exit-23 resolution; the unreachable `cancel` decision | W0a | not started |
+| W0b | The rest of `state-machine.md` §10.2: index the scan on the snapshot, and emit the bullets that have no producer (`human_timeout`, `max_runtime`, `resumed{due}`, stuck `PENDING`) | **W1** — reordered, see below | not started |
+| W2 | The `gh` read module; `pr` / `branch` / `issue` artifactRefs from the `local` backend; a `Subject.kind: "pr"` producer; `pull-request-review` gate ingestion | W1 | not started |
 | W3 | Measure `launchctl print` first (§2.5); then `doctor --scheduler` and the launchd user-agent unit with its environment snapshot; the loop↔unit identity convention | — (may run beside W2) | not started |
-| W4 | Cross-run budget at request time (`minInterval`, `maxRunsPerWindow`); dedupe/`SKIPPED` (A27); the run report and coverage gaps (A29, A32) | W0, W2 | not started |
+| W4 | Cross-run budget at request time (`minInterval`, `maxRunsPerWindow`); dedupe/`SKIPPED` (A27); the run report and coverage gaps (A29, A32) | W0a, W2 | not started |
+
+**Reordering, 2026-09-08: W0b follows W1, not the other way round.** W0b was planned first on the
+assumption that the remaining sweep bullets are more store queries of the kind W0a touched. They are
+not: four of them resolve to transitions whose action is a *dispatch*, and `runSweep` deliberately
+performs no action. Emitting `resumed{kind: due}` from `status`'s own sweep would un-park a
+quota-waiting Run that nothing then dispatches, and — now that W0a keeps such a Run visible — its
+attempts would drain into `FAILED`, turning "waiting for quota" into a failure. `state-machine.md`
+§10.2 scopes that bullet itself, in its own parenthesis: "(this is `loopmill resume --due`)". The
+bullets need an entrypoint that can honour the action they produce, which is exactly what W1 builds.
+`observe_deadline` is dropped from W0b entirely: the `observed` backend was removed from the design in
+v0.6, so that bullet has no producer to write.
+
+The one thing W0a leaves genuinely undone is the index itself — the scan still enumerates `locks`
+rows, which is why it can only ever reach the lease bullet. That moves to W0b with the rest.
 | W5 | The A25 finding schema and the retry-feedback hand-off | W2, and decision 2 of §6 | not started |
 | W6 | The nightly loop file, then seven consecutive nights (the cut-line) | W1-W4 | not started |
 
