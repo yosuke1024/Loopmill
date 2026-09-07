@@ -44,10 +44,20 @@ export const BUILTIN_ENV_DENY: readonly string[] = [
 
 /** The built-in preserve list (same sources). Neither document spells out the exact "proxy
  * variables" names; the conventional upper- and lower-case `*_PROXY` set is used here -- see the
- * report for this deviation. */
+ * report for this deviation.
+ *
+ * `Amendment (m0+)`, 2026-09-07: `USER` was added, and `loop-file.md` §6.3 carries the
+ * measurement. `claude` locates its own subscription login through `USER`: with `PATH`, `HOME`
+ * and `SHELL` alone it reports `loggedIn: false, authMethod: "none"` and `claude -p` returns
+ * `Not logged in · Please run /login` in 165 ms without ever contacting the API. `LOGNAME` is
+ * NOT a substitute (measured: still `loggedIn: false`), so it is deliberately absent from this
+ * list rather than added alongside on the assumption that the two names are interchangeable.
+ * `codex` needs neither. This was found by the first live run, where it presented as the Codex
+ * node of a two-vendor loop succeeding and the Claude Code node failing on the very next step. */
 export const BUILTIN_ENV_PRESERVE: readonly string[] = [
   "PATH",
   "HOME",
+  "USER",
   "SHELL",
   "LANG",
   "TZ",

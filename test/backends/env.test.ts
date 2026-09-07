@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildChildEnv } from "../../src/backends/local/env.ts";
+import { BUILTIN_ENV_PRESERVE } from "../../src/loop-file/resolve.ts";
 import { loadReferenceLoop, nodeOf } from "../fixtures/backends/helpers.ts";
 
 test("env: A15 -- ANTHROPIC_API_KEY/OPENAI_API_KEY/GH_TOKEN in the parent env never reach an agent node, and are reported denied", async () => {
@@ -63,6 +64,26 @@ test("env: PATH/HOME are preserved for every node kind", async () => {
   assert.equal(env["PATH"], "/usr/bin:/bin");
   assert.equal(env["HOME"], "/home/op");
   assert.equal(env["SHELL"], "/bin/bash");
+});
+
+// Amendment (m0+), 2026-09-07 (loop-file.md §6.3): `USER` reaches the child, for both node kinds.
+// This is not housekeeping — it is the one variable `claude` uses to find its own subscription
+// login. Measured on the maintainer's macOS host during the first live run of
+// `.loopmill/readme-freshness.loop.yaml`: with PATH/HOME/SHELL alone, `claude auth status --json`
+// answers `loggedIn: false, authMethod: "none"` and `claude -p` returns
+// `Not logged in · Please run /login` after 165 ms without contacting the API; adding `USER`
+// alone restores `loggedIn: true, authMethod: "claude.ai"`. `LOGNAME` was measured NOT to
+// substitute for it, and `codex` needs neither — which is why the live run's Codex node
+// succeeded and its Claude Code node failed on the very next step. Delete `USER` from
+// BUILTIN_ENV_PRESERVE and every `claude-code` node on a `local` backend stops authenticating.
+test("env: USER is preserved -- claude-code cannot find its subscription login without it", async () => {
+  const loop = await loadReferenceLoop();
+  const parentEnv = { PATH: "/usr/bin:/bin", HOME: "/home/op", USER: "op", LOGNAME: "op" };
+  for (const nodeId of ["implement", "run-tests"]) {
+    const { env } = buildChildEnv(parentEnv, loop.env, nodeOf(loop, nodeId));
+    assert.equal(env["USER"], "op", `${nodeId}: USER must reach the child`);
+  }
+  assert.ok(BUILTIN_ENV_PRESERVE.includes("USER"), "USER must be in the built-in preserve list, not just the reference loop's own");
 });
 
 test("env: inject applies -- the loop's env.inject value reaches the child and is reported as injected", async () => {

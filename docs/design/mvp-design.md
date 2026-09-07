@@ -951,7 +951,7 @@ Three lists, always applied, always reported:
   `CODEX_ACCESS_TOKEN`, `CODEX_CONNECTORS_TOKEN`, plus `GH_TOKEN` unless the node is
   `effects: external`. This list is mandatory, not advisory: in `-p` mode `ANTHROPIC_API_KEY` "is always
   used when present" `[V]`, so scrubbing it is the only way a subscription guarantee can be true.
-* **Preserve** — `PATH`, `HOME`, `SHELL`, `LANG`, `TZ`, proxy variables, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`.
+* **Preserve** — `PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `TZ`, proxy variables, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`. `[V]` `USER` was added by amendment on 2026-09-07: `claude` cannot find its own subscription login without it (loop-file.md §6.3 records the measurement).
   v0.4 named a deny list and never named this one, which would have broken credential discovery.
 * **Inject** — node-scoped values only.
 

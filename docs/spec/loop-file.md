@@ -303,9 +303,21 @@ Three lists, applied to every subprocess Loopmill spawns:
   and `GH_TOKEN` for every node whose `effects` is not `external`. A subscription
   run must not be silently converted into a metered API run by an inherited
   variable.
-* **preserve** — additive to the built-in preserve list: `PATH`, `HOME`, `SHELL`,
-  `LANG`, `TZ`, the proxy variables, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`. A name that
-  also appears in a deny list stays denied.
+* **preserve** — additive to the built-in preserve list: `PATH`, `HOME`, `USER`,
+  `SHELL`, `LANG`, `TZ`, the proxy variables, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`. A
+  name that also appears in a deny list stays denied.
+
+  **Amendment (m0+), 2026-09-07: `USER` added.** Measured on the maintainer's macOS
+  host during the first live run: with `PATH`, `HOME` and `SHELL` alone, `claude auth
+  status --json` reports `loggedIn: false, authMethod: "none"` and `claude -p` returns
+  `Not logged in · Please run /login` after 165 ms without contacting the API; adding
+  `USER` alone restores `loggedIn: true, authMethod: "claude.ai"`. `LOGNAME` does not
+  substitute for it, and `codex` does not need it (`codex login status` reports
+  "Logged in using ChatGPT" without it) — which is exactly how the failure presented:
+  the Codex node of a two-vendor loop succeeded and the Claude Code node failed. A
+  preserve list that cannot authenticate the runtime it is preserving the environment
+  for is not a policy, it is a bug; `USER` carries no credential and no vendor
+  configuration.
 * **inject** — literal name/value pairs added to every subprocess environment.
   **Decision (not in sheet):** injected values are literal strings only. No
   templating and no secret references: a Loop file is committed and reviewed, so it
