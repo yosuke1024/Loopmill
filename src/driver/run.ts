@@ -90,7 +90,7 @@ function resolveRepoRoot(ctx: LoopishContext): string {
 }
 
 /** The commit this attempt should start from: the worktree's own current `HEAD` when it already
- * exists (a later attempt or cycle — the driver commits after every successful `local` cycle, so
+ * exists (a later attempt or cycle — the driver commits after every successful `local` node, so
  * `HEAD` already reflects the last one), else `repos[].defaultBase` resolved against the
  * operator's own checkout with `git rev-parse` via `execFileSync` (`child_process.execFile`
  * family — never a shell, matching `backends/local/worktree.ts`'s own convention). */
@@ -540,7 +540,9 @@ export async function continueRun(input: ContinueRunInput): Promise<RunLoopResul
         if (heartbeatTimer) clearInterval(heartbeatTimer);
       }
 
-      // §7.2 step 6 / §18: one commit per cycle, on the local backend's own success.
+      // §7.2 step 6 / §18: one commit per successful `local` node (mvp-design.md §18, corrected
+      // 2026-09-08 to match this — a per-cycle commit would leave the tree uncommitted when the
+      // reviewer node in the readme-freshness loop runs `git diff <base>...HEAD`, m1-plan.md §6).
       if (backendId === "local" && completionEnvelope.eventType === "node-completed") {
         const message = `loopmill: ${ctx.loop.slug} cycle ${current.cycleIndex} (${runId})`;
         const commit = commitCycle(worktreePath, message);

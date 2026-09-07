@@ -4,9 +4,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 
 import { LocalDispatcher } from "../../src/backends/local/executor.ts";
-import { loadReferenceLoop, makeDispatchRequest, makeLocalWorkspace, testClassify } from "../fixtures/backends/helpers.ts";
+import { loadReferenceLoop, makeDispatchRequest, makeLocalWorkspace, makeStubPathDir, testClassify } from "../fixtures/backends/helpers.ts";
 
 test("describe: an agent (claude-code) node's plan carries the rendered argv, cwd, scrubbed env, and touches no filesystem beyond the prompt", async () => {
   const loop = await loadReferenceLoop();
@@ -53,13 +54,18 @@ test("describe: an agent (claude-code) node's plan carries the rendered argv, cw
   }
 });
 
-test("describe: a command node's plan renders argv against the resolved inputs", async () => {
+test("describe: a command node's plan renders argv against the resolved inputs, and A16 resolves argv[0] to an absolute path", async () => {
   const loop = await loadReferenceLoop();
   const ws = await makeLocalWorkspace("describe-2");
+  // A16 (mvp-design.md §20.3): "resolves every binary... to an absolute path" -- exercised
+  // against a stub `gh` on a controlled PATH, never the real one, so this test's outcome does
+  // not depend on `gh` actually being installed on whatever machine runs the suite.
+  const stubBin = makeStubPathDir(["gh"]);
   try {
     const dispatcher = new LocalDispatcher({
       layout: ws.layout,
       classify: testClassify,
+      parentEnv: { PATH: stubBin.dir, HOME: "/home/op" },
     });
     const request = makeDispatchRequest(
       loop,
@@ -68,9 +74,45 @@ test("describe: a command node's plan renders argv against the resolved inputs",
       { inputs: { title: "A title", body: "A body" } },
     );
     const plan = dispatcher.describe(request);
-    assert.deepEqual(plan.argv, ["gh", "issue", "create", "--title", "A title", "--body", "A body"]);
+    const resolvedGh = join(stubBin.dir, "gh");
+    assert.ok(isAbsolute(plan.argv[0]!), `argv[0] must be an absolute path, got ${plan.argv[0]}`);
+    assert.deepEqual(plan.argv, [resolvedGh, "issue", "create", "--title", "A title", "--body", "A body"]);
     assert.equal(plan.cwd, ws.worktreePath);
+    assert.equal(plan.notes.some((n) => n.includes("binary not found")), false, "gh IS on the stub PATH -- no not-found note");
   } finally {
+    await stubBin.cleanup();
+    await ws.cleanup();
+  }
+});
+
+test("describe: a command node whose binary is nowhere on PATH reports it in a note instead of throwing (A16)", async () => {
+  const loop = await loadReferenceLoop();
+  const ws = await makeLocalWorkspace("describe-2b");
+  // A stub PATH that deliberately does NOT contain "gh" -- this task's own Decision: "a dry run
+  // must still print a useful plan and say plainly that the binary was not found, rather than
+  // throwing".
+  const stubBin = makeStubPathDir(["npm"]);
+  try {
+    const dispatcher = new LocalDispatcher({
+      layout: ws.layout,
+      classify: testClassify,
+      parentEnv: { PATH: stubBin.dir, HOME: "/home/op" },
+    });
+    const request = makeDispatchRequest(
+      loop,
+      "create-issue",
+      { repoRoot: ws.repo.repoRoot, worktreePath: ws.worktreePath, branch: ws.branch, baseCommit: ws.baseCommit },
+      { inputs: { title: "A title", body: "A body" } },
+    );
+    const plan = dispatcher.describe(request); // must not throw
+    assert.equal(plan.argv[0], "gh", "unresolved: argv[0] stays the bare name, not a fabricated path");
+    assert.ok(
+      plan.notes.some((n) => n.includes("binary not found on PATH") && n.includes("gh")),
+      `expected a "binary not found" note naming gh, got ${JSON.stringify(plan.notes)}`,
+    );
+    assert.equal(plan.cwd, ws.worktreePath); // the rest of the plan is still useful
+  } finally {
+    await stubBin.cleanup();
     await ws.cleanup();
   }
 });

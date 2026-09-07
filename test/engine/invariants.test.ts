@@ -20,6 +20,7 @@ import {
 } from "../fixtures/engine/helpers.ts";
 import { REFERENCE_LOOP, NODES, RETRY_EDGE_ID } from "../fixtures/engine/reference-loop.ts";
 import { NO_PROGRESS_ROOMY_LOOP } from "../fixtures/engine/onfailure-loop.ts";
+import { DEFAULT_SEED, mulberry32, buildTriplePool, checkDeterminism, checkNoMutation, checkNoIO } from "./purity-check.ts";
 import { transition } from "../../src/engine/transition.ts";
 import { fold, foldEnvelopes } from "../../src/engine/fold.ts";
 import { canonicalJson } from "../../src/util/canonical-json.ts";
@@ -240,7 +241,19 @@ function shiftIso(iso: string, hours: number): string {
   return new Date(new Date(iso).getTime() + hours * 60 * 60 * 1000).toISOString();
 }
 
-test("I-12: purity", { todo: "not checkable from engine/'s own black-box behaviour without stubbing fs/Date/crypto at the module level; P-1 is asserted by construction (no I/O, Date.now, Math.random, or crypto.randomUUID appears anywhere in transition/classify/preDispatch/route/fold's own source) rather than by a runtime probe" }, () => {});
+test("I-12: purity — transition(snapshot, event) is pure: same inputs, same outputs, no I/O; proven by a property test over many generated (snapshot, event, ctx) triples", () => {
+  // The property test proper (its own generated pool, and why each of the three checks below is
+  // a genuine proof rather than "asserted by construction") lives in `purity.test.ts` / its shared
+  // `purity-check.ts` module — this assertion runs the identical checks under I-12's own name
+  // rather than re-deriving them, so the invariant is never only proven under a different test's
+  // banner. `purity.test.ts` is the file to read for the full rationale.
+  const seed = DEFAULT_SEED;
+  const pool = buildTriplePool(mulberry32(seed));
+  assert.ok(pool.length > 0, "purity-check.ts's generated pool is unexpectedly empty");
+  checkDeterminism(pool, seed);
+  checkNoMutation(pool, seed);
+  checkNoIO(pool, seed);
+});
 
 test("I-13: transition() is total — never throws, even for a garbage envelope", () => {
   const steps = happyPathSteps();

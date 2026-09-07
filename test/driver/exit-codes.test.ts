@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { runLoop } from "../../src/driver/index.ts";
 import { FakeDispatcher, type FakeScript } from "../../src/backends/fake/index.ts";
 import type { TriggerPayload } from "../../src/types/envelope.ts";
+import type { AppendInput, AppendResult } from "../../src/types/interfaces.ts";
 import { EXIT_CODES_LOOP_PATH, advancingClock, fixedClock, makeScratchRepo, openTestContext } from "../fixtures/driver/helpers.ts";
 
 const TRIGGER: TriggerPayload = { kind: "manual" };
@@ -137,3 +138,103 @@ test("A12: EXPIRED(max_runtime) -> exit 13, driven with an advancing clock", asy
   assert.equal(result.exitCode, 13);
   assert.equal(result.state, "EXPIRED");
 });
+
+test("A12: dispatch-failed whose own recording conflicts in the store -> exit 4", async () => {
+  // `run.ts:558`'s own comment on this branch: exit 4 fires only when *recording* a
+  // dispatch-failed completion itself fails (a store-level conflict/invalid on top of an
+  // already-failed dispatch) — an ordinary dispatch-failed completion is recorded successfully
+  // and handled entirely by R-29/R-30's own retry/exhaust policy (a retry redispatches; exhaustion
+  // fails the Run, exit 10), never by this exit code. `applyStep` itself never returns exit code
+  // 4 for any input (see `step.ts`'s own `ApplyStepOutput.exitCode` doc comment, narrowed as part
+  // of this same task) — `run.ts` computes exit 4 itself, at its own call site, by checking
+  // `completionEnvelope.eventType === "dispatch-failed"` against whatever nonzero exit `applyStep`
+  // returned for *any* reason.
+  //
+  // The store-level conflict is injected directly (a `Proxy` around `ctx.store` that makes
+  // `append()` reject exactly the dispatch-failed completion with `seq_conflict`) rather than
+  // raced with two real processes, the way `test/driver/concurrency.test.ts` races the loop's own
+  // lock: `applyStep`'s own comment on `skipLockCheck` callers already says why a genuine race
+  // cannot land here in the first place — "hold the loop's lock and are the run's only writer, so
+  // this branch is store-level defence in depth for them, not a case they are expected to hit".
+  // Exercising defence-in-depth honestly means injecting the fault it defends against, not
+  // engineering an artificial multi-process race against a lock this same run already holds
+  // exclusively for its own entire lifetime.
+  const repo = await makeScratchRepo();
+  const ctx = await openTestContext(repo, EXIT_CODES_LOOP_PATH);
+  try {
+    const realAppend = ctx.store.append.bind(ctx.store);
+    const wrappedStore = new Proxy(ctx.store, {
+      get(target, prop, receiver) {
+        if (prop === "append") {
+          return (runId: string, input: AppendInput): AppendResult => {
+            if (input.applied?.eventType === "dispatch-failed") {
+              return { ok: false, reason: "seq_conflict" };
+            }
+            return realAppend(runId, input);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const wrappedCtx = { ...ctx, store: wrappedStore };
+
+    // No "fake" entry in the dispatcher map: `step`'s own backend (`fake`, exit-codes.loop.yaml's
+    // `defaults.backend`) resolves to no registered `Dispatcher`, so `run.ts`'s dispatch loop
+    // takes the `!dispatcher` branch — `buildDispatchFailedEnvelope({code: "no_dispatcher", ...})`
+    // — the simpler of the two ways a dispatch-failed completion is built (the other,
+    // `dispatcher.dispatch()` itself rejecting, reaches the exact same `applyStep` call
+    // afterwards, so it is not a second thing this test needs to also cover).
+    const result = await runLoop({ ctx: wrappedCtx, trigger: TRIGGER, dispatchers: {} });
+
+    assert.equal(result.exitCode, 4);
+    assert.equal(result.state, null);
+    assert.equal(result.outcome, null);
+  } finally {
+    ctx.close();
+    await repo.cleanup();
+  }
+});
+
+// A12: exit 23 ("Run exiting while INTERRUPTED", state-machine.md §12.2) has no test in this file.
+// **Report**: it was investigated, not skipped. `continueRun` (`src/driver/run.ts`, shared by
+// `runLoop` and `gates.ts`'s `decideGate`) checks `finalSnapshot.status === "INTERRUPTED"` only
+// once its own dispatch loop has already broken out — and that loop only ever breaks on
+// `current.nodeState !== "DISPATCHED"` (or `current === null`). The only rule that ever produces
+// `INTERRUPTED` is R-32 (`lease-expired` on an `effects: external` node — `test/driver/
+// sweep.test.ts`'s A11 tests exercise it directly), and it never changes `current` at all: it
+// only ever changes `status`/`interrupted`/`lease`/the attempt record, leaving `current.nodeState`
+// exactly where the dispatch left it (state-machine.md §13.6's "external-effects variant" worked
+// trace, row 1 — the same reference loop's `create-pr`, also effects:external: "node state frozen
+// at DISPATCHED"). `node-started` — the one event that *would* move `current.nodeState` off
+// `DISPATCHED` before a lease could expire — is never emitted by any m1 backend (`fake`/`local`):
+// state-machine.md §2.3's own Node Execution state table restricts it to backends whose
+// capability is `result: streamed`, which m1 has none of. So an `INTERRUPTED` snapshot's
+// `current.nodeState` is always `DISPATCHED`, which can only ever make `continueRun`'s dispatch
+// loop try to dispatch that same attempt *again* — except `assertActionsAgree` (`run.ts`'s own
+// I-30-style guard, called at the top of every loop iteration) throws `internal_invariant` first:
+// its own `current.nodeState === "DISPATCHED"` branch unconditionally demands exactly one
+// `dispatch` action, but R-32's result carries zero (its own action is `wait(until: null)`
+// instead) — confirmed empirically, not just read off the source, by constructing exactly this
+// snapshot with the real engine and feeding it to `continueRun()` directly: it throws
+// `"snapshot says <node> ... is DISPATCHED, but result.actions carries 0 dispatch action(s)
+// instead of exactly one"` rather than ever reaching the exit-23 branch.
+//
+// More basically, `continueRun` is never actually offered the chance to hit this on any real
+// entrypoint anyway: `runSweep()` (`src/driver/sweep.ts`) is the only thing that ever applies a
+// `lease-expired`, and its own doc comment already says why it stops there — "records the
+// resulting action in the returned list without performing it" — never calling `continueRun` with
+// that result. `runLoop`'s and `decideGate`'s own initial calls into `continueRun` (`run-requested`
+// / `human-decided`) can never themselves produce `INTERRUPTED` either — R-32 is the only rule
+// that sets `status: "INTERRUPTED"` anywhere in `engine/transition.ts`, and neither of those two
+// event types reaches it. `loopmill resume` (state-machine.md R-48..R-50, the only rule family
+// that ever *leaves* `INTERRUPTED`) does not exist as a CLI command in m1 at all (`cli/main.ts` has
+// no `resume` case) — confirming the m1-plan.md brief's own framing that `resume`/A11's
+// `--due` half is m2. Given all of the above, exit 23 has no reachable path through any m1
+// entrypoint as currently wired; writing a test that reaches it would require either fabricating a
+// `TransitionResult` no real `transition()` call can produce (routing around
+// `assertActionsAgree`, not exercising it) or fixing `run.ts`/`assertActionsAgree` to check
+// `snapshot.status` before `current.nodeState` — a behaviour change this task's own instructions
+// rule out ("do not change any behaviour to make a test pass") and `run.ts` is outside this task's
+// file list beyond the one authorized, narrower fix in `step.ts`. Left for whoever owns `run.ts`
+// to weigh in on.

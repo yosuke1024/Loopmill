@@ -38,10 +38,34 @@ export interface ApplyStepOutput {
   /** state-machine.md §12.1: `0` handled (`applied`/`duplicate`/`ignored-stale`), `1` unexpected
    * error (never returned here — an unexpected throw propagates to the caller, which is
    * `cli/main.ts`'s job to map), `2` invalid envelope or loop file, `3` state conflict (the
-   * loop's lock is held elsewhere), `4` reserved for dispatch failures — not produced by `step`
-   * in m1 (a `dispatch-failed` envelope reaches `step` as an ordinary inbound envelope like any
-   * other; it does not carry its own step-level exit code). */
-  exitCode: 0 | 2 | 3 | 4;
+   * loop's lock is held elsewhere).
+   *
+   * §12.1's own table also lists a `4` ("backend dispatch failed. The state already records
+   * `dispatch-failed`") — deliberately absent from this union. Decision (not in sheet), m1,
+   * closing A12 (`docs/design/m1-plan.md` §5.1 flagged this exact mismatch: "`step`'s own
+   * `applyStep` declares 4 in its return type but no branch returns it"): every branch below was
+   * traced and none of them can produce it, because a standalone `loopmill step`
+   * (`cli/main.ts`'s `cmdStep`, the only caller that hands this function an envelope read from
+   * the outside world) never itself calls a `Dispatcher` — it only threads whatever envelope it
+   * was given through `transition()` and the store, exactly once. A `dispatch-failed` envelope
+   * arriving at `step` this way is applied like any other inbound completion (R-29/R-30 decide
+   * retry vs. fail from the envelope's own coordinates, same as `applyRunningDispatchFailed` in
+   * `engine/transition.ts`) — the dispatch that failed already happened somewhere else, before
+   * this envelope existed, so its failure can never be *this call's own* failure to reach a
+   * backend. Only `run.ts`'s dispatch loop (`continueRun`, shared with `gates.ts`'s
+   * continuation) actually calls a `Dispatcher`, and it computes its own exit 4 at its own call
+   * site (`run.ts:558`, matching state-machine.md §12.2's exit-code table for `run`) by
+   * inspecting `completionEnvelope.eventType === "dispatch-failed"` directly — never by reading
+   * it off this function's return value, which that same call site (`sweepFirst: false,
+   * skipLockCheck: true`) only ever collapses to `0`/`2`/`3` regardless of what the applied
+   * envelope's own `eventType` was. Narrowed here so the type matches what the code can actually
+   * return, rather than leaving a fourth value nothing produces and only `cli/main.ts`'s own
+   * exit-code passthrough could have silently gone on masking. **Report**: full §12.1 coverage
+   * for `4` on `step` specifically would need this function itself to attempt a dispatch on
+   * behalf of some future direct-dispatch mode — no such mode exists in m1, and building one is
+   * outside this task's own file list (`step.ts`'s brief covers only the type it already
+   * declares). */
+  exitCode: 0 | 2 | 3;
   /** `null` only when `exitCode === 3` (the conflict was detected before `transition()` was ever
    * called, so there is no result to report). */
   result: TransitionResult | null;

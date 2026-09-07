@@ -723,8 +723,9 @@ inside an event.
    `resume --due` or an explicit `loopmill ingest`, and converted into envelopes after the producer
    allowlist is applied. Loopmill never registers a webhook and never runs on GitHub's side.
 3. `ignored-stale` is recorded, not silently dropped: an out-of-order completion is evidence.
-4. `maxStepsPerRun` (default 200) caps the number of applied events per Run; the Run finishes `FAILED`
-   with `failureReason: step_cap_exceeded` rather than looping forever.
+4. `maxStepsPerRun` (default 200) caps the number of applied events per Run; the Run finishes
+   `BUDGET_EXCEEDED(maxStepsPerRun)` (`state-machine.md` D-28, §11.2 step 6) rather than looping
+   forever.
 5. Comments are parsed strictly: unfenced text, a missing `schemaVersion`, or a second block makes the
    comment a non-event. Untrusted text in the same comment is never interpreted (section 13.3).
 
@@ -1229,10 +1230,24 @@ exists in the store, or the next `doctor` reports a fire without a Run.** Silenc
 **Branch naming.** `loopmill/<loop>/<runId>`, cut from `repos[].defaultBase` at the first node that writes
 (**Decision (not in sheet)**, adopted from the review's isolation finding). The operator's checked-out branch and working tree are never touched: every Run works in a dedicated worktree under `.loopmill/worktrees/<runId>` (ADR-002 D8).
 
-**One commit per cycle.** Each cycle's writing node commits once, with the message
-`loopmill: <loop> cycle <n> (<runId>)`, so cycle *n*'s fix has a defined relationship to cycle *n−1* —
-`git diff` between two cycle commits is exactly what the reviewer objected to. A cycle that changes
-nothing produces no commit and is recorded as `NO_PROGRESS`.
+**One commit per successful `local` node.** Each `local` node that completes successfully commits
+once, with the message `loopmill: <loop> cycle <n> (<runId>)`, so every commit has a defined
+relationship to the one before it — `git diff` against the last commit is exactly what the reviewer
+objected to. A node that changes nothing produces no commit; a cycle whose writing node changes no
+files is recorded as `NO_PROGRESS`.
+
+**Correction, m1, 2026-09-08:** through m0 this section read "one commit per cycle" — the cycle's
+*writing* node committing once, with every other node in the cycle, review included, seeing an
+uncommitted tree. `src/driver/run.ts` was built committing after every successful `local` node
+instead, and the loop that met the m1 cut-line (`m1-plan.md` §6) depends on exactly that difference:
+its Codex reviewer node reads `git diff <base>...HEAD`, which shows only the implementer node's own
+change *because* that node's commit already landed by the time review runs. Moving the code to one
+commit per cycle would leave the tree uncommitted at review time and require rewriting that loop, so
+the maintainer decided on 2026-09-08 to keep the implementation and correct this document instead
+(`m1-plan.md` §5.1 and §6). This is a correction, not an amendment under
+`m0-contract-freeze.md` §1: this section is not among the contracts that file's §2 lists as frozen, so
+nothing here reverses a frozen point — the document is catching up to what was already built and
+shipped the m1 cut-line.
 
 **Dedupe and `SKIPPED`.** **Decision (not in sheet):** `dedupeKey = sha256(loopId + ':' + <the loop's
 declared dedupe input>)`, defaulting to the entry node's resolved inputs. The store maps
@@ -1317,11 +1332,20 @@ of this document around it.
 |---|---:|---|---|
 | **m0 — Contract freeze** | 2 | ADR-002; SPIKE-4 (Codex CLI on the host, scheduler-context probes, local Claude confirmation); freeze the provider contract, the loop-file schema, the envelope, the state machines, the usage record, the terminal semantics, the execution-host contract and the credential assumptions | Contracts frozen; nothing in m1 starts before they are written down. **Recorded 2026-09-06** in `docs/design/m0-contract-freeze.md`; its five decisions confirmed by the maintainer the same day |
 | **m1 — Local execution core** | 5 | Loop file + validator; `run` / `step` / `transition`; the SQLite store, journal and lock; the node executor for `local`; `claude-code` and `codex` adapters; `fake` backend; envelope; exit codes; structured results; retries; terminal-first `status` / `runs` / `logs` | First end-to-end run that lands a PR, driven from the command line |
-| **m2 — Scheduled, unattended local execution** | 3 | OS-scheduler integration and `doctor --scheduler`; the sweep, leases and `INTERRUPTED` recovery; overlapping-run prevention; human gates (`cli`, `label`, `pull-request-review`) and `resume --due`; budget and coverage; dedupe/`SKIPPED`; run report | **Dogfood cut-line:** seven consecutive unattended nights of the reference loop on the maintainer's machine |
+| **m2 — Scheduled, unattended local execution** | 3 | OS-scheduler integration and `doctor --scheduler`; the sweep, leases and `INTERRUPTED` recovery; overlapping-run prevention; human gates (`cli`, `label`, `pull-request-review`) and `resume --due`; budget and coverage; dedupe/`SKIPPED`; run report; the review-verdict finding schema (A25, moved from m1 on 2026-09-08 — see below) | **Dogfood cut-line:** seven consecutive unattended nights of the reference loop on the maintainer's machine |
 | **m3 — Observable and installable** | 3 | Read-only UI over the store; `export`, `gc`, `backends`, `doctor --json`; `schedule install`; npm package; docs; policy page | **MVP cut-line** |
 | *post-MVP* | — | Visual builder (lossless round-trip), notifications, the `github-actions` integration, a git-branch mirror, session resume, parallelism | — |
 
 Total to the MVP cut-line: **13 weeks**. The Visual Builder is deliberately outside that number.
+
+**Decision (not in sheet), m1, 2026-09-08: A25 moves to m2.** m1's audit (`m1-plan.md` §5.1) found
+the published finding schema of acceptance criterion 25 below absent entirely, not partially built.
+The maintainer decided to move it to m2 rather than build it now: A25's value is in carrying review
+results into the next cycle (per-finding ids the retry can say it addressed), and that hand-off is the
+same problem as the retry-feedback limitation already open at the end of m1 — a retry cannot see why
+the reviewer refused because `review` does not dominate `implement` (`m1-plan.md` §6, "Still open
+after this run"). Building A25's schema without also wiring that hand-off would ship a shape nothing
+consumes; m2 is where both land together.
 
 ### 20.3 Acceptance criteria
 
@@ -1351,7 +1375,7 @@ numbering is stable across v0.5 and v0.6; criteria whose mechanism changed are r
     journal; the next entrypoint reports `INTERRUPTED` after the lease expires, and `resume --due`
     re-dispatches attempt `n+1` from the cycle's last commit.
 12. `run`'s exit codes match section 7.3 one-for-one, and `step`'s match §12.1 of the state machine.
-13. `maxStepsPerRun` terminates a runaway chain as `FAILED(step_cap_exceeded)`.
+13. `maxStepsPerRun` terminates a runaway chain as `BUDGET_EXCEEDED(maxStepsPerRun)`.
 
 **C. Runtimes, execution and safety (m1-m2)**
 
@@ -1384,9 +1408,10 @@ numbering is stable across v0.5 and v0.6; criteria whose mechanism changed are r
     fewer — and is reported as its own outcome, never as `FAILED`.
 24. A cycle whose fix node changed no files is recorded as `NO_PROGRESS` and does not consume the
     iteration budget.
-25. The review node's verdict conforms to the published finding schema (pass, plus per-finding path,
-    line, severity, suggested change and a stable id), is bound to the commit SHA it judged, and the next
-    cycle records which finding ids it addressed.
+25. **(m2, moved from m1 on 2026-09-08 — see §20.2.)** The review node's verdict conforms to the
+    published finding schema (pass, plus per-finding path, line, severity, suggested change and a
+    stable id), is bound to the commit SHA it judged, and the next cycle records which finding ids it
+    addressed.
 26. A human gate parks the Run with **no Loopmill process anywhere** (exit `20`), and an approval whose
     subject digest no longer matches is rejected as stale, in all three modes.
 27. A second run for the same `dedupeKey` while the first change is still open finishes `SKIPPED` and

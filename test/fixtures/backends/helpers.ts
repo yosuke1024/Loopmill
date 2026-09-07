@@ -3,6 +3,7 @@
 // fixed clock, and a scratch git repo for the worktree/local tests.
 
 import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -121,6 +122,25 @@ export function headCommitOf(repoRoot: string): string {
  * stub CLI, since `local/env.ts` scrubs any name not in its preserve/inject/deny accounting. */
 export function stubEnvPolicy(stubMode: string, extraInject: Record<string, string> = {}): ResolvedEnvPolicy {
   return { deny: [], preserve: ["PATH", "HOME"], inject: { STUB_MODE: stubMode, ...extraInject } };
+}
+
+/**
+ * A16 / `resolve-binary.ts` tests: a temp directory holding one trivially-executable file per
+ * name in `names` (`#!/bin/sh\nexit 0\n`, `chmod 0o755`), for exercising PATH resolution without
+ * depending on `gh`/`git`/`npm`/... actually being installed on whatever machine runs the suite.
+ * Good enough for `describe()` (which never executes anything it plans) and for a real dispatch
+ * that only needs the binary to exit cleanly -- a test that needs claude/codex-SHAPED stdout
+ * still wants the real `test/fixtures/backends/bin/{claude,codex}.mjs` stubs, copied in under a
+ * bare name instead (see `binary-resolution.test.ts`'s dispatch-parity test for exactly that).
+ */
+export function makeStubPathDir(names: string[]): { dir: string; cleanup: () => Promise<void> } {
+  const dir = mkdtempSync(join(tmpdir(), "loopmill-pathstub-"));
+  for (const name of names) {
+    const p = join(dir, name);
+    writeFileSync(p, "#!/bin/sh\nexit 0\n");
+    chmodSync(p, 0o755);
+  }
+  return { dir, cleanup: () => rm(dir, { recursive: true, force: true }) };
 }
 
 export interface LocalWorkspace {

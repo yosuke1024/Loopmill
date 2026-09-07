@@ -28,6 +28,7 @@ import { runCommand, resolveCommandCwd, toScalarInputs, truncateStdout } from ".
 import { buildChildEnv } from "./env.ts";
 import { openCapturedStreams, tail } from "./logs.ts";
 import { loadDefaultPatternTable } from "./patterns.ts";
+import { resolveBinary } from "./resolve-binary.ts";
 import type { CancelStep } from "./spawn.ts";
 import { runProcess } from "./spawn.ts";
 import { changedFiles, ensureWorktree, resetToCycleBase } from "./worktree.ts";
@@ -65,6 +66,33 @@ function isRecord(x: unknown): x is Record<string, unknown> {
 
 function isAgentOrCommandNode(node: DispatchRequest["node"]): node is ResolvedAgentNode | ResolvedCommandNode {
   return node.kind === "agent" || node.kind === "command";
+}
+
+/**
+ * A16 (mvp-design.md §20.3: "`--dry-run`... resolves every binary... to an absolute path"):
+ * rewrites `argv[0]` in place to the absolute path `resolve-binary.ts`'s `resolveBinary` finds on
+ * `pathEnv` -- the CHILD's own scrubbed `PATH` (`env.PATH` from `buildChildEnv`, a parameter here
+ * rather than something this function reaches for itself), never the parent process's, so the
+ * printed plan and the real spawn agree on what would actually run. Both `describe()` (the
+ * dry-run plan) and every real dispatch path call this SAME function on the SAME computed `env`,
+ * per this task's own instruction that "a dry run that printed a path the spawn did not use would
+ * be worse than the current honest bare name" -- there is exactly one place this resolution
+ * happens, not two that could drift apart.
+ *
+ * Decision (not in sheet), m1: when nothing on `PATH` resolves, `argv[0]` is left as the bare
+ * name it already was (`resolveBinary`'s own `found: false` case), never replaced with a
+ * sentinel or thrown as an error here -- the two callers want different things done with that
+ * fact and both get enough information to do it: `describe()` sees `found: false` and adds a
+ * plain-language note ("say plainly that the binary was not found, rather than throwing" -- this
+ * task's own instruction), while a real dispatch path only uses `argv`, so an unresolved binary
+ * reaches `runProcess`/`spawn()` exactly as bare as it always has, and fails with the OS's own
+ * `ENOENT` -- "a real dispatch should fail the way a missing binary already fails today" (same
+ * instruction), not a new failure mode this change invents.
+ */
+function resolveArgv0(argv: string[], pathEnv: string | undefined): { argv: string[]; found: boolean } {
+  if (argv.length === 0) return { argv, found: true };
+  const resolved = resolveBinary(argv[0]!, pathEnv);
+  return { argv: [resolved.argv0, ...argv.slice(1)], found: resolved.found };
 }
 
 /** Turns a spawn/setup problem (a bad prompt file, a `git` failure, ENOENT on the binary, ...)
@@ -140,6 +168,11 @@ export class LocalDispatcher implements Dispatcher {
         argv = node.argv;
         cwd = request.workspace.worktreePath;
       }
+      const resolved = resolveArgv0(argv, env.PATH);
+      argv = resolved.argv;
+      if (!resolved.found) {
+        notes.push(`binary not found on PATH: ${JSON.stringify(argv[0])}`);
+      }
       return { argv, cwd, env, stdin: "/dev/null", timeoutMs: request.timeoutMs, notes };
     }
 
@@ -161,6 +194,11 @@ export class LocalDispatcher implements Dispatcher {
     } catch (err) {
       notes.push(`could not fully resolve this plan: ${err instanceof Error ? err.message : String(err)}`);
       argv = [node.runtime === "claude-code" ? this.#binaries.claude : this.#binaries.codex];
+    }
+    const resolvedAgentArgv0 = resolveArgv0(argv, env.PATH);
+    argv = resolvedAgentArgv0.argv;
+    if (!resolvedAgentArgv0.found) {
+      notes.push(`binary not found on PATH: ${JSON.stringify(argv[0])}`);
     }
     return { argv, cwd: request.workspace.worktreePath, env, stdin: "/dev/null", timeoutMs: request.timeoutMs, notes };
   }
@@ -217,7 +255,10 @@ export class LocalDispatcher implements Dispatcher {
     env: Record<string, string>,
     logs: ReturnType<typeof openCapturedStreams>,
   ): Promise<RuntimeCompletion> {
-    const argv = renderArgv(node.argv, scalars);
+    // A16: `argv[0]` is resolved to the absolute path the child's own scrubbed `PATH` (`env`,
+    // this method's own parameter) would have `execvp`'d anyway -- see `resolveArgv0`'s doc
+    // comment for why this is the identical resolution `describe()` printed, not a second one.
+    const argv = resolveArgv0(renderArgv(node.argv, scalars), env.PATH).argv;
     const cwd = resolveCommandCwd(request.workspace.worktreePath, node.cwd);
 
     const result = await runCommand({
@@ -323,6 +364,9 @@ export class LocalDispatcher implements Dispatcher {
       argv = buildCodexArgv(node, prompt, schemaPath, lastMessagePath, request.workspace.worktreePath);
       argv[0] = this.#binaries.codex;
     }
+    // A16: same resolution `describe()` printed for this node, over the same scrubbed `env` --
+    // see `resolveArgv0`'s doc comment.
+    argv = resolveArgv0(argv, env.PATH).argv;
 
     const stdoutChunks: Buffer[] = [];
     const runResult = await runProcess({

@@ -53,7 +53,7 @@ which conventions, and where each piece stands. It is updated as work lands; it 
 
 ## 5. Acceptance criteria this milestone must meet
 
-A1-A13 (`mvp-design.md` §20.3 A-B) in full; of C-E, the parts that do not need a scheduler: A14 (no-TTY spawn, already measured by SPIKE-1/4), A15 (key scrubbing), A16 (`--dry-run`), A18 (`unavailable` usage), A20 (worktree isolation), A21 (bootstrap), A22-A25 (loop semantics on `fake`), A28 (codex per-process usage), A29 (coverage rendering), A31 (the reference loop green on `fake` with no network). A17, A19, A26-A27 and A30 belong to m2 in full but their engine halves land here.
+A1-A13 (`mvp-design.md` §20.3 A-B) in full; of C-E, the parts that do not need a scheduler: A14 (no-TTY spawn, already measured by SPIKE-1/4), A15 (key scrubbing), A16 (`--dry-run`), A18 (`unavailable` usage), A20 (worktree isolation), A21 (bootstrap), A22-A24 (loop semantics on `fake`), A28 (codex per-process usage), A29 (coverage rendering), A31 (the reference loop green on `fake` with no network). A17, A19, A26-A27 and A30 belong to m2 in full but their engine halves land here — as does A25 as of the 2026-09-08 decision below (section 5.1): it was listed here through the audit, found absent entirely rather than partially built, and the maintainer moved it to m2 in full because its payoff needs the retry-feedback hand-off that is also m2 (section 6).
 
 ### 5.1 Audit, 2026-09-08
 
@@ -61,28 +61,47 @@ All 31 of the above were audited against the code, the tests and the two real ru
 a time, each verdict required to cite a test by name and file, a command and its output, or a code
 path. Every shortfall was then given to a second, adversarial pass told to refute it. **21 met, 8
 partial, 2 not met.** All eight shortfalls that were adversarially re-checked were upheld; A19 and
-A26 hit the re-check cap and carry a first-pass verdict only.
+A26 hit the re-check cap and carry a first-pass verdict only. These are the audit's original figures,
+left as recorded; two of the ten shortfalls have since been resolved by maintainer decisions dated
+2026-09-08 and are marked as such in their rows below — A13, corrected to match the frozen contract,
+and A25, moved out of m1's scope onto m2 (`mvp-design.md` §20.2) rather than judged met or unmet
+against this milestone.
 
 Met, with evidence recorded in the audit: A1, A2, A5, A6, A7, A8, A9, A10, A14, A15, A18, A20, A21,
 A22, A23, A24, A28, A29, and the engine halves of A17, A27 and A30.
 
-| # | Verdict | What is missing |
+| # | Verdict | State on 2026-09-08, after the closing pass |
 |---|---|---|
-| A3 | not met | The criterion names its own proof shape: purity "proven by a property test". No property test exists. I-12 in `test/engine/invariants.test.ts` is a `todo` stub with an empty body whose comment says purity is "asserted by construction", which is code review, not a test |
-| A25 | not met | The published finding schema does not exist at all. The review verdict is `{approved, reasons}` with `reasons` as prose; A25 asks for per-finding path, line, severity, suggested change and a stable id, the verdict bound to the commit SHA it judged, and the next cycle recording which finding ids it addressed. This is an absence, not a partial implementation |
-| A4 | partial | `rebuild-snapshot` is verified for a handful of driven scenarios, not for "every run in the fixture corpus" — no such enumerated corpus of committed run journals exists. Four of the six §13 worked traces are checked only through the engine's in-memory `drive()`/`fold` identity, never through the real store |
-| A11 | partial | The m1 half holds when probed by hand, but nothing in the suite exercises `driver/sweep.ts`'s `runSweep()` or drives a killed process to an `INTERRUPTED` report, so a regression would not be caught. The `resume --due` half is m2 by design |
-| A12 | partial | Exit 23 (`INTERRUPTED`) and exit 4 (backend dispatch failed) have reachable code paths and no test; `step`'s own `applyStep` declares 4 in its return type but no branch returns it |
-| A13 | partial | The mechanism works and is tested, but `mvp-design.md` §20.3 and §8.3 call the outcome `FAILED(step_cap_exceeded)` while the frozen `state-machine.md` (D-28, §11.2 step 6) and the code both produce `BUDGET_EXCEEDED(maxStepsPerRun)`. The string `step_cap_exceeded` exists nowhere outside `mvp-design.md`. The design document contradicts the frozen contract, so the document is what is wrong |
-| A16 | partial | Everything except one clause: the graph is validated, `cwd` is absolute, the argv and post-scrub environment are printed and no tokens are spent, but `argv[0]` stays the bare binary name. "Resolves every binary to an absolute path" is not implemented |
-| A31 | partial | The reference loop is green offline with no network and no tokens, but not "in CI": `.github/workflows/` holds only the two pre-m1 spike harnesses, and nothing re-runs the suite on push or pull request |
-| A19 engine half | partial | The denial mechanism is unit-tested at argv level only. The criterion asks for a planted instruction inside reviewed content to cause no `gh` or `git push` invocation, "as a passing red-team test, not a manual check". No such test exists |
-| A26 engine half | partial | The digest check is mode-agnostic and tested, but "in all three modes" is a claim about the shipped system, and only `cli` has a producer. Nothing mints a `human-decided` event from a label or a pull request review; that is the m2 ingestion |
+| A3 | **resolved** | A real property test now exists: `test/engine/purity.test.ts` with its shared `test/engine/purity-check.ts`, generating (snapshot, event, ctx) triples from Runs driven through the reference loop and checking determinism, non-mutation of the inputs, and no I/O by intercepting `fs`, `child_process`, `Date` and `Math.random` during the call. The seed is deterministic and printed on failure. I-12 in `invariants.test.ts` runs the identical checks under its own name instead of the `todo` stub it was |
+| A4 | **resolved** | `test/store/worked-traces.test.ts` drives all six `state-machine.md` §13 worked traces through the real `SqliteStore` and compares each stored snapshot against `rebuildSnapshot`'s fold, byte-identical by canonical JSON. It iterates a corpus declared in `test/fixtures/store/worked-traces.ts`, so a seventh run is one entry, not one test |
+| A13 | **resolved** | `mvp-design.md` §20.3 and §8.3 called the outcome `FAILED(step_cap_exceeded)`, a string that existed nowhere else in the repository, while the frozen `state-machine.md` (D-28, §11.2 step 6) and the code both produce `BUDGET_EXCEEDED(maxStepsPerRun)`. The document was wrong and was corrected in both places |
+| A16 | **resolved** | `src/backends/local/resolve-binary.ts` resolves a bare `argv[0]` against the CHILD's own scrubbed `PATH` with `execvp` semantics, and `executor.ts` calls it from all four sites, so `describe()` and the real dispatch agree by construction. An unresolvable binary is a dry-run note, never a throw, and still fails at spawn exactly as before. `loopmill run readme-freshness --dry-run` now prints an absolute path for every node |
+| A19 engine half | **resolved, with a stated limit** | `test/backends/red-team.test.ts` plants an instruction in reviewed content, has the stub attempt `gh` and `git push`, and asserts the attempt never becomes a real invocation: the `workspace` argv denies both tools, the child environment carries no `GH_TOKEN` or `GITHUB_TOKEN` for a node whose `effects` is not `external`, and the repository is untouched. The file's own header says what this cannot prove: a stub shows the mechanism denies the call, not that a real model would resist persuasion |
+| A25 | **moved to m2 (2026-09-08)** | The published finding schema does not exist at all: the review verdict is `{approved, reasons}` with `reasons` as prose, where A25 asks for per-finding path, line, severity, suggested change and a stable id, the verdict bound to the commit SHA judged, and the next cycle recording which finding ids it addressed. Moved rather than built, because its value is carrying review results into the next cycle and that hand-off is the same problem as section 6's retry-feedback limitation |
+| A31 | **resolved locally; unproven until the first push** | `.github/workflows/ci.yml` runs `npm run check` on push and pull request, on the Node floor `package.json` declares, with `npm ci` and no repository secret. The YAML parses and both actions it references exist at the pinned major. What no local check can establish is that the suite passes on Node 22.18 on `ubuntu-latest`; the first run on GitHub is the proof |
+| A11 | **partial, narrowed** | The m1 half is now tested: `test/driver/sweep.test.ts` drives a Run whose `node-dispatched` is committed and whose lease has expired, and asserts it is swept to `INTERRUPTED` with the journal intact. The remaining half, `resume --due` re-dispatching attempt n+1, is m2 by design and not a shortfall of m1 |
+| A12 | **partial, and now a code finding rather than a test gap** | Exit 4 is settled: `applyStep`'s return type declared a value no branch could produce, because a standalone `loopmill step` never calls a `Dispatcher` at all, so the type was narrowed to `0 \| 2 \| 3` with the reasoning recorded at the declaration. Exit 23 is the open half: it is implemented in `run.ts` but **no wired m1 entrypoint can reach it**, confirmed empirically. See section 6 |
+| A26 engine half | **m2** | The digest check is mode-agnostic and tested, but "in all three modes" is a claim about the shipped system, and only `cli` has a producer. Nothing mints a `human-decided` event from a label or a pull request review; that is the m2 ingestion |
 
-Two of these need a decision before they can be worked, and are not the implementer's to make: A25
-(whether the finding schema is m1 scope or moves to m2 alongside the retry-feedback problem section 6
-records) and the commit-granularity contradiction section 6 records. The other eight have no
-alternatives to weigh.
+Of the ten shortfalls the audit found, **six are resolved, two moved to m2, and two remain partial**;
+the suite went from 646 tests to 675, and `todo` from 16 to 15 because I-12 became a real test.
+
+Two of the ten needed a decision that was not the implementer's to make, and the maintainer decided
+both on 2026-09-08. A25 moves to m2 in full, recorded in its row above and in `mvp-design.md` §20.2
+and §20.3 item 25. The commit-granularity contradiction section 6 records is resolved the other way:
+the implementation is right and `mvp-design.md` §18 was wrong, so the document was corrected to say
+one commit per successful `local` node. A13 turned out to have the same shape and needed no decision,
+because the frozen contract had already settled which side was wrong.
+
+Two of these needed a decision before they could be worked, and were not the implementer's to make:
+A25 (whether the finding schema is m1 scope or moves to m2 alongside the retry-feedback problem
+section 6 records) and the commit-granularity contradiction section 6 records. **Both were decided by
+the maintainer on 2026-09-08.** A25 moves to m2 in full (its row above; `mvp-design.md` §20.2 and
+§20.3 item 25). The commit-granularity contradiction is resolved the other way: the implementation is
+right and `mvp-design.md` §18 was wrong, so the document was corrected to say one commit per
+successful `local` node, not one per cycle — see section 6's own note below. The other eight have no
+alternatives to weigh; A13 (partial, not one of the two needing a decision) is resolved above, since
+the frozen contract already settled which side was wrong.
 
 ---
 
@@ -137,11 +156,24 @@ deliberately left that way.
   opaque to the backend by design, so nothing turns that URL into an artifact. Belongs with the
   GitHub ingestion in m2.
 - The driver commits after **every** successful `local` node, not once per cycle as `mvp-design.md`
-  §18 says. It coincides for this loop (only `implement` touches tracked files) and for the
-  reference loop, but the two statements are not the same rule.
+  §18 said. It coincides for this loop (only `implement` touches tracked files) and for the
+  reference loop, but the two statements are not the same rule. **Resolved, 2026-09-08:** the
+  maintainer decided to keep the implementation and correct the document, because this loop's Codex
+  reviewer reads `git diff <base>...HEAD` and only sees the implementer's own change *because* that
+  change was already committed when its node finished — one commit per cycle would leave the tree
+  uncommitted at review time and require rewriting this loop. `mvp-design.md` §18 now reads "one
+  commit per successful `local` node"; this is a correction, not an amendment, since §18 is not among
+  the contracts `m0-contract-freeze.md` §2 lists as frozen.
 - A retry cannot see why the reviewer refused: `review` does not dominate `implement`, so
   `nodes.review.structured.reasons` is not a legal input of the node being retried. The only
   signals a second cycle gets are `cycle.index` and the engine's NO_PROGRESS hint.
+- Exit code 23, a `run` exiting while the Run is `INTERRUPTED`, is implemented in `driver/run.ts`
+  and **no wired m1 entrypoint can reach it**. Found while closing A12: `runSweep()` deliberately
+  never continues a Run it swept, and feeding a real `lease-expired` transition result into
+  `continueRun()` throws `internal_invariant` instead, so the branch is dead in the shipped system.
+  Either an entrypoint that reports an interrupted Run through `run`'s own exit code is missing, or
+  the exit code belongs only to `resume` and the §7.3 table should say so. It is one line of code
+  either way, but which line depends on what m2's `resume --due` is meant to do, so it waits.
 - `loopmill rebuild-snapshot` reports a mismatch for both runs recorded on 2026-09-07: their stored
   snapshots were written by the engine as it stood before defects 3 and 5 were fixed. That is the
   tool working, not failing.

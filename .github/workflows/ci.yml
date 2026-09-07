@@ -1,0 +1,70 @@
+# A31 (mvp-design.md §20.3, item 31): "The whole reference loop runs green against
+# the `fake` backend in CI, with no network, no subscription and no tokens."
+#
+# The reference loop already runs green offline (test/driver/e2e-fake.test.ts, part
+# of `npm test`) — see m1-plan.md §5.1, decision #6. What A31 was missing before this
+# file is the "in CI" clause: nothing under .github/workflows/ re-ran the suite on
+# push or pull request. The other two workflows here (spike-1-claude-subscription.yml,
+# spike-3-step.yml) are pre-m1 spike harnesses for the Claude Code CLI contract and
+# the Actions-chained control plane spike; neither touches the engine, driver or CLI
+# that this milestone's acceptance criteria are about, and both need a subscription
+# secret (CLAUDE_CODE_OAUTH_TOKEN / GITHUB_TOKEN with API scope) to do anything.
+#
+# This workflow needs none of that. It is exactly `npm run check`
+# (typecheck + `npm test` + the two spec validators, see package.json) run against
+# the `fake` backend by construction: every test under test/ is offline per m1-plan.md
+# decision #6 (no `claude`, no `codex`, no network, no tokens), and the one exception
+# — test/live/, gated behind LOOPMILL_LIVE=1 and never set here — is not part of the
+# npm test glob's default run in this job. The only network this job uses is the npm
+# registry to install the locked dependencies (ajv, ajv-formats, yaml, @types/node,
+# typescript) via `npm ci`; no repository secret is read anywhere below.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Read-only: this job only builds and tests, it never writes to the repository or
+# to Actions state, unlike spike-3-step.yml's chain (contents: write, actions: write).
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Shown as-is in a PR's required-checks list, so it should read as what it is:
+    # the offline `npm run check` gate, not a spike.
+    name: typecheck, test suite (fake backend) and spec validators
+    runs-on: ubuntu-latest
+    # `npm run check` finishes in well under a minute locally (~30s for the test
+    # suite alone); this is generous headroom, not a measured figure.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          # Pinned to the exact floor recorded in m1-plan.md §1, decision #2 ("Node
+          # >= 22.18") and package.json's `engines.node`. That floor is not
+          # arbitrary: `node:sqlite` (src/store/sqlite.ts) needs Node >= 22.13, and
+          # this project runs `.ts` files directly off `erasableSyntaxOnly` output
+          # with no build step (decision #1) — type stripping became the default,
+          # with no --experimental-strip-types flag, only from Node 22.18. A version
+          # below this floor would fail both requirements, not just run slower.
+          node-version: "22.18.0"
+          cache: "npm"
+
+      # The lock file (package-lock.json) is committed, so this installs exactly
+      # what it pins — no resolution, no network beyond the npm registry, and no
+      # write back to the working tree the way `npm install` could do.
+      - name: Install dependencies (npm ci)
+        run: npm ci
+
+      # typecheck + `node --test` over test/**/*.test.ts + the two spec validators
+      # (docs/spec/validate-examples.mjs, docs/spec/validate-envelopes.mjs). See
+      # package.json's "check" script for the exact composition; this workflow
+      # intentionally does not re-list the three sub-scripts so it can never drift
+      # from what `npm run check` actually runs.
+      - name: npm run check
+        run: npm run check
