@@ -55,6 +55,35 @@ which conventions, and where each piece stands. It is updated as work lands; it 
 
 A1-A13 (`mvp-design.md` §20.3 A-B) in full; of C-E, the parts that do not need a scheduler: A14 (no-TTY spawn, already measured by SPIKE-1/4), A15 (key scrubbing), A16 (`--dry-run`), A18 (`unavailable` usage), A20 (worktree isolation), A21 (bootstrap), A22-A25 (loop semantics on `fake`), A28 (codex per-process usage), A29 (coverage rendering), A31 (the reference loop green on `fake` with no network). A17, A19, A26-A27 and A30 belong to m2 in full but their engine halves land here.
 
+### 5.1 Audit, 2026-09-08
+
+All 31 of the above were audited against the code, the tests and the two real runs, one criterion at
+a time, each verdict required to cite a test by name and file, a command and its output, or a code
+path. Every shortfall was then given to a second, adversarial pass told to refute it. **21 met, 8
+partial, 2 not met.** All eight shortfalls that were adversarially re-checked were upheld; A19 and
+A26 hit the re-check cap and carry a first-pass verdict only.
+
+Met, with evidence recorded in the audit: A1, A2, A5, A6, A7, A8, A9, A10, A14, A15, A18, A20, A21,
+A22, A23, A24, A28, A29, and the engine halves of A17, A27 and A30.
+
+| # | Verdict | What is missing |
+|---|---|---|
+| A3 | not met | The criterion names its own proof shape: purity "proven by a property test". No property test exists. I-12 in `test/engine/invariants.test.ts` is a `todo` stub with an empty body whose comment says purity is "asserted by construction", which is code review, not a test |
+| A25 | not met | The published finding schema does not exist at all. The review verdict is `{approved, reasons}` with `reasons` as prose; A25 asks for per-finding path, line, severity, suggested change and a stable id, the verdict bound to the commit SHA it judged, and the next cycle recording which finding ids it addressed. This is an absence, not a partial implementation |
+| A4 | partial | `rebuild-snapshot` is verified for a handful of driven scenarios, not for "every run in the fixture corpus" — no such enumerated corpus of committed run journals exists. Four of the six §13 worked traces are checked only through the engine's in-memory `drive()`/`fold` identity, never through the real store |
+| A11 | partial | The m1 half holds when probed by hand, but nothing in the suite exercises `driver/sweep.ts`'s `runSweep()` or drives a killed process to an `INTERRUPTED` report, so a regression would not be caught. The `resume --due` half is m2 by design |
+| A12 | partial | Exit 23 (`INTERRUPTED`) and exit 4 (backend dispatch failed) have reachable code paths and no test; `step`'s own `applyStep` declares 4 in its return type but no branch returns it |
+| A13 | partial | The mechanism works and is tested, but `mvp-design.md` §20.3 and §8.3 call the outcome `FAILED(step_cap_exceeded)` while the frozen `state-machine.md` (D-28, §11.2 step 6) and the code both produce `BUDGET_EXCEEDED(maxStepsPerRun)`. The string `step_cap_exceeded` exists nowhere outside `mvp-design.md`. The design document contradicts the frozen contract, so the document is what is wrong |
+| A16 | partial | Everything except one clause: the graph is validated, `cwd` is absolute, the argv and post-scrub environment are printed and no tokens are spent, but `argv[0]` stays the bare binary name. "Resolves every binary to an absolute path" is not implemented |
+| A31 | partial | The reference loop is green offline with no network and no tokens, but not "in CI": `.github/workflows/` holds only the two pre-m1 spike harnesses, and nothing re-runs the suite on push or pull request |
+| A19 engine half | partial | The denial mechanism is unit-tested at argv level only. The criterion asks for a planted instruction inside reviewed content to cause no `gh` or `git push` invocation, "as a passing red-team test, not a manual check". No such test exists |
+| A26 engine half | partial | The digest check is mode-agnostic and tested, but "in all three modes" is a claim about the shipped system, and only `cli` has a producer. Nothing mints a `human-decided` event from a label or a pull request review; that is the m2 ingestion |
+
+Two of these need a decision before they can be worked, and are not the implementer's to make: A25
+(whether the finding schema is m1 scope or moves to m2 alongside the retry-feedback problem section 6
+records) and the commit-granularity contradiction section 6 records. The other eight have no
+alternatives to weigh.
+
 ---
 
 ## 6. The first live run (the m1 cut-line)
