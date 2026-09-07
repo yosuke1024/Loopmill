@@ -1059,3 +1059,105 @@ test("I-30-in-spirit: every state-machine.json transition row id appears somewhe
   }
   assert.deepEqual(missing, [], `row ids missing from every test name: ${missing.join(", ")}`);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Run-level artifact roll-up (state-machine.md §8; the §13.1 worked trace's row 8).
+//
+// Found by the first live run of `.loopmill/readme-freshness.loop.yaml` on 2026-09-07: the Run
+// produced a commit, a pushed branch and a pull request, and both `loopmill status` and the
+// generated report said "Artifacts (none)". No transition had ever written
+// `snapshot.artifactRefs`, so `run-finished` carried an empty list on every Run ever executed.
+// ---------------------------------------------------------------------------------------------
+
+const ISSUE_REF = { kind: "issue" as const, ref: "#42", url: "https://github.com/example/repo/issues/42" };
+
+test("section 8 / 13.1 row 8: a node completion's durable artifactRefs accumulate onto the Run", () => {
+  const { steps } = baselineAtEntry();
+  const all: Step[] = [
+    ...steps,
+    {
+      now: "2026-09-06T06:05:00.000Z",
+      event: nodeCompleted("2026-09-06T06:05:00.000Z", {
+        cycle: 0,
+        nodeId: "review-content",
+        attempt: 1,
+        result: { status: "succeeded", structured: { needs_issue: true, title: "t", summary: "s" } },
+        usage: wireUsage(fullUsage()),
+      }),
+    },
+    {
+      now: "2026-09-06T06:10:00.000Z",
+      event: nodeCompleted("2026-09-06T06:10:00.000Z", {
+        cycle: 0,
+        nodeId: "create-issue",
+        attempt: 1,
+        result: { status: "succeeded", exitCode: 0 },
+        // The `local` backend attaches a `file` ref per changed file and two per attempt for the
+        // captured logs; §8's enumeration of what the Run accumulates lists none of them.
+        artifactRefs: [ISSUE_REF, { kind: "file", ref: ".loopmill/logs/run/0-create-issue-1.stdout.log" }],
+      }),
+    },
+  ];
+  const { snapshot } = drive(all);
+  assert.deepEqual(snapshot.artifactRefs, [ISSUE_REF], "only the durable ref rolls up; file refs stay on the Node Execution record");
+});
+
+test("section 8: the Run's artifact roll-up is deduplicated by kind + ref, in order", () => {
+  const { steps } = baselineAtEntry();
+  const commit = { kind: "commit" as const, ref: "a".repeat(40) };
+  const secondCommit = { kind: "commit" as const, ref: "b".repeat(40) };
+  const all: Step[] = [
+    ...steps,
+    {
+      now: "2026-09-06T06:05:00.000Z",
+      event: nodeCompleted("2026-09-06T06:05:00.000Z", {
+        cycle: 0,
+        nodeId: "review-content",
+        attempt: 1,
+        result: { status: "succeeded", structured: { needs_issue: true, title: "t", summary: "s" } },
+        usage: wireUsage(fullUsage()),
+        artifactRefs: [commit],
+      }),
+    },
+    {
+      now: "2026-09-06T06:10:00.000Z",
+      event: nodeCompleted("2026-09-06T06:10:00.000Z", {
+        cycle: 0,
+        nodeId: "create-issue",
+        attempt: 1,
+        result: { status: "succeeded", exitCode: 0 },
+        // The driver prepends the cycle's commit to every completion on the `local` backend, so
+        // the same commit really does arrive more than once within one cycle.
+        artifactRefs: [commit, secondCommit],
+      }),
+    },
+  ];
+  const { snapshot } = drive(all);
+  assert.deepEqual(snapshot.artifactRefs, [commit, secondCommit]);
+});
+
+test("section 8: run-finished carries the accumulated artifactRefs", () => {
+  const { steps } = baselineAtEntry();
+  const all: Step[] = [
+    ...steps,
+    {
+      now: "2026-09-06T06:05:00.000Z",
+      event: nodeCompleted("2026-09-06T06:05:00.000Z", {
+        cycle: 0,
+        nodeId: "review-content",
+        attempt: 1,
+        result: { status: "succeeded", structured: { needs_issue: false, title: "t", summary: "s" } },
+        usage: wireUsage(fullUsage()),
+        artifactRefs: [ISSUE_REF],
+      }),
+    },
+  ];
+  const { results, snapshot } = drive(all);
+  // needs_issue: false takes the else branch straight to end-no-change, so this Run finishes here.
+  assert.equal(snapshot.status, "SUCCEEDED");
+  const finished = results
+    .flatMap((r) => (r.kind === "applied" ? r.emitted : []))
+    .find((e) => e.eventType === "run-finished");
+  assert.ok(finished, "the Run must have emitted run-finished");
+  assert.deepEqual(finished.artifactRefs, [ISSUE_REF]);
+});

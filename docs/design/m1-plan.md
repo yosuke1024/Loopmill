@@ -49,8 +49,72 @@ which conventions, and where each piece stands. It is updated as work lands; it 
 | W1 | `loop-file/`, `envelope/`, `usage/`, `store/` — four independent modules | W0 | done 2026-09-06 (362 tests in total; envelope schema amended to 1.1.0 for `outcome`; the store is synchronous by design) |
 | W2 | `engine/` | W0, `types/` from W1 | done 2026-09-07 (177 tests; four spec amendments recorded in the freeze log) |
 | W3 | `backends/` (`fake`, then `local`), `driver/`, `cli/` | W1, W2 | done 2026-09-07 (615 tests in total); a follow-up fixes the defects a manual run exposed |
-| W4 | the reference loop end to end on `fake` (A31); then, with the maintainer's go-ahead, a live run on the maintainer's machine that lands a PR (the m1 cut-line) | W3 | A31 green in `test/driver/e2e-fake.test.ts`; the live run needs a target repository and the maintainer's go-ahead |
+| W4 | the reference loop end to end on `fake` (A31); then, with the maintainer's go-ahead, a live run on the maintainer's machine that lands a PR (the m1 cut-line) | W3 | **done 2026-09-07.** A31 green in `test/driver/e2e-fake.test.ts`; the live run landed [PR #2](https://github.com/yosuke1024/Loopmill/pull/2) — see section 6 |
 
 ## 5. Acceptance criteria this milestone must meet
 
 A1-A13 (`mvp-design.md` §20.3 A-B) in full; of C-E, the parts that do not need a scheduler: A14 (no-TTY spawn, already measured by SPIKE-1/4), A15 (key scrubbing), A16 (`--dry-run`), A18 (`unavailable` usage), A20 (worktree isolation), A21 (bootstrap), A22-A25 (loop semantics on `fake`), A28 (codex per-process usage), A29 (coverage rendering), A31 (the reference loop green on `fake` with no network). A17, A19, A26-A27 and A30 belong to m2 in full but their engine halves land here.
+
+---
+
+## 6. The first live run (the m1 cut-line)
+
+**Target.** `.loopmill/readme-freshness.loop.yaml`, written for this milestone: Codex (read-only)
+checks `README.md` against the repository it describes, Claude Code fixes exactly the statements
+that have gone stale, `npm ci` and `npm test` run in the Run's own worktree, Codex reviews the
+committed diff, a human gate (`mode: cli`) stands in front of the two external effects, and `git
+push` + `gh pr create` open a pull request into `claude/loopmill-mvp-design-feul8d`. It never
+merges. The reference loop under `examples/` was not used: it is content-site oriented, and its
+`mode: label` gate needs the GitHub ingestion that lands in m2.
+
+**Result.** `SUCCEEDED`, exit 0, one cycle, 649,485 measured tokens, usage coverage 3/3 (100%),
+159 s active plus 59 s waiting on the human.
+[PR #2](https://github.com/yosuke1024/Loopmill/pull/2) from
+`loopmill/readme-freshness/run_01M1YFH5GTHRT9N1WZCC1SMD72`. The Codex reviewer approved the diff on
+its own evidence, and the operator checked both corrected statements against the repository before
+approving the gate.
+
+**What it cost to get there.** A dry run, an adversarial pre-flight over the loop and the code path
+it takes, and one failed live run found five defects, none of which the 619 tests then in the suite
+covered. Every one of them would have shipped:
+
+| # | Defect | How it was found | Fix |
+|---|---|---|---|
+| 1 | `claude --json-schema` takes the schema's JSON text **inline**; the executor was handing it a temp-file path, so no `structuredOutput` node would ever have been validated | pre-flight, against `claude --help` 2.1.263 — and this repository's own SPIKE-1 check C3 had already measured the inline form | `buildClaudeArgv` takes the schema text; the temp file is codex-only (`--output-schema <FILE>` genuinely wants a path) |
+| 2 | `--disallowedTools` is variadic, so emitting it twice risked the second occurrence replacing the first and silently dropping the `Bash(gh *)` denial | dry run | one occurrence, two values |
+| 3 | A `command` node failing under `onFailure: continue` lost its exit code: the engine replaced the whole Node Execution record with a synthetic one, so a downstream condition reading `nodes.<id>.exitCode` ended the Run `FAILED(condition_error)`. This is the pattern the reference loop itself is built on | pre-flight | the failed record is kept and relabelled `SKIPPED`; terminal failures also keep the attempt's own `error` and `exitCode` |
+| 4 | `claude` cannot find its subscription login without `USER` in its environment, and the built-in preserve list did not carry it | **the first live run failed on it** — Codex succeeded, Claude Code returned `Not logged in · Please run /login` in 165 ms | amendment: `USER` added to the preserve list (`m0-contract-freeze.md` §6, 2026-09-07) |
+| 5 | No transition ever wrote `snapshot.artifactRefs`, so `run-finished` carried an empty list and the run report said "Artifacts (none)" for a Run that had just produced a commit, a branch and a pull request | **the successful live run's own report** | node completions accumulate their durable (non-`file`) artifactRefs onto the Run, per `state-machine.md` §8 |
+
+Two more the pre-flight found and this milestone accepted rather than fixed: a `verify` failure and a
+`review` rejection share one retry edge (so a red suite spends a cycle on the implementer), and
+`budget.maxAttempts` is loop-wide, so the only way to stop an automatic redispatch of a
+non-idempotent `gh pr create` is to set it to 1 for the whole loop — which this loop does, and
+documents.
+
+**Confirmed against the real CLIs.** The permission-profile mapping this milestone was briefed with
+is now measured, not assumed: `workspace` → `--permission-mode acceptEdits` + one variadic
+`--disallowedTools "Bash(gh *)" "Bash(git push *)"` + `--permission-prompts none` lets the agent read
+and edit inside the worktree with no permission denials, and `readonly` → `codex exec -s read-only`
+lets the reviewer read the tree and run `git diff`. `--permission-prompts none` also denies the
+`Bash` tool outright under `acceptEdits`, which is stricter than `mvp-design.md` §13.1's wording and
+deliberately left that way.
+
+**Still open after this run.**
+
+- No `pr` or `branch` `artifactRef` is ever created. `gh pr create` prints the pull request URL on
+  stdout and the command node captures it in `result.structured.stdout`, but a `command` node is
+  opaque to the backend by design, so nothing turns that URL into an artifact. Belongs with the
+  GitHub ingestion in m2.
+- The driver commits after **every** successful `local` node, not once per cycle as `mvp-design.md`
+  §18 says. It coincides for this loop (only `implement` touches tracked files) and for the
+  reference loop, but the two statements are not the same rule.
+- A retry cannot see why the reviewer refused: `review` does not dominate `implement`, so
+  `nodes.review.structured.reasons` is not a legal input of the node being retried. The only
+  signals a second cycle gets are `cycle.index` and the engine's NO_PROGRESS hint.
+- `loopmill rebuild-snapshot` reports a mismatch for both runs recorded on 2026-09-07: their stored
+  snapshots were written by the engine as it stood before defects 3 and 5 were fixed. That is the
+  tool working, not failing.
+- The failed run left a worktree and a local branch behind (`run_01M1YF4RKPTT6HGYW9J2X4SSH2`).
+  Nothing collects them yet; `gc` is m3.
+

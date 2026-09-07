@@ -1084,6 +1084,38 @@ function applyNodeStarted(snapshot: RunSnapshot, event: Envelope, ctx: EngineTra
   return ok(working, []);
 }
 
+/**
+ * state-machine.md §8 ("Every `artifactRef` accumulated during the Run -- working branch, commits,
+ * issues, PRs, comments ... -- is copied into `run-finished.artifactRefs`") and the §13.1 worked
+ * trace's row 8 (`node-completed` with `artifactRefs: [issue #42]` gives `artifactRefs += issue#42`):
+ * the Run keeps a roll-up of the durable artifacts its Node Executions produced, and
+ * `emitRunFinished` carries it onto `run-finished`.
+ *
+ * `kind: "file"` refs are deliberately excluded. §8's own enumeration of what accumulates lists
+ * only durable, externally addressable things, and the `local` backend attaches one `file` ref per
+ * changed file plus two per attempt for the captured stdout/stderr logs -- they belong to the Node
+ * Execution record (where they stay, and where `loopmill logs` reads them) and would bury the Run's
+ * actual output. Deduplicated by `kind` + `ref` with order preserved: a Run that commits once per
+ * cycle and re-reports the same commit must not list it twice.
+ *
+ * Bug fix, found by the first live run (2026-09-07): no transition ever wrote
+ * `snapshot.artifactRefs`, so `run-finished.artifactRefs` was always empty and the run report said
+ * "Artifacts (none)" for a Run that had just produced a commit, a pushed branch and a pull request.
+ */
+function accrueRunArtifacts(snapshot: RunSnapshot, refs: ArtifactRef[] | undefined): RunSnapshot {
+  if (!refs || refs.length === 0) return snapshot;
+  const seen = new Set(snapshot.artifactRefs.map((r) => `${r.kind}\u0000${r.ref}`));
+  const added: ArtifactRef[] = [];
+  for (const ref of refs) {
+    if (ref.kind === "file") continue;
+    const key = `${ref.kind}\u0000${ref.ref}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    added.push(ref);
+  }
+  return added.length === 0 ? snapshot : { ...snapshot, artifactRefs: [...snapshot.artifactRefs, ...added] };
+}
+
 function filesChangedFrom(artifactRefs: ArtifactRef[] | undefined): Array<{ path: string; digest: string }> {
   if (!artifactRefs) return [];
   return artifactRefs.filter((r) => r.kind === "file").map((r) => ({ path: r.ref, digest: r.digest ?? "" }));
@@ -1168,6 +1200,7 @@ function applyRunningNodeCompleted(snapshot: RunSnapshot, event: Envelope, ctx: 
     nodes: { ...snapshot.nodes, [nKey]: updatedNode },
     terminalEventKeys: [...snapshot.terminalEventKeys, terminalEventKey(cur.cycleIndex, cur.nodeId, cur.attempt, "node-completed")],
     noProgressStreak: 0,
+    artifactRefs: accrueRunArtifacts(snapshot, event.artifactRefs).artifactRefs,
   };
   if (changeFp !== null) {
     working = { ...working, changeFingerprints: { ...working.changeFingerprints, [nKey]: changeFp } };
@@ -1247,6 +1280,7 @@ function handleNoProgress(
     nodes: { ...snapshot.nodes, [nKey]: updatedNode },
     changeFingerprints: { ...snapshot.changeFingerprints, [nKey]: changeFp },
     terminalEventKeys: [...snapshot.terminalEventKeys, terminalEventKey(cur.cycleIndex, cur.nodeId, cur.attempt, "node-completed")],
+    artifactRefs: accrueRunArtifacts(snapshot, event.artifactRefs).artifactRefs,
   };
   working = accrueNodeExecutionUsage(working, node, cur.cycleIndex, cur.nodeId);
 
