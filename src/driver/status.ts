@@ -90,7 +90,12 @@ function nextDescription(snapshot: RunSnapshot): string {
     return `resumed{kind:due} after ${snapshot.quota.resumeDueAt}`;
   }
   if (snapshot.status === "INTERRUPTED") {
-    return "resumed{kind:interrupted} (resume is m2)";
+    // Named with its own command, not just its event type: `INTERRUPTED` is the one wait state
+    // whose next event the operator must *choose* (state-machine.md §10.3 — the node "could not
+    // be safely re-dispatched without a human deciding"), so `resume` deliberately has no default
+    // decision and this line has to say which three there are. Every other branch above names
+    // only the event, because for those the operator has nothing to pick.
+    return `resumed{kind:interrupted} — loopmill resume ${snapshot.runId} --decision retry|skip|fail`;
   }
   if (snapshot.current) {
     return `node-completed/node-failed/node-timed-out for ${snapshot.current.nodeId} (cycle ${snapshot.current.cycleIndex}, attempt ${snapshot.current.attempt})`;

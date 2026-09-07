@@ -198,7 +198,7 @@ m1's conventions (`m1-plan.md` §3) carry over unchanged. Two additions:
 | Wave | Contents | Depends on | Status |
 |---|---|---|---|
 | W0a | The §2.2 defect: `store.sweep()` becomes a read-only scan, and `runSweep` releases the `locks` row only when the resulting snapshot holds no lease | — | **done 2026-09-08** (676 tests; the reproduction is now `test/driver/sweep.test.ts`'s third case, verified to fail against the old code) |
-| W1 | `loopmill resume <runId> [--decision retry\|skip\|fail]` and `resume --due`; its exit codes; the exit-23 resolution; the unreachable `cancel` decision | W0a | not started |
+| W1 | `loopmill resume <runId> [--decision retry\|skip\|fail]` and `resume --due`; its exit codes; the exit-23 resolution; the unreachable `cancel` decision | W0a | **done 2026-09-08** (685 tests). `resume --due` drains the *quota*-parked half of A37; its approved-but-unresumed half needs the GitHub read and lands in W2 |
 | W0b | The rest of `state-machine.md` §10.2: index the scan on the snapshot, and emit the bullets that have no producer (`human_timeout`, `max_runtime`, `resumed{due}`, stuck `PENDING`) | **W1** — reordered, see below | not started |
 | W2 | The `gh` read module; `pr` / `branch` / `issue` artifactRefs from the `local` backend; a `Subject.kind: "pr"` producer; `pull-request-review` gate ingestion (`label` is m3, §6 decision 1) | W1 | not started |
 | W3 | Measure `launchctl print` first (§2.5); then `doctor --scheduler` and the launchd user-agent unit with its environment snapshot; the loop↔unit identity convention | — (may run beside W2) | not started |
@@ -219,6 +219,43 @@ The one thing W0a leaves genuinely undone is the index itself — the scan still
 rows, which is why it can only ever reach the lease bullet. That moves to W0b with the rest.
 | W5 | The A25 finding schema, the loop-file amendment for a cycle-scoped reference, and the retry-feedback hand-off | W2 | not started |
 | W6 | The nightly loop file, then seven consecutive nights (the cut-line) | W1-W4 | not started |
+
+### 4.1 What W1 settled
+
+**Exit 23 has a producer, and `--decision` has no default.** m1 left this open because the answer
+depended on what `resume` would do (`m1-plan.md` §6). The frozen table (`state-machine.md` §12.2) says
+only "Process exited with the Run in `INTERRUPTED`" — the "(only via `status` after a crash)" gloss
+exists solely in `mvp-design.md` §7.3's reproduction, and named a producer that did not exist.
+`loopmill resume <runId>` on an `INTERRUPTED` Run with no `--decision` now reports what the Run is
+waiting on and exits `23`, writing nothing and taking no lock. `--decision` has no default because
+§10.3 defines `INTERRUPTED` as the state where the node "could **not** be safely re-dispatched without
+a human deciding": a Run only reaches it on an `effects: external` node, which may already have run
+before the lease that made it look lost expired, so a default of `retry` would risk exactly the double
+side effect the state exists to prevent.
+
+**`resume --due` never decides for a human.** Four places in `mvp-design.md` said an `INTERRUPTED` Run
+is recovered by `resume --due` (§7.4, §7.5, the §8 state bullet, and criteria A11 and A35). That
+contradicts two frozen statements: §10.2 lists `resumed{kind: due}` for `WAITING_FOR_QUOTA` Runs only,
+and §10.3 requires a human decision. All five were corrected to name
+`resume <runId> --decision retry|skip|fail`. These are corrections, not amendments: `mvp-design.md` is
+not among the contracts `m0-contract-freeze.md` §2 freezes, and each correction moves it *towards* the
+frozen text. §7.5's sweep paragraph was additionally rewritten for W0a — it still described the row as
+released unconditionally.
+
+**Its exit codes needed no new space.** `resume` uses `run`'s table unchanged, exactly as `gates.ts`
+already says of `approve`/`reject` ("this is a resumed `run`, not a different command family"). The one
+genuinely new rule is for the batch form: `resume --due` exits `0` on a normal drain whatever the
+individual Runs did, because a drained Run's outcome is data for the report, not the batch's status —
+the same rule §7.3 states for the node executor.
+
+**Two things the brief for this wave got wrong**, both caught against the frozen schema rather than
+assumed: `resumed` carries no `cycle`/`nodeId`/`attempt` (`envelope.schema.json` sets all three to the
+`false` subschema for run-level events, and the engine reads `snapshot.current`/`snapshot.interrupted`
+instead), and it *requires* `reason`, which mirrors `resume.kind` the way the normative example
+`envelope-examples/resumed.json` does.
+
+**`cancel` reached the CLI.** `decideGate` already accepted the decision and the engine already handled
+it; only the command was missing, so `loopmill cancel <runId>` is now wired alongside `approve`/`reject`.
 
 ## 5. Acceptance criteria this milestone must meet
 

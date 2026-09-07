@@ -23,6 +23,16 @@ export { runLoop, continueRun, printDryRun, type RunLoopOptions, type RunLoopRes
 
 export { decideGate, type DecideGateInput } from "./gates.ts";
 
+export {
+  resumeRun,
+  resumeDue,
+  type ResumeRunInput,
+  type ResumeDueInput,
+  type ResumeDueResult,
+  type ResumeDueResumedEntry,
+  type ResumeDueSkippedEntry,
+} from "./resume.ts";
+
 export { writeRunReport, type WriteRunReportInput, type WriteRunReportResult } from "./report.ts";
 
 export {

@@ -223,7 +223,7 @@ test("A11: the next entrypoint (status) reports INTERRUPTED once the lease has e
     assert.ok(view, "status must find the run");
     assert.equal(view!.state, "INTERRUPTED");
     assert.equal(view!.currentNode, "create-issue");
-    assert.equal(view!.next, "resumed{kind:interrupted} (resume is m2)");
+    assert.equal(view!.next, `resumed{kind:interrupted} — loopmill resume ${runId} --decision retry|skip|fail`);
 
     // Confirmed via the store directly too, not only the status view's own rendering.
     const snapshot = ctx.store.read(runId)!;
