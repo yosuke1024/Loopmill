@@ -115,8 +115,23 @@ an `effects: external` node and that the `effects: none` path "auto-retries ... 
 status this file tests".
 
 **This needs no contract amendment.** §10.2 already specifies the correct index; the implementation
-does not follow it. Fixing the index is W0 below, and the same fix is what §10.2's five other bullets
-need, so it is the foundation of the milestone rather than a patch.
+does not follow it.
+
+**Fixed 2026-09-08 (W0a).** `SqliteStore.sweep()` is now a read-only scan — it reports expired rows
+and deletes nothing — and `driver/sweep.ts` decides each row's fate from the transition it just
+applied: release the row when the resulting snapshot holds no lease (R-32 parked it, or the attempts
+exhausted into a terminal state), keep it when a re-dispatch installed a fresh one. Nothing needed the
+deletion in the first place: `acquireLock` takes over an expired row rather than requiring an absent
+one, so expiry alone already frees the loop. The same scenario now runs: sweep, re-dispatch, the row
+survives carrying the new lease, the next sweep still finds the Run, attempts exhaust, and it lands
+`FAILED` — reported, never silent. Two tests in `test/store/locks.test.ts` asserted the deletion and
+its "a second scan finds nothing left" idempotency; both encoded the implementation rather than
+§10.2, and were rewritten to assert the read-only scan and the engine-level `duplicate` that now
+makes a repeated report harmless.
+
+Indexing the scan itself on the snapshot is still W0b, and is what §10.2's five unimplemented bullets
+need: a parked Run has no process and no `locks` row at all, so no lock-indexed scan can ever reach
+`human_timeout`, `observe_deadline`, `max_runtime`, `resumed{due}` or a stuck `PENDING`.
 
 ### 2.3 What is genuinely absent
 
@@ -182,7 +197,8 @@ m1's conventions (`m1-plan.md` §3) carry over unchanged. Two additions:
 
 | Wave | Contents | Depends on | Status |
 |---|---|---|---|
-| W0 | The sweep, indexed on the snapshot as `state-machine.md` §10.2 specifies: the store queries it needs, all six sweep bullets, and the §2.2 defect closed with the reproduction above as a regression test | — | not started |
+| W0a | The §2.2 defect: `store.sweep()` becomes a read-only scan, and `runSweep` releases the `locks` row only when the resulting snapshot holds no lease | — | **done 2026-09-08** (676 tests; the reproduction is now `test/driver/sweep.test.ts`'s third case, verified to fail against the old code) |
+| W0b | The rest of `state-machine.md` §10.2: index the scan on the snapshot, and emit the five bullets that have no producer (`human_timeout`, `observe_deadline`, `max_runtime`, `resumed{due}`, stuck `PENDING`) | W0a | not started |
 | W1 | `loopmill resume <runId> [--decision retry\|skip\|fail]` and `resume --due`; its exit codes; the exit-23 resolution; the unreachable `cancel` decision | W0 | not started |
 | W2 | The `gh` read module; `pr` / `branch` / `issue` artifactRefs from the `local` backend; a `Subject.kind: "pr"` producer; `pull-request-review` gate ingestion | W0, W1 | not started |
 | W3 | Measure `launchctl print` first (§2.5); then `doctor --scheduler` and the launchd user-agent unit with its environment snapshot; the loop↔unit identity convention | — (may run beside W2) | not started |

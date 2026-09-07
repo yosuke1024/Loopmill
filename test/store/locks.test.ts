@@ -182,7 +182,7 @@ test("releaseLock: does nothing when called by a runId that does not own the row
   }
 });
 
-test("sweep: reports an expired lease with the run's current attempt, and deletes the row", async () => {
+test("sweep: reports an expired lease with the run's current attempt, and leaves the row alone", async () => {
   const { dbPath, cleanup } = await freshDb();
   try {
     const store = setUpRun(dbPath, "run_1", "loop-a");
@@ -212,7 +212,15 @@ test("sweep: reports an expired lease with the run's current attempt, and delete
         holder: { runId: "run_1", ownerPid: 100, host: "h1", heartbeatAt: NOW, leaseUntil },
       },
     ]);
-    assert.equal(store.readLock("loop-a"), null, "the row was deleted");
+    // `sweep()` is a read-only scan: whether the row is released or refreshed is decided by the
+    // driver from the resulting transition (`driver/sweep.ts`), because only that transition
+    // knows whether anything still holds the lease. Deleting here orphaned every Run whose
+    // `lease-expired` re-dispatched rather than parked — see `SqliteStore.sweep`'s doc comment.
+    assert.deepEqual(
+      store.readLock("loop-a"),
+      { loopId: "loop-a", runId: "run_1", ownerPid: 100, host: "h1", acquiredAt: NOW, heartbeatAt: NOW, leaseUntil },
+      "the row is untouched by the scan itself",
+    );
     store.close();
   } finally {
     await cleanup();
@@ -238,16 +246,26 @@ test("sweep: reports nulls for nodeId/cycleIndex/attempt when the run has no cur
   }
 });
 
-test("sweep: idempotent — a second call at the same or a later time finds nothing left", async () => {
+test("sweep: repeatable — a still-expired row is reported again, and a refreshed one is not", async () => {
   const { dbPath, cleanup } = await freshDb();
   try {
     const store = setUpRun(dbPath, "run_1", "loop-a");
     store.acquireLock({ loopId: "loop-a", runId: "run_1", ownerPid: 100, host: "h1", now: NOW, leaseUntil: "2026-09-06T09:01:00.000Z" });
 
+    // The scan reports what is expired *now*; it does not consume what it reports. A row whose
+    // lease is still in the past is still expired, so a second scan reports it again — the
+    // duplicate is made harmless one layer up, where the engine folds a repeated `lease-expired`
+    // for the same attempt into a `duplicate` (P-4) rather than a second applied event.
     const first = store.sweep("2026-09-06T09:02:00.000Z");
     assert.equal(first.length, 1);
     const second = store.sweep("2026-09-06T09:03:00.000Z");
-    assert.deepEqual(second, []);
+    assert.deepEqual(second, first, "the same expired row, reported unchanged");
+
+    // What actually stops the reporting is a lease that is no longer in the past — which is what
+    // a re-dispatching transition installs through `append`, and what `heartbeat` does for a live
+    // process. Either way the scan falls silent without anything having been deleted.
+    assert.equal(store.heartbeat("loop-a", "run_1", { now: "2026-09-06T09:03:00.000Z", leaseUntil: "2026-09-06T09:10:00.000Z" }), true);
+    assert.deepEqual(store.sweep("2026-09-06T09:04:00.000Z"), []);
     store.close();
   } finally {
     await cleanup();

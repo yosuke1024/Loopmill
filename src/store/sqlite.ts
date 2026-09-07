@@ -697,11 +697,28 @@ export class SqliteStore implements StateStore {
     return { ...this.rowToLockHolder(row), loopId: textCol(row, "loop_id"), acquiredAt: textCol(row, "acquired_at") };
   }
 
-  /** Every `locks` row whose `lease_until` has passed `now`: reports it (from the run's own
-   * `snapshot.current`, or nulls when the snapshot has no attempt in flight) and deletes the
-   * row. The store never emits events itself — turning each result into a `lease-expired`
-   * envelope is the driver's job (state-machine.md §10.2). Idempotent: a row already swept is
-   * simply gone, so a second call in the same or a later process finds nothing left to report. */
+  /** Every `locks` row whose `lease_until` has passed `now`, reported (from the run's own
+   * `snapshot.current`, or nulls when the snapshot has no attempt in flight). **Read-only**: the
+   * store never emits events itself, and it no longer decides the row's fate either — turning
+   * each result into a `lease-expired` envelope and then releasing or refreshing the row is the
+   * driver's job (state-machine.md §10.2, and `driver/sweep.ts`).
+   *
+   * Deleting the row here — which this method did until 2026-09-08 — orphaned any Run whose
+   * `lease-expired` transition re-dispatched instead of parking. R-31 auto-retries an
+   * `effects: none` node (the default), returning a fresh attempt with a fresh lease;
+   * `append`'s lease write is an `UPDATE ... WHERE loop_id = ? AND run_id = ?`, which silently
+   * matched zero rows once this method had deleted it. The Run was then `RUNNING` with a live
+   * `snapshot.lease`, no `locks` row, and no way for any later sweep to find it again, since
+   * this scan's only index is the row that had just been deleted — the silent Run
+   * `mvp-design.md` §17.4 says must never happen. Nothing needed the deletion: `acquireLock`
+   * takes over an expired row rather than requiring an absent one, so expiry alone already frees
+   * the loop for a fresh `run`.
+   *
+   * Reporting is therefore no longer self-limiting the way "the row is gone" made it: a row this
+   * scan reports twice is made harmless downstream instead, by the engine — a second
+   * `lease-expired` for the same attempt is a `duplicate` (P-4, deterministic eventId), and once
+   * a re-dispatch has installed a fresh lease the row's own `lease_until` is in the future, so
+   * this scan stops reporting it until that lease expires in turn. */
   sweep(now: string): LeaseExpired[] {
     const db = this.db;
     const nowMs = parseRfc3339(now);
@@ -728,7 +745,6 @@ export class SqliteStore implements StateStore {
           leaseUntil,
           holder: this.rowToLockHolder(row),
         });
-        db.prepare("DELETE FROM locks WHERE loop_id = ?").run(loopId);
       }
       db.exec("COMMIT");
       return results;
