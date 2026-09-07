@@ -1,0 +1,556 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopmill.dev/schema/loop-file/0.6.json",
+  "title": "Loopmill Loop file",
+  "description": "Schema for `.loopmill/<slug>.loop.yaml`. The Loop file is the source of truth for a Loopmill Loop: a bounded, versioned definition of an AI engineering loop that may span several vendors and several execution backends. See docs/spec/loop-file.md for the semantics this schema cannot express. 0.6.0 removes the `observed` backend and the `artifact` field / `captured.*` accessor, and adds `human.target`; `github-actions` and `trigger.kind: event` remain as reserved ids, rejected by validation rather than by the schema.",
+  "type": "object",
+  "required": ["schemaVersion", "slug", "name", "trigger", "repos", "nodes"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "$ref": "#/$defs/semver",
+      "description": "Version of this Loop file format. MVP accepts 0.6.x."
+    },
+    "slug": {
+      "$ref": "#/$defs/identifier",
+      "description": "Immutable, user-visible Loop identity (`loopId`). Must equal the file's basename before `.loop.yaml`."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Human-readable title, shown in `loopmill runs`, the job summary and the read-only UI."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "What the Loop is for. Free text; never sent to a runtime unless a prompt references it explicitly."
+    },
+    "entry": {
+      "$ref": "#/$defs/identifier",
+      "description": "Node the Run starts at. Optional: when omitted it is derived as the unique node with no incoming forward edge (LM-VAL-005)."
+    },
+    "trigger": { "$ref": "#/$defs/trigger" },
+    "repos": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "description": "Repositories the Loop operates on. Exactly one in the MVP (LM-VAL-022).",
+      "items": { "$ref": "#/$defs/repo" }
+    },
+    "defaults": { "$ref": "#/$defs/defaults" },
+    "budget": { "$ref": "#/$defs/budget" },
+    "env": { "$ref": "#/$defs/envPolicy" },
+    "approval": { "$ref": "#/$defs/approval" },
+    "nodes": {
+      "type": "object",
+      "description": "Id-keyed map of Nodes. The map key IS the node id; `nodes.<id>....` references use that key.",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "description": "Retry Edges only. Forward edges are implied by `next` / `then` / `else`.",
+      "items": { "$ref": "#/$defs/retryEdge" }
+    }
+  },
+
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,63}$",
+      "description": "Lower-case kebab identifier, 2-64 characters, used for slugs, node ids and edge ids."
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "duration": {
+      "type": "string",
+      "pattern": "^P(?=\\d|T\\d)(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+(\\.\\d+)?S)?)?$",
+      "description": "ISO-8601 duration restricted to days, hours, minutes and seconds (no years, months or weeks: they are not a fixed number of seconds). Examples: PT30M, PT4H, P1DT12H."
+    },
+    "envName": {
+      "type": "string",
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    },
+    "inputName": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+      "description": "Local name a node binds an input to. This is the name usable as `${name}` in templates and as the first path segment of a condition expression."
+    },
+    "reference": {
+      "type": "string",
+      "pattern": "^(nodes\\.[a-z][a-z0-9-]*\\.(structured\\.[A-Za-z0-9_.]+|stdout|exitCode|filesChanged)|run\\.[a-z]+|cycle\\.index|trigger\\.[A-Za-z0-9_.]+)$",
+      "description": "Dotted reference to a value produced earlier in the Run. `captured.<name>` is reserved for a future artifact-matcher backend and is not a legal accessor in this version."
+    },
+    "scalar": {
+      "type": ["string", "number", "boolean", "null"],
+      "description": "A JSON scalar. Loopmill substitutes only scalars; arrays and objects are never templated."
+    },
+    "backendId": {
+      "enum": ["local", "fake", "github-actions"],
+      "default": "local",
+      "description": "`local` is the MVP's primary and default execution backend. `fake` replays fixtures for tests and CI. `github-actions` is reserved: the id stays valid here so a Loop file that names it is rejected by `loopmill validate` (LM-VAL-028) with a clear message, rather than by a bare schema/enum failure."
+    },
+    "runtimeId": {
+      "enum": ["claude-code", "codex"]
+    },
+    "authMode": {
+      "enum": ["subscription-oauth", "subscription-login", "api-key"]
+    },
+    "permissionProfile": {
+      "enum": ["readonly", "workspace", "full"],
+      "default": "workspace"
+    },
+    "isolation": {
+      "enum": ["ephemeral", "worktree", "shared"],
+      "default": "worktree"
+    },
+    "effects": {
+      "enum": ["none", "external"],
+      "default": "none",
+      "description": "`external` marks a node that creates or changes something outside the Loop's working branch which a human or third party sees as the Loop's product (Issue, PR, release, deployment, message)."
+    },
+    "onFailure": {
+      "type": "string",
+      "pattern": "^(fail_run|continue|retry_edge:[a-z][a-z0-9-]{1,63})$",
+      "default": "fail_run"
+    },
+    "expression": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "Condition expression. Grammar in docs/spec/loop-file.md; operands are declared input names and JSON scalar literals."
+    },
+
+    "trigger": {
+      "description": "How a Run starts. Discriminated by `kind`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "title": "manual trigger",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "manual" }
+          }
+        },
+        {
+          "type": "object",
+          "title": "schedule trigger",
+          "required": ["kind", "cron"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "schedule" },
+            "cron": {
+              "type": "string",
+              "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$",
+              "description": "Five-field cron expression (minute hour day-of-month month day-of-week), evaluated in `tz`."
+            },
+            "tz": {
+              "type": "string",
+              "pattern": "^(UTC|[A-Za-z][A-Za-z0-9+_-]*(/[A-Za-z0-9+_-]+)+)$",
+              "default": "UTC",
+              "description": "IANA time zone name, or UTC."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "event trigger",
+          "required": ["kind", "source", "types"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "event" },
+            "source": {
+              "const": "github",
+              "description": "MVP has one event source. Events are ingested by the `ingest` workflow and converted to Envelopes; a Loop is never started by an unmediated webhook."
+            },
+            "types": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z_]+(\\.[a-z_]+)?$",
+                "description": "GitHub event name, optionally narrowed by action: `issues.opened`, `pull_request.synchronize`."
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "repo": {
+      "type": "object",
+      "required": ["id", "defaultBase"],
+      "additionalProperties": false,
+      "description": "Exactly one of `path` or `remote` must be present.",
+      "oneOf": [
+        { "required": ["path"] },
+        { "required": ["remote"] }
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).*$",
+          "description": "Repository-relative path to the working tree. `.` means the repository the Loop file lives in."
+        },
+        "remote": {
+          "type": "string",
+          "pattern": "^(https://|git@)\\S+$",
+          "description": "Clone URL, for a Loop that operates on a repository other than its own."
+        },
+        "defaultBase": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Branch new working branches are cut from and PRs target."
+        }
+      }
+    },
+
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Values inherited by every node that does not set them. Node-level values always win; defaults never widen a node-level value.",
+      "properties": {
+        "backend": { "$ref": "#/$defs/backendId" },
+        "runtime": { "$ref": "#/$defs/runtimeId" },
+        "authMode": { "$ref": "#/$defs/authMode" },
+        "permissionProfile": { "$ref": "#/$defs/permissionProfile" },
+        "isolation": { "$ref": "#/$defs/isolation" }
+      }
+    },
+
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounds checked BEFORE each dispatch. A breach terminates the Run as BUDGET_EXCEEDED, except where the state machine names a more specific outcome: MAX_ITERATIONS_EXCEEDED for a Retry Edge, EXPIRED for maxRuntime, and SKIPPED for the two Loop-level rate limits, which are checked once at run-requested. A token budget never kills an attempt mid-flight.",
+      "properties": {
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 2,
+          "description": "Infrastructure-level dispatches per Node Execution. Attempts > 1 exist only for LOST completions and transient backend errors, never for loop retries."
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Loop-wide CAP on every Retry Edge's own `maxIterations`. The iteration budget itself is declared per Retry Edge; this field can only tighten it (LM-VAL-025)."
+        },
+        "maxRuntime": {
+          "$ref": "#/$defs/duration",
+          "default": "PT4H",
+          "description": "Wall clock per Run, excluding time spent in WAITING_HUMAN. Breach terminates the Run as EXPIRED."
+        },
+        "maxMeasuredTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per Run. Checked against measured tokens only (provenance `reported` or `derived`); `estimated` and `unavailable` never count towards it."
+        },
+        "maxUnmeasuredExecutions": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Per Run. Number of agent Node Executions that are NOT measured (usage provenance `unavailable` or `estimated`) that the Run may perform. Default 0: no MVP backend declares `usage: none`, so this is the binding guard only once a future backend does (loop-file.md 7.2)."
+        },
+        "maxRunsPerWindow": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "window"],
+          "description": "Per Loop. Default {count: 1, window: PT5H}, aligned with vendor rolling usage windows. A Run over the limit is refused as SKIPPED(runs_per_window), never started.",
+          "properties": {
+            "count": { "type": "integer", "minimum": 1 },
+            "window": { "$ref": "#/$defs/duration" }
+          }
+        },
+        "minInterval": {
+          "$ref": "#/$defs/duration",
+          "default": "PT1H",
+          "description": "Per Loop. Minimum wall-clock distance between the start of two Runs. A Run requested sooner is refused as SKIPPED(min_interval), never started."
+        }
+      }
+    },
+
+    "envPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Environment policy for every subprocess Loopmill spawns. The built-in vendor-auth deny list and the built-in preserve list always apply; these fields only add to them.",
+      "properties": {
+        "deny": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/envName" },
+          "description": "Additional variables scrubbed from every subprocess environment."
+        },
+        "preserve": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/envName" },
+          "description": "Additional variables passed through from the job environment. A name that also appears in the built-in deny list stays denied."
+        },
+        "inject": {
+          "type": "object",
+          "description": "Literal name/value pairs added to every subprocess environment. Values are literal strings; no templating, no secret references.",
+          "propertyNames": { "$ref": "#/$defs/envName" },
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Whether `effects: external` nodes require a human gate on every path.",
+      "required": ["policy"],
+      "properties": {
+        "policy": {
+          "enum": ["gated", "auto"],
+          "default": "gated"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 500,
+          "description": "Required when policy is `auto`. Recorded in the Run header and shown in every report."
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" },
+          "description": "Optional narrowing: only these `effects: external` nodes are exempt from the gate requirement. Omitted means every external node is exempt."
+        }
+      },
+      "if": {
+        "properties": { "policy": { "const": "auto" } },
+        "required": ["policy"]
+      },
+      "then": { "required": ["reason"] }
+    },
+
+    "inputs": {
+      "type": "object",
+      "description": "Map of local name to a value produced earlier in the Run.",
+      "propertyNames": { "$ref": "#/$defs/inputName" },
+      "additionalProperties": {
+        "oneOf": [
+          { "$ref": "#/$defs/reference" },
+          {
+            "type": "object",
+            "required": ["from"],
+            "additionalProperties": false,
+            "properties": {
+              "from": { "$ref": "#/$defs/reference" },
+              "default": {
+                "$ref": "#/$defs/scalar",
+                "description": "Used when `from` resolves to nothing. Without a default, an unresolvable reference is an error, never an empty string."
+              }
+            }
+          }
+        ]
+      }
+    },
+
+    "structuredOutputSchema": {
+      "type": "object",
+      "description": "A JSON Schema describing the agent's final answer. Passed to `claude -p --json-schema` / `codex exec --output-schema`. This is a foreign schema document, so it is the one place where unknown keywords are allowed.",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "object" },
+        "properties": { "type": "object" },
+        "required": { "type": "array", "items": { "type": "string" } },
+        "additionalProperties": { "type": "boolean" }
+      }
+    },
+
+    "node": {
+      "oneOf": [
+        { "$ref": "#/$defs/agentNode" },
+        { "$ref": "#/$defs/commandNode" },
+        { "$ref": "#/$defs/conditionNode" },
+        { "$ref": "#/$defs/humanNode" },
+        { "$ref": "#/$defs/endNode" }
+      ]
+    },
+
+    "agentNode": {
+      "type": "object",
+      "title": "agent node",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["prompt"] },
+        { "required": ["promptFile"] }
+      ],
+      "properties": {
+        "kind": { "const": "agent" },
+        "id": {
+          "$ref": "#/$defs/identifier",
+          "description": "Optional echo of the map key. When present it must equal the key (LM-VAL-004)."
+        },
+        "runtime": { "$ref": "#/$defs/runtimeId" },
+        "backend": { "$ref": "#/$defs/backendId" },
+        "auth": { "$ref": "#/$defs/authMode" },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Runtime-specific model id or alias. Passed through verbatim; Loopmill does not translate model names between vendors."
+        },
+        "permissionProfile": { "$ref": "#/$defs/permissionProfile" },
+        "sessionPolicy": {
+          "enum": ["fresh"],
+          "default": "fresh",
+          "description": "MVP supports `fresh` only: every Attempt is a new CLI process with no resumed session."
+        },
+        "prompt": { "type": "string", "minLength": 1 },
+        "promptFile": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).*$",
+          "description": "Repository-relative path to the prompt. Its contents are templated exactly like an inline `prompt`."
+        },
+        "structuredOutput": { "$ref": "#/$defs/structuredOutputSchema" },
+        "inputs": { "$ref": "#/$defs/inputs" },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "onFailure": { "$ref": "#/$defs/onFailure" },
+        "effects": { "$ref": "#/$defs/effects" },
+        "next": { "$ref": "#/$defs/identifier" }
+      }
+    },
+
+    "commandNode": {
+      "type": "object",
+      "title": "command node",
+      "required": ["kind", "argv"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "command" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "backend": { "$ref": "#/$defs/backendId" },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "Executed with shell:false on the backend that owns the working tree. One `${name}` never splits into more than one argv element and is never re-parsed."
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).*$",
+          "description": "Working directory, relative to the repo root. Defaults to the repo root."
+        },
+        "env": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/envName" },
+          "description": "Allowlist: only these variables (intersected with the effective preserve+inject set) reach the command."
+        },
+        "inputs": { "$ref": "#/$defs/inputs" },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "onFailure": { "$ref": "#/$defs/onFailure" },
+        "effects": { "$ref": "#/$defs/effects" },
+        "next": { "$ref": "#/$defs/identifier" }
+      }
+    },
+
+    "conditionNode": {
+      "type": "object",
+      "title": "condition node",
+      "required": ["kind", "inputs", "expr", "then", "else"],
+      "additionalProperties": false,
+      "description": "Runs on the control plane, not on a backend. A missing or non-conforming input is an error, never a silent false.",
+      "properties": {
+        "kind": { "const": "condition" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "inputs": {
+          "allOf": [{ "$ref": "#/$defs/inputs" }],
+          "minProperties": 1
+        },
+        "expr": { "$ref": "#/$defs/expression" },
+        "then": { "$ref": "#/$defs/identifier" },
+        "else": { "$ref": "#/$defs/identifier" }
+      }
+    },
+
+    "humanNode": {
+      "type": "object",
+      "title": "human node",
+      "required": ["kind", "mode", "subject"],
+      "additionalProperties": false,
+      "description": "Puts the Run into WAITING_HUMAN. Nothing is resident while it waits.",
+      "properties": {
+        "kind": { "const": "human" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "mode": {
+          "enum": ["cli", "label", "pull-request-review"],
+          "description": "cli: `loopmill approve|reject <runId>` on the host writes the decision directly. label: adding `loopmill:approve` or `loopmill:reject` to the `target` node's Issue or PR, ingested by `resume --due` polling `gh`. pull-request-review: an approving review on the pull request, ingested the same way."
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^nodes\\.[a-z][a-z0-9-]{1,63}$",
+          "description": "The node whose Issue or pull request carries the label or review. Defaults to the Run's most recent Issue or PR. Meaningless for `mode: cli`."
+        },
+        "subject": {
+          "type": "string",
+          "pattern": "^nodes\\.[a-z][a-z0-9-]{1,63}$",
+          "description": "The node execution whose artifact digest is being approved. A retry invalidates prior approvals because the digest changes."
+        },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "onFailure": { "$ref": "#/$defs/onFailure" },
+        "next": { "$ref": "#/$defs/identifier" }
+      }
+    },
+
+    "endNode": {
+      "type": "object",
+      "title": "end node",
+      "required": ["kind", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "end" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "outcome": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "description": "Terminal label. Reported as SUCCEEDED(end:<label>). `success` and `no_change` are conventional; any label is allowed."
+        }
+      }
+    },
+
+    "retryEdge": {
+      "type": "object",
+      "title": "retry edge",
+      "required": ["id", "from", "to", "maxIterations"],
+      "additionalProperties": false,
+      "description": "The one kind of backward edge. Traversal increments cycleIndex; exhaustion is the terminal outcome MAX_ITERATIONS_EXCEEDED, never FAILED.",
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "from": {
+          "$ref": "#/$defs/identifier",
+          "description": "The node that routes into this edge via `next`, `then`, `else` or `onFailure: retry_edge:<id>`."
+        },
+        "to": {
+          "$ref": "#/$defs/identifier",
+          "description": "An earlier node. Must be on a forward path back to `from` (LM-VAL-008) and must run on a retryable backend (LM-VAL-007)."
+        },
+        "when": {
+          "$ref": "#/$defs/expression",
+          "description": "Optional assertion over the `from` node's declared inputs, evaluated at traversal. It does not route; it must be true when the edge is taken."
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum traversals of this edge in one Run. The body therefore executes at most maxIterations + 1 times."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "loopmill-spike-3-control-plane",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Loopmill SPIKE-3: event-driven, non-resident control plane step with a git-branch state store.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

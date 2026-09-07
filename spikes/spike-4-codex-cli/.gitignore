@@ -1,0 +1,5 @@
+# out/ is generated fresh by each run (raw codex output, summaries, normalized usage records,
+# recorded fixture candidates, the scratch git repository and worktree) and is not meant to be
+# committed. Keep the directory itself (via out/.gitkeep) so `run.sh` always has somewhere to write.
+out/*
+!out/.gitkeep

@@ -1,0 +1,47 @@
+# expect: LM-VAL-003
+schemaVersion: "0.6.0"
+slug: lm-val-003
+name: Duplicate edge id
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  backend: local
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    structuredOutput:
+      type: object
+      properties: { ok: { type: boolean } }
+      required: [ok]
+    next: verdict
+  verdict:
+    kind: condition
+    inputs: { ok: nodes.step.structured.ok }
+    expr: ok == true
+    then: done
+    else: retry-a
+  done:
+    kind: end
+    outcome: success
+
+# The same edge id appears twice: LM-VAL-003 ("duplicate edge id"). Both entries are otherwise
+# individually well-formed, so nothing else should fire.
+edges:
+  - id: retry-a
+    from: verdict
+    to: step
+    maxIterations: 1
+  - id: retry-a
+    from: verdict
+    to: step
+    maxIterations: 1

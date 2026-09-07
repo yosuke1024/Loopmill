@@ -1,0 +1,34 @@
+# expect: LM-VAL-018
+#
+# Every backend an agent node can select in schemaVersion 0.6.0 (`local`, `fake`, and the
+# reserved `github-actions`) declares `structuredOutput: true` (loop-file.md §8.1), so this rule
+# cannot fire against the default `BACKEND_CAPABILITIES` -- "the rule exists for a future backend
+# that cannot pass a schema through to its runtime". The test that loads this fixture validates
+# it against a deliberately modified capability record (`fake` with `structuredOutput: false`) to
+# exercise the rule; validated against the real defaults, this file has zero findings.
+schemaVersion: "0.6.0"
+slug: lm-val-018
+name: structuredOutput on a backend that does not support it
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+nodes:
+  step:
+    kind: agent
+    backend: fake
+    runtime: claude-code
+    auth: api-key
+    prompt: Do the thing.
+    structuredOutput:
+      type: object
+      properties: { ok: { type: boolean } }
+      required: [ok]
+    next: done
+  done:
+    kind: end
+    outcome: success

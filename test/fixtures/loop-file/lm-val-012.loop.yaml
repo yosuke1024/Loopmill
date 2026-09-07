@@ -1,0 +1,20 @@
+# expect: LM-VAL-012
+schemaVersion: "0.6.0"
+slug: lm-val-012
+name: Node has no successor and is not an end node
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing, but declare no `next` and route into no Retry Edge either.

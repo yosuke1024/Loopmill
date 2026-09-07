@@ -1,0 +1,53 @@
+{
+  "steps": {
+    "0:review-content:1": {
+      "status": "succeeded",
+      "structured": {
+        "needs_issue": true,
+        "title": "Stale version number in the changelog article",
+        "summary": "The article names v1.2 but the site has shipped v1.3 since last week."
+      },
+      "usageFixture": "codex-recorded-success",
+      "summary": "needs_issue=true: stale version number found in the changelog article"
+    },
+    "0:create-issue:1": {
+      "status": "succeeded",
+      "exitCode": 0,
+      "stdout": "https://github.com/example/example/issues/482\n",
+      "summary": "gh issue create exited 0"
+    },
+    "1:implement:1": {
+      "status": "succeeded",
+      "structured": {
+        "changed": true,
+        "summary": "Updated the version string and added a regression test."
+      },
+      "usageFixture": "claude-recorded-success",
+      "filesChanged": [
+        { "path": "site/article.md", "digest": "sha256:0cba15f8deb23f741605df0a32876ae394bbf0ee0da47f29c5e78165fc7f4a28" }
+      ],
+      "summary": "changed=true: updated the version string and added a regression test"
+    },
+    "1:run-tests:1": {
+      "status": "succeeded",
+      "exitCode": 0,
+      "stdout": "5 passing (120ms)\n",
+      "summary": "npm test exited 0"
+    },
+    "1:review-changes:1": {
+      "status": "succeeded",
+      "structured": {
+        "approved": true,
+        "reasons": "The change matches the finding, the version string is corrected, and the new test passes."
+      },
+      "usageFixture": "codex-recorded-structured",
+      "summary": "approved=true: change matches the finding and tests pass"
+    },
+    "0:create-pr:1": {
+      "status": "succeeded",
+      "exitCode": 0,
+      "stdout": "https://github.com/example/example/pull/489\n",
+      "summary": "gh pr create exited 0"
+    }
+  }
+}

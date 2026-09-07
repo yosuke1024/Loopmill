@@ -1,0 +1,88 @@
+{
+  "fixtureId": "codex-fresh-thread",
+  "title": "codex on a fresh thread: cumulative equals delta, subset arithmetic applies",
+  "handWritten": true,
+  "notARecording": "Hand-written from the documented codex exec JSONL event shapes. No CLI was executed to produce this file. The usage numbers are illustrative.",
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "local",
+    "runtime": "codex",
+    "authMode": "subscription-login",
+    "runId": "run_01JQ8ZD6T8V1X4B7D0F3H6K9M5",
+    "cycleIndex": 1,
+    "nodeId": "code-review",
+    "attempt": 1,
+    "sessionPolicy": "fresh",
+    "note": "sessionPolicy fresh is the MVP default: one Codex process per attempt, and a process reports only its own usage (SPIKE-4 D4), so usageAtAttemptStart is zero and the last turn.completed usage IS the attempt figure. The record is still provenance derived, because the subset arithmetic and the delta rule are Loopmill's, not the vendor's."
+  },
+  "input": {
+    "invocation": "codex exec --json -C <workspace> -s workspace-write -m gpt-5.6-codex -",
+    "exitCode": 0,
+    "signal": null,
+    "usageAtAttemptStart": {
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_output_tokens": 0
+    },
+    "events": [
+      { "type": "thread.started", "thread_id": "th_01JQ8ZD6T8V1X4B7D0F3H6K9M5" },
+      { "type": "turn.started" },
+      { "type": "item.completed", "item": { "type": "command_execution", "command": "npm test", "exit_code": 0, "status": "completed" }, "_ignoreReason": "item events carry no usage" },
+      { "type": "item.completed", "item": { "type": "agent_message", "text": "{\"verdict\":\"pass\"}" } },
+      {
+        "type": "turn.completed",
+        "usage": {
+          "input_tokens": 24763,
+          "cached_input_tokens": 24448,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1210,
+          "reasoning_output_tokens": 940
+        }
+      }
+    ]
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": { "runId": "run_01JQ8ZD6T8V1X4B7D0F3H6K9M5", "cycleIndex": 1, "nodeId": "code-review", "attempt": 1 },
+        "usage": {
+          "runtime": "codex",
+          "model": "gpt-5.6-codex",
+          "freshInputTokens": 315,
+          "cacheWriteTokens": 0,
+          "cacheReadTokens": 24448,
+          "outputTokens": 1210,
+          "reasoningTokens": 940,
+          "totalInputTokens": 24763,
+          "totalTokens": 25973,
+          "provenance": "derived",
+          "provenanceNote": "turn.completed cumulative minus zero start; fresh = max(0, input - cached - cache_write) = max(0, 24763 - 24448 - 0)",
+          "source": { "runtimeVersion": "0.153.4", "eventKind": "turn.completed" },
+          "complete": true,
+          "usageBasis": "turn.completed",
+          "sessionRef": { "kind": "codex-thread", "id": "th_01JQ8ZD6T8V1X4B7D0F3H6K9M5" },
+          "usageAtAttemptStart": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0
+          },
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": { "totalInputTokens": 24763, "totalTokens": 25973, "provenance": "derived", "measured": true },
+    "coverage": { "agentExecutions": 1, "measuredExecutions": 1, "coverage": 1.0, "unmeasured": [] },
+    "mustNotEqual": {
+      "totalIfCachedWereAddedToInput": 50421,
+      "totalIfReasoningWereAddedToOutput": 26913
+    },
+    "display": { "measuredTokens": "25,973", "usageCoverage": "1/1 (100%)" },
+    "derivedViews": { "newTokens": 1525, "vendorBlendedTotal": 1525 }
+  },
+  "assertsInvariants": ["I1", "I2", "I3", "I5", "I8", "I9"]
+}

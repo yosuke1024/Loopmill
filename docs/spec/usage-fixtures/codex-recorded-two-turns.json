@@ -1,0 +1,234 @@
+{
+  "fixtureId": "codex-recorded-two-turns",
+  "title": "codex exec recorded: two sequential turns on one resumed thread (SPIKE-4 D4a+D4b)",
+  "handWritten": false,
+  "recording": {
+    "harness": "spikes/spike-4-codex-cli (check D4a+D4b)",
+    "date": "2026-09-06",
+    "host": "operator macOS host",
+    "runtimeVersion": "codex-cli 0.153.4",
+    "nodeVersion": "v25.5.0",
+    "authMode": "subscription-login",
+    "redaction": "token-shaped strings, e-mail addresses and home-directory names redacted by the harness; nothing else altered"
+  },
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "local",
+    "runtime": "codex",
+    "authMode": "subscription-login",
+    "runId": "run_01SPIKE4TWOTURNSRECORDED00",
+    "sessionPolicy": "reuse",
+    "threadId": "01a076e3-b6eb-7e20-984d-f563596af059",
+    "note": "Two attempts on the same Codex thread via codex exec resume: turn 1 a deliberately large output, turn 2 'TURN-TWO'. Measured: the resumed process reports its own invocation's usage (turn 2's output_tokens is a handful, far below turn 1's), not a thread-cumulative total. Each attempt is therefore read from its own last turn.completed with a zero usageAtAttemptStart; subtracting the previous invocation's figure is the documented-but-wrong arithmetic recorded under mustNotEqual."
+  },
+  "input": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE4TWOTURNSRECORDED00",
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "invocation": "env -u OPENAI_API_KEY -u CODEX_API_KEY codex exec --json --color never -s read-only -C /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/work -o /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/D4a.last.txt Write\\ the\\ integers\\ from\\ 1\\ to\\ 150\\ separated\\ by\\ single\\ spaces\\,\\ on\\ one\\ line\\,\\ and\\ nothing\\ else.",
+        "exitCode": 0,
+        "usageAtAttemptStart": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 0,
+          "reasoning_output_tokens": 0
+        },
+        "events": [
+          {
+            "type": "thread.started",
+            "thread_id": "01a076e3-b6eb-7e20-984d-f563596af059"
+          },
+          {
+            "type": "turn.started"
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "item_0",
+              "type": "agent_message",
+              "text": "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 141 142 143 144 145 146 147 148 149 150"
+            }
+          },
+          {
+            "type": "turn.completed",
+            "usage": {
+              "input_tokens": 17578,
+              "cached_input_tokens": 12928,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 303,
+              "reasoning_output_tokens": 0
+            }
+          }
+        ]
+      },
+      {
+        "key": {
+          "runId": "run_01SPIKE4TWOTURNSRECORDED00",
+          "cycleIndex": 2,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "invocation": "env -u OPENAI_API_KEY -u CODEX_API_KEY codex exec resume 01a076e3-b6eb-7e20-984d-f563596af059 --json Reply\\ with\\ exactly:\\ TURN-TWO",
+        "exitCode": 0,
+        "usageAtAttemptStart": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 0,
+          "reasoning_output_tokens": 0
+        },
+        "events": [
+          {
+            "type": "thread.started",
+            "thread_id": "01a076e3-b6eb-7e20-984d-f563596af059"
+          },
+          {
+            "type": "turn.started"
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "item_0",
+              "type": "agent_message",
+              "text": "TURN-TWO"
+            }
+          },
+          {
+            "type": "turn.completed",
+            "usage": {
+              "input_tokens": 19714,
+              "cached_input_tokens": 17408,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 7,
+              "reasoning_output_tokens": 0
+            }
+          }
+        ]
+      }
+    ],
+    "ignoredStreamLines": []
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE4TWOTURNSRECORDED00",
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "codex",
+          "model": null,
+          "freshInputTokens": 4650,
+          "cacheWriteTokens": 0,
+          "cacheReadTokens": 12928,
+          "outputTokens": 303,
+          "reasoningTokens": 0,
+          "totalInputTokens": 17578,
+          "totalTokens": 17881,
+          "provenance": "derived",
+          "provenanceNote": "turn.completed cumulative (input 17578, cached 12928, cache_write 0, output 303) minus usageAtAttemptStart, clamped at 0 field-by-field; fresh = max(0, 17578 - 12928 - 0) = 4650",
+          "source": {
+            "runtimeVersion": "codex-cli 0.153.4",
+            "eventKind": "turn.completed"
+          },
+          "complete": true,
+          "usageBasis": "turn.completed",
+          "sessionRef": {
+            "kind": "codex-thread",
+            "id": "01a076e3-b6eb-7e20-984d-f563596af059"
+          },
+          "usageAtAttemptStart": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0
+          },
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      },
+      {
+        "key": {
+          "runId": "run_01SPIKE4TWOTURNSRECORDED00",
+          "cycleIndex": 2,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "codex",
+          "model": null,
+          "freshInputTokens": 2306,
+          "cacheWriteTokens": 0,
+          "cacheReadTokens": 17408,
+          "outputTokens": 7,
+          "reasoningTokens": 0,
+          "totalInputTokens": 19714,
+          "totalTokens": 19721,
+          "provenance": "derived",
+          "provenanceNote": "turn.completed cumulative (input 19714, cached 17408, cache_write 0, output 7) minus usageAtAttemptStart, clamped at 0 field-by-field; fresh = max(0, 19714 - 17408 - 0) = 2306",
+          "source": {
+            "runtimeVersion": "codex-cli 0.153.4",
+            "eventKind": "turn.completed"
+          },
+          "complete": true,
+          "usageBasis": "turn.completed",
+          "sessionRef": {
+            "kind": "codex-thread",
+            "id": "01a076e3-b6eb-7e20-984d-f563596af059"
+          },
+          "usageAtAttemptStart": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0
+          },
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "run": {
+      "freshInputTokens": 6956,
+      "cacheWriteTokens": 0,
+      "cacheReadTokens": 30336,
+      "outputTokens": 310,
+      "totalInputTokens": 37292,
+      "totalTokens": 37602,
+      "provenance": "derived",
+      "note": "Each attempt is one process, and each process reports its own invocation's usage; the run total is the plain sum of the attempt records (invariant I5 as re-scoped after SPIKE-4 D4)."
+    },
+    "coverage": {
+      "agentExecutions": 2,
+      "measuredExecutions": 2,
+      "coverage": 1,
+      "unmeasured": []
+    },
+    "mustNotEqual": {
+      "cycle2TotalIfPreviousInvocationWereSubtracted": 4480,
+      "runTotalIfPreviousInvocationWereSubtracted": 22361
+    },
+    "display": {
+      "measuredTokens": "37,602",
+      "usageCoverage": "2/2 (100%)"
+    }
+  },
+  "assertsInvariants": [
+    "I1",
+    "I2",
+    "I3",
+    "I5",
+    "I8",
+    "I9",
+    "I10"
+  ]
+}

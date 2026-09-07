@@ -6,7 +6,7 @@
 #
 # ---------------------------------------------------------------------------
 # Trigger notes (verified as far as the sandbox allowed - see
-# spikes/spike-3-control-plane/README.md, "Open items for the GitHub run")
+# docs/spikes/README.md, §5 (hosted-run results))
 #
 # 1. `repository_dispatch` ALWAYS runs the workflow file from the repository's
 #    DEFAULT branch and gives no way to select a ref. A chain living on a feature
@@ -23,9 +23,11 @@
 #    `workflow_dispatch` and `repository_dispatch` (changed 2022-09-08). That is
 #    exactly why this chain uses workflow_dispatch and not, say, a push trigger:
 #    a push to the state branch made with GITHUB_TOKEN would NOT re-trigger.
-#    docs.github.com was unreachable from the build sandbox, so this claim is
-#    carried from the GitHub Docs "GITHUB_TOKEN" page and the 2022-09-08
-#    changelog entry via search results only - the real run must confirm it.
+#    docs.github.com was unreachable from the build sandbox, so this claim was
+#    originally carried from the GitHub Docs "GITHUB_TOKEN" page and the
+#    2022-09-08 changelog entry via search results only. It is now confirmed
+#    directly by the hosted runs of 2026-09-06: a step dispatched the next step
+#    with GITHUB_TOKEN and the new run actually executed.
 # ---------------------------------------------------------------------------
 
 name: SPIKE-3 loopmill step
@@ -50,6 +52,20 @@ on:
         description: 'Position in the chain. Safety net: the chain stops at MAX_CHAIN_STEPS.'
         required: false
         default: '1'
+      fault:
+        # Spike-only fault injection, forwarded to step.mjs as LOOPMILL_CRASH_POINT.
+        # `after-commit` exits 97 after the local commit and before the push - the
+        # "job killed mid-push" case; `after-stage` exits 98 before the commit.
+        description: 'Fault injection: empty, after-stage or after-commit.'
+        required: false
+        default: ''
+      hold_ms:
+        # Spike-only fault injection, forwarded as LOOPMILL_HOLD_MS: sleep this long
+        # between reading the state branch and pushing, so that several jobs can be
+        # made to collide on the compare-and-swap on purpose.
+        description: 'Fault injection: milliseconds to hold between read and push.'
+        required: false
+        default: ''
   repository_dispatch:
     types: [loopmill-step]
 
@@ -131,6 +147,8 @@ jobs:
         id: step
         env:
           INBOUND: ${{ steps.inbound.outputs.event }}
+          LOOPMILL_CRASH_POINT: ${{ github.event.inputs.fault }}
+          LOOPMILL_HOLD_MS: ${{ github.event.inputs.hold_ms }}
         run: |
           set -uo pipefail
           # The git store creates the orphan state branch on its first push.
@@ -174,9 +192,13 @@ jobs:
             --branch "$STATE_BRANCH" \
             --workdir "${RUNNER_TEMP}/loopmill-verify" \
             --run-id "${{ steps.inbound.outputs.run_id }}" \
-            > "${RUNNER_TEMP}/rebuild.json" 2>&1 || true
-          EQ=$(jq -r '.equal // "unknown"' "${RUNNER_TEMP}/rebuild.json" 2>/dev/null || echo unknown)
-          echo "equal=$EQ" >> "$GITHUB_OUTPUT"
+            > "${RUNNER_TEMP}/rebuild.json" 2> "${RUNNER_TEMP}/rebuild.log" || true
+          # stderr must stay out of rebuild.json: a trailing log line after the JSON
+          # made jq fail and a second, "=".less line reached GITHUB_OUTPUT
+          # ("Invalid format 'unknown'").
+          cat "${RUNNER_TEMP}/rebuild.log" || true
+          EQ=$(jq -r '.equal // "unknown"' "${RUNNER_TEMP}/rebuild.json" 2>/dev/null | head -n 1)
+          echo "equal=${EQ:-unknown}" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch the next step of the chain
         id: chain

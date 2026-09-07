@@ -1,0 +1,31 @@
+# expect: LM-VAL-022
+#
+# Also enforced by the schema (`repos` has `maxItems: 1`), so this file reports LM-VAL-001
+# alongside LM-VAL-022 -- loop-file.md §13's own text: "the specific code is reported alongside
+# LM-VAL-001 so the message names the actual mistake".
+schemaVersion: "0.6.0"
+slug: lm-val-022
+name: More than one repo
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+  - id: other
+    path: "./other"
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success

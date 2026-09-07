@@ -1,0 +1,126 @@
+{
+  "fixtureId": "codex-recorded-sigint",
+  "title": "codex exec recorded: SIGINT sent mid-turn (SPIKE-4 D5-SIGINT)",
+  "handWritten": false,
+  "recording": {
+    "harness": "spikes/spike-4-codex-cli (check D5-SIGINT)",
+    "date": "2026-09-06",
+    "host": "operator macOS host",
+    "runtimeVersion": "codex-cli 0.153.4",
+    "nodeVersion": "v25.5.0",
+    "authMode": "subscription-login",
+    "redaction": "token-shaped strings, e-mail addresses and home-directory names redacted by the harness; nothing else altered"
+  },
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "local",
+    "runtime": "codex",
+    "authMode": "subscription-login",
+    "runId": "run_01SPIKE4SIGINTRECORDED0000",
+    "cycleIndex": 1,
+    "nodeId": "implement",
+    "attempt": 1,
+    "sessionPolicy": "fresh",
+    "note": "codex exec --json against a long counting prompt, SIGINT sent partway through streaming (the process was confirmed alive at signal time). Whether a turn.completed still appears after SIGINT is itself the finding this fixture records -- codex's SIGINT contract was not previously measured."
+  },
+  "input": {
+    "invocation": "env -u OPENAI_API_KEY -u CODEX_API_KEY codex exec --json --color never -s read-only -C /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/work -o /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/D5-SIGINT.last.txt Count\\ from\\ 1\\ to\\ 400\\,\\ one\\ integer\\ per\\ line\\,\\ and\\ nothing\\ else.",
+    "exitCode": 1,
+    "signal": "SIGINT",
+    "usageAtAttemptStart": {
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_output_tokens": 0
+    },
+    "events": [
+      {
+        "type": "thread.started",
+        "thread_id": "01a076de-633e-7212-8078-4670c544e314"
+      },
+      {
+        "type": "turn.started"
+      }
+    ],
+    "ignoredStreamLines": []
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE4SIGINTRECORDED0000",
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "codex",
+          "model": null,
+          "freshInputTokens": null,
+          "cacheWriteTokens": null,
+          "cacheReadTokens": null,
+          "outputTokens": null,
+          "reasoningTokens": null,
+          "totalInputTokens": null,
+          "totalTokens": null,
+          "provenance": "unavailable",
+          "provenanceNote": "process ended via signal SIGINT; stream ended without turn.completed",
+          "source": {
+            "runtimeVersion": "codex-cli 0.153.4",
+            "eventKind": null
+          },
+          "complete": false,
+          "usageBasis": "none",
+          "sessionRef": {
+            "kind": "codex-thread",
+            "id": "01a076de-633e-7212-8078-4670c544e314"
+          },
+          "usageAtAttemptStart": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0
+          },
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": null,
+      "totalTokens": null,
+      "provenance": "unavailable",
+      "measured": false
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 0,
+      "coverage": 0,
+      "unmeasured": [
+        {
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1,
+          "runtime": "codex",
+          "reason": "process ended via signal SIGINT; stream ended without turn.completed"
+        }
+      ]
+    },
+    "mustNotEqual": {
+      "storedAsZero": 0
+    },
+    "display": {
+      "nodeTotal": "—",
+      "measuredTokens": "0+",
+      "usageCoverage": "0/1 (0%)"
+    }
+  },
+  "assertsInvariants": [
+    "I2",
+    "I4",
+    "I9",
+    "I12"
+  ]
+}

@@ -1,0 +1,44 @@
+# expect: LM-VAL-025
+schemaVersion: "0.6.0"
+slug: lm-val-025
+name: Retry edge maxIterations exceeds the budget cap
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  backend: local
+  runtime: claude-code
+  authMode: subscription-oauth
+
+budget:
+  maxIterations: 1
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    structuredOutput:
+      type: object
+      properties: { ok: { type: boolean } }
+      required: [ok]
+    next: verdict
+  verdict:
+    kind: condition
+    inputs: { ok: nodes.step.structured.ok }
+    expr: ok == true
+    then: done
+    else: retry-a
+  done:
+    kind: end
+    outcome: success
+
+edges:
+  - id: retry-a
+    from: verdict
+    to: step
+    maxIterations: 5

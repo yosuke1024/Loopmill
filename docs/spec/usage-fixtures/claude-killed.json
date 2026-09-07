@@ -1,0 +1,130 @@
+{
+  "fixtureId": "claude-killed",
+  "title": "claude-code killed mid-turn: no result message, usage unavailable",
+  "handWritten": true,
+  "notARecording": "Hand-written from the documented claude-code stream shape and exit-code behaviour. No CLI was executed and no process was killed to produce this file.",
+  "verifiedBehaviour": "SIGTERM -> exit 143 and no result message at all (empty stdout) was measured on claude-code 2.1.263 on a GitHub-hosted runner on 2026-09-06 (SPIKE-1 check C6, workflow run 34026065026). The stream lines and the token figures in this file remain illustrative; only the terminal behaviour is confirmed.",
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "github-actions",
+    "runtime": "claude-code",
+    "authMode": "subscription-oauth",
+    "runId": "run_01JQ8ZC4Q6S9V2Z5A8B1C4D7E3",
+    "cycleIndex": 2,
+    "nodeId": "implement",
+    "attempt": 1,
+    "note": "The job was cancelled with SIGTERM. The turn is left unfinished and no result message is written, so the tokens the turn really burned are unknowable from the runtime. Loopmill cancels with SIGINT precisely to avoid this; SIGTERM/SIGKILL is what an external cancel or an OOM kill looks like."
+  },
+  "input": {
+    "invocation": "claude -p --output-format stream-json --verbose --model claude-sonnet-5 ...",
+    "exitCode": 143,
+    "signal": "SIGTERM",
+    "ignoredStreamLines": [
+      {
+        "type": "system",
+        "subtype": "init",
+        "model": "claude-sonnet-5",
+        "session_id": "8e3b0d15-6f27-4a99-9c02-1a5d7e3b0f46",
+        "_ignoreReason": "system events carry no usage"
+      },
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_01KilledPartialAbCdEfGh",
+          "usage": {
+            "input_tokens": 2900,
+            "cache_creation_input_tokens": 44100,
+            "cache_read_input_tokens": 312800,
+            "output_tokens": 1
+          }
+        },
+        "_ignoreReason": "stream lines are never a usage source; reconstructing a total from them would be an unlabelled estimate"
+      },
+      {
+        "type": "system",
+        "subtype": "api_retry",
+        "attempt": 1,
+        "max_retries": 3,
+        "retry_delay_ms": 2000,
+        "error": "overloaded",
+        "_ignoreReason": "api_retry carries no token data"
+      }
+    ],
+    "terminalEvent": null
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01JQ8ZC4Q6S9V2Z5A8B1C4D7E3",
+          "cycleIndex": 2,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "claude-code",
+          "model": "claude-sonnet-5",
+          "freshInputTokens": null,
+          "cacheWriteTokens": null,
+          "cacheReadTokens": null,
+          "outputTokens": null,
+          "reasoningTokens": null,
+          "totalInputTokens": null,
+          "totalTokens": null,
+          "provenance": "unavailable",
+          "provenanceNote": "process terminated by SIGTERM (exit 143); no result message was emitted, so no usage exists to normalize. Tokens were certainly consumed.",
+          "source": {
+            "runtimeVersion": "2.1.261",
+            "eventKind": null
+          },
+          "complete": false,
+          "usageBasis": "none",
+          "sessionRef": {
+            "kind": "claude-session",
+            "id": "8e3b0d15-6f27-4a99-9c02-1a5d7e3b0f46"
+          },
+          "usageAtAttemptStart": null,
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": null,
+      "totalTokens": null,
+      "provenance": "unavailable",
+      "measured": false
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 0,
+      "coverage": 0.0,
+      "unmeasured": [
+        {
+          "cycleIndex": 2,
+          "nodeId": "implement",
+          "attempt": 1,
+          "runtime": "claude-code",
+          "reason": "no terminal event (SIGTERM)"
+        }
+      ]
+    },
+    "mustNotEqual": {
+      "storedAsZero": 0,
+      "reconstructedFromStream": 359800
+    },
+    "display": {
+      "nodeTotal": "—",
+      "measuredTokens": "0+",
+      "usageCoverage": "0/1 (0%)"
+    }
+  },
+  "assertsInvariants": [
+    "I2",
+    "I4",
+    "I7",
+    "I9",
+    "I12"
+  ]
+}

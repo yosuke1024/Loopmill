@@ -1,0 +1,29 @@
+# expect: LM-VAL-027
+#
+# Also enforced by the schema (agentNode's `oneOf: [{required:[prompt]},{required:[promptFile]}]`
+# rejects a document that matches both alternatives), so this file reports LM-VAL-001 alongside
+# LM-VAL-027.
+schemaVersion: "0.6.0"
+slug: lm-val-027
+name: Both prompt and promptFile set
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    promptFile: prompt.txt
+    next: done
+  done:
+    kind: end
+    outcome: success

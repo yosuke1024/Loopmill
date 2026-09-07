@@ -1,0 +1,32 @@
+# expect: LM-VAL-010
+schemaVersion: "0.6.0"
+slug: lm-val-010
+name: Retry edge never routed to
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+# Nothing in `next` / `then` / `else` / `onFailure` names `orphan`: it is a well-formed Retry
+# Edge (closes a cycle on itself, targets a retryable node) that nothing ever routes into.
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success
+
+edges:
+  - id: orphan
+    from: step
+    to: step
+    maxIterations: 1

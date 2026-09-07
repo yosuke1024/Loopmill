@@ -1,0 +1,168 @@
+{
+  "fixtureId": "codex-recorded-worktree",
+  "title": "codex exec recorded: file edit inside a git worktree, workspace-write (SPIKE-4 D7)",
+  "handWritten": false,
+  "recording": {
+    "harness": "spikes/spike-4-codex-cli (check D7)",
+    "date": "2026-09-06",
+    "host": "operator macOS host",
+    "runtimeVersion": "codex-cli 0.153.4",
+    "nodeVersion": "v25.5.0",
+    "authMode": "subscription-login",
+    "redaction": "token-shaped strings, e-mail addresses and home-directory names redacted by the harness; nothing else altered"
+  },
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "local",
+    "runtime": "codex",
+    "authMode": "subscription-login",
+    "runId": "run_01SPIKE4WORKTREERECORDED00",
+    "cycleIndex": 1,
+    "nodeId": "implement",
+    "attempt": 1,
+    "sessionPolicy": "fresh",
+    "note": "codex exec --json -s workspace-write -C <scratch worktree> creating SPIKE4.md with fixed content. Usage is an ordinary single-turn derived record; recorded here to pin the shape for a workspace-write attempt alongside the read-only checks."
+  },
+  "input": {
+    "invocation": "env -u OPENAI_API_KEY -u CODEX_API_KEY codex exec --json --color never -s workspace-write -C /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/work-wt -o /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/D7.last.txt Create\\ a\\ new\\ file\\ named\\ SPIKE4.md\\ in\\ the\\ current\\ directory\\ containing\\ exactly\\ one\\ line\\ of\\ text:\\ spike-4\\ wrote\\ this.\\ Do\\ not\\ modify\\ or\\ create\\ any\\ other\\ file.",
+    "exitCode": 0,
+    "signal": null,
+    "usageAtAttemptStart": {
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_output_tokens": 0
+    },
+    "events": [
+      {
+        "type": "thread.started",
+        "thread_id": "01a076e4-22f4-7841-abf4-eeaf6155b56a"
+      },
+      {
+        "type": "turn.started"
+      },
+      {
+        "type": "item.completed",
+        "item": {
+          "id": "item_0",
+          "type": "agent_message",
+          "text": "I’ll create `SPIKE4.md` with the exact line requested."
+        }
+      },
+      {
+        "type": "item.started",
+        "item": {
+          "id": "item_1",
+          "type": "command_execution",
+          "command": "/bin/zsh -lc \"printf '%s\\\\n' 'spike-4 wrote this.' > SPIKE4.md\"",
+          "aggregated_output": "",
+          "exit_code": null,
+          "status": "in_progress"
+        }
+      },
+      {
+        "type": "item.completed",
+        "item": {
+          "id": "item_1",
+          "type": "command_execution",
+          "command": "/bin/zsh -lc \"printf '%s\\\\n' 'spike-4 wrote this.' > SPIKE4.md\"",
+          "aggregated_output": "",
+          "exit_code": 0,
+          "status": "completed"
+        }
+      },
+      {
+        "type": "item.completed",
+        "item": {
+          "id": "item_2",
+          "type": "agent_message",
+          "text": "Created `SPIKE4.md` containing exactly:\n```text\nspike-4 wrote this.\n```\nNo other files were modified or created."
+        }
+      },
+      {
+        "type": "turn.completed",
+        "usage": {
+          "input_tokens": 34344,
+          "cached_input_tokens": 25856,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 101,
+          "reasoning_output_tokens": 0
+        }
+      }
+    ],
+    "ignoredStreamLines": []
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE4WORKTREERECORDED00",
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "codex",
+          "model": null,
+          "freshInputTokens": 8488,
+          "cacheWriteTokens": 0,
+          "cacheReadTokens": 25856,
+          "outputTokens": 101,
+          "reasoningTokens": 0,
+          "totalInputTokens": 34344,
+          "totalTokens": 34445,
+          "provenance": "derived",
+          "provenanceNote": "turn.completed cumulative (input 34344, cached 25856, cache_write 0, output 101) minus usageAtAttemptStart, clamped at 0 field-by-field; fresh = max(0, 34344 - 25856 - 0) = 8488",
+          "source": {
+            "runtimeVersion": "codex-cli 0.153.4",
+            "eventKind": "turn.completed"
+          },
+          "complete": true,
+          "usageBasis": "turn.completed",
+          "sessionRef": {
+            "kind": "codex-thread",
+            "id": "01a076e4-22f4-7841-abf4-eeaf6155b56a"
+          },
+          "usageAtAttemptStart": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0
+          },
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": 34344,
+      "totalTokens": 34445,
+      "provenance": "derived",
+      "measured": true
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 1,
+      "coverage": 1,
+      "unmeasured": []
+    },
+    "mustNotEqual": {
+      "totalIfCachedWereAddedToInput": 60301,
+      "totalIfReasoningWereAddedToOutput": 34445
+    },
+    "display": {
+      "measuredTokens": "34,445",
+      "usageCoverage": "1/1 (100%)"
+    }
+  },
+  "assertsInvariants": [
+    "I1",
+    "I2",
+    "I3",
+    "I5",
+    "I8",
+    "I9"
+  ]
+}

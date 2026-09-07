@@ -1,0 +1,74 @@
+# A minimal loop for test/driver/exit-codes.test.ts (A12): one agent node, one condition, one
+# retry edge back to the agent node. Every `loopmill run` exit code A12 asks for is reachable by
+# scripting the `fake` backend's step for "step" differently per sub-test — see that test file
+# for which script produces which outcome. `maxRuntime: PT1M` only bites when a sub-test uses
+# `advancingClock` (`test/fixtures/driver/helpers.ts`); every other sub-test uses `fixedClock`,
+# under which `budget.activeMs` never grows (docs/spec/state-machine.md D-04), so the same shared
+# loop file is safe for all of them. Likewise `maxMeasuredTokens: 100` only bites a sub-test that
+# actually supplies a `usage` record on its fake step; the rest supply none (`unavailable`,
+# never summed into `measuredTokens`).
+
+schemaVersion: "0.6.0"
+slug: exit-codes
+name: Exit Codes
+trigger: { kind: manual }
+
+repos:
+  - id: site
+    path: "."
+    defaultBase: main
+
+defaults:
+  backend: fake
+  runtime: claude-code
+  authMode: subscription-oauth
+  permissionProfile: workspace
+  isolation: worktree
+
+budget:
+  maxAttempts: 2
+  maxIterations: 2
+  maxRuntime: PT1M
+  maxMeasuredTokens: 100
+  # The default is 0 (loop-file.md §7.2 — no MVP backend declares `usage: none`, so 0 fits
+  # every *real* backend). The MAX_ITERATIONS_EXCEEDED and EXPIRED sub-tests of
+  # test/driver/exit-codes.test.ts deliberately script `fake` steps with no `usage` at all
+  # (`resolveUsage` then reports `unavailable`), so a default of 0 would trip
+  # BUDGET_EXCEEDED(maxUnmeasuredExecutions) on their very first retry dispatch, before either
+  # sub-test's own condition has a chance to fire. Raised well above what those two sub-tests
+  # ever produce; the BUDGET_EXCEEDED(maxMeasuredTokens) sub-test supplies real `usage` on every
+  # dispatch and never touches this counter at all.
+  maxUnmeasuredExecutions: 10
+
+entry: step
+
+nodes:
+  step:
+    kind: agent
+    prompt: "go"
+    structuredOutput:
+      type: object
+      properties:
+        ok: { type: boolean }
+      required: [ok]
+      additionalProperties: false
+    timeout: PT5M
+    next: verdict
+
+  verdict:
+    kind: condition
+    inputs:
+      ok: nodes.step.structured.ok
+    expr: "ok == true"
+    then: end-ok
+    else: retry-step
+
+  end-ok:
+    kind: end
+    outcome: success
+
+edges:
+  - id: retry-step
+    from: verdict
+    to: step
+    maxIterations: 2

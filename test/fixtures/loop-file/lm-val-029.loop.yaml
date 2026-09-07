@@ -1,0 +1,27 @@
+# expect: LM-VAL-029
+schemaVersion: "0.6.0"
+slug: lm-val-029
+name: Reserved event trigger
+
+trigger:
+  kind: event
+  source: github
+  types: [issues.opened]
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success

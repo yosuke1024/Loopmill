@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0.0",
+  "eventId": "06G7BWKCX0AM43B27VQMPMB4DE",
+  "eventType": "node-completed",
+  "occurredAt": "2026-09-06T09:41:12.740Z",
+  "producer": "backend:github-actions",
+  "loopId": "article-review",
+  "loopVersion": "sha256:49e8067c2d493d48f6c0e17f2ce1c27f579c945d25d80547506c3d8e79f93488",
+  "runId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "cycle": 1,
+  "nodeId": "implement",
+  "result": {
+    "status": "succeeded",
+    "exitCode": 0,
+    "summary": "INVALID EXAMPLE: a node-level event without attempt. The control plane could not tell this completion apart from a retried attempt of the same node execution, so the schema rejects it."
+  }
+}

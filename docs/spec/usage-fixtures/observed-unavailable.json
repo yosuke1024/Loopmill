@@ -1,0 +1,102 @@
+{
+  "fixtureId": "observed-unavailable",
+  "title": "observed backend: the work ran on the vendor's cloud, so usage is structurally unavailable",
+  "handWritten": true,
+  "notARecording": "Hand-written from the Loopmill envelope shape and the observed-backend capability record. No CLI was executed and no vendor cloud task was triggered to produce this file.",
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "observed",
+    "runtime": "codex",
+    "authMode": "subscription-login",
+    "runId": "run_01JQ8ZG2A4B7D0G3J6M9P2S5V8",
+    "cycleIndex": 1,
+    "nodeId": "cloud-review",
+    "attempt": 1,
+    "note": "An observed node succeeded and produced a valid artifact. Its usage is nevertheless unavailable, and always will be: the backend declares usage: none, so this is not a failure to parse but an absence of any source. This node is the reason maxUnmeasuredExecutions exists."
+  },
+  "input": {
+    "backendCapabilities": {
+      "invocation": "event",
+      "result": "observed",
+      "usage": "none",
+      "quotaSignal": "none",
+      "structuredOutput": false,
+      "retryable": true,
+      "cancellable": false,
+      "isolation": "vendor-side",
+      "credentialLocation": "vendor-side"
+    },
+    "envelope": {
+      "schemaVersion": "1.0.0",
+      "eventId": "01JQ8ZG3C6E9H2K5N8Q1T4W7Z0",
+      "eventType": "node-observed",
+      "occurredAt": "2026-09-06T04:18:22Z",
+      "producer": "backend:observed",
+      "loopId": "content-improvement",
+      "loopVersion": "sha256:1f4b0c9e7a2d5836bb41c0e9d7a5f3128c6b0e4a9d21f7c380b5e6a4c2d9018f",
+      "runId": "run_01JQ8ZG2A4B7D0G3J6M9P2S5V8",
+      "cycle": 1,
+      "nodeId": "cloud-review",
+      "attempt": 1,
+      "result": { "status": "SUCCEEDED", "structured": { "verdict": "pass", "findings": [] } },
+      "artifactRefs": [
+        {
+          "kind": "comment",
+          "ref": "https://github.com/example-org/example-repo/pull/412#issuecomment-3900001",
+          "digest": "sha256:9c1d0a5b7e3f2846d0b9c4e7a1f5308b2d6c9e0a4b7f13c85d20e6a9b4c7f102"
+        }
+      ]
+    },
+    "note": "The envelope carries no usage field at all. An observed backend that ever produced one would be a different backend."
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": { "runId": "run_01JQ8ZG2A4B7D0G3J6M9P2S5V8", "cycleIndex": 1, "nodeId": "cloud-review", "attempt": 1 },
+        "usage": {
+          "runtime": "codex",
+          "model": null,
+          "freshInputTokens": null,
+          "cacheWriteTokens": null,
+          "cacheReadTokens": null,
+          "outputTokens": null,
+          "reasoningTokens": null,
+          "totalInputTokens": null,
+          "totalTokens": null,
+          "provenance": "unavailable",
+          "provenanceNote": "observed backend: execution happened on the vendor's cloud and Loopmill only observed an artifact. Backend capability usage: none.",
+          "source": { "runtimeVersion": null, "eventKind": "node-observed" },
+          "complete": false,
+          "usageBasis": "none",
+          "sessionRef": null,
+          "usageAtAttemptStart": null,
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": {
+      "state": "SUCCEEDED",
+      "totalInputTokens": null,
+      "totalTokens": null,
+      "provenance": "unavailable",
+      "measured": false,
+      "note": "A SUCCEEDED node execution with unavailable usage is normal, not an error. Node state and usage provenance are independent axes."
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 0,
+      "coverage": 0.0,
+      "unmeasured": [
+        { "cycleIndex": 1, "nodeId": "cloud-review", "attempt": 1, "runtime": "codex", "reason": "observed backend (usage: none)" }
+      ]
+    },
+    "budget": {
+      "countsTowardMaxMeasuredTokens": 0,
+      "countsTowardMaxUnmeasuredExecutions": 1
+    },
+    "mustNotEqual": { "storedAsZero": 0 },
+    "display": { "nodeTotal": "—", "measuredTokens": "0+", "usageCoverage": "0/1 (0%)" }
+  },
+  "assertsInvariants": ["I2", "I4", "I9", "I12", "I13"]
+}

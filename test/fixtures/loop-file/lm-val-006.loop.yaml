@@ -1,0 +1,27 @@
+# expect: LM-VAL-006
+schemaVersion: "0.6.0"
+slug: lm-val-006
+name: Unknown target
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+# `next: done` is a normal, valid forward edge (so LM-VAL-012 does not also fire); the
+# `onFailure: retry_edge:...` names a Retry Edge that does not exist -- LM-VAL-006.
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    onFailure: retry_edge:missing-edge
+    next: done
+  done:
+    kind: end
+    outcome: success

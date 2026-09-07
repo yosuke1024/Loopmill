@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1.0.0",
+  "eventId": "06G7BWJ9R0B9ZQ0KQ6BND81NJE",
+  "eventType": "human-requested",
+  "occurredAt": "2026-09-06T11:04:33.120Z",
+  "producer": "control-plane",
+  "loopId": "article-review",
+  "loopVersion": "sha256:49e8067c2d493d48f6c0e17f2ce1c27f579c945d25d80547506c3d8e79f93488",
+  "runId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "correlationId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "causationId": "06G7BWHT4089ZN8MD96260DEPE",
+  "cycle": 2,
+  "nodeId": "approve-merge",
+  "attempt": 0,
+  "human": {
+    "mode": "pull-request-review",
+    "subjectDigest": "sha256:db7e0fe57b8575bcb7cd232c5c3a6dd8ed3f0a4d79e4bbcdcd04fd533e2ba648",
+    "deadline": "2026-09-07T11:04:33.120Z",
+    "note": "Approve the PR to let the external-effects node open the release PR."
+  },
+  "artifactRefs": [
+    {
+      "kind": "pr",
+      "ref": "214",
+      "digest": "sha256:db7e0fe57b8575bcb7cd232c5c3a6dd8ed3f0a4d79e4bbcdcd04fd533e2ba648",
+      "url": "https://github.com/yosuke1024/Loopmill/pull/214"
+    }
+  ]
+}

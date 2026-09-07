@@ -1,0 +1,234 @@
+{
+  "fixtureId": "claude-recorded-max-turns",
+  "title": "claude-code recorded: FAILED(max_turns), usage still fully reported (SPIKE-1 C5a)",
+  "handWritten": false,
+  "recording": {
+    "harness": "spikes/spike-1-claude-subscription (check C5a)",
+    "workflowRunId": "34024962852",
+    "date": "2026-09-06",
+    "runner": "GitHub-hosted ubuntu-24.04",
+    "runtimeVersion": "2.1.263",
+    "nodeVersion": "v22.23.2",
+    "authMode": "subscription-oauth",
+    "redaction": "token-shaped strings redacted by the harness; nothing else altered"
+  },
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "github-actions",
+    "runtime": "claude-code",
+    "authMode": "subscription-oauth",
+    "runId": "run_01SPIKE1C5ARECORDED000000",
+    "cycleIndex": 1,
+    "nodeId": "implement",
+    "attempt": 1,
+    "note": "Real recording, not hand-written: claude -p \"List the files in this directory using a shell command and then say done.\" --output-format json --max-turns 1 --permission-mode acceptEdits --permission-prompts none, run in an empty temp dir, exit code 1. Informative node outcome: FAILED(max_turns) — result.subtype=\"error_max_turns\", is_error=true, errors=[\"Reached maximum number of turns (1)\"], terminal_reason=\"max_turns\". Despite the non-zero exit code and is_error=true, modelUsage is present and non-zero, so per R6 the record is fully reported AND complete: hitting --max-turns is a normal terminal state the runtime fully accounts for, not a crash. A wrong implementation that discards usage whenever exitCode!==0 would instead mark this record \"unavailable\" — see expected.mustNotEqual.provenanceIfTreatedAsCrash."
+  },
+  "input": {
+    "invocation": "claude -p \"List the files in this directory using a shell command and then say done.\" --output-format json --max-turns 1 --permission-mode acceptEdits --permission-prompts none",
+    "exitCode": 1,
+    "signal": null,
+    "note": "--output-format json (not stream-json) was used, so the CLI writes a single terminal JSON object to stdout and there is no stream of intermediate lines to record or ignore. Run in an empty temp directory per the harness.",
+    "ignoredStreamLines": [],
+    "terminalEvent": {
+      "duration_api_ms": 2991,
+      "stop_reason": "tool_use",
+      "session_id": "7f0914c2-92b3-42e3-9797-6a48cee688cf",
+      "total_cost_usd": 0.04042079999999999,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 8747,
+        "cache_read_input_tokens": 18534,
+        "output_tokens": 76,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 8747,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 76,
+            "cache_read_input_tokens": 18534,
+            "cache_creation_input_tokens": 8747,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 8747
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 907,
+          "outputTokens": 11,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.0009620000000000001,
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 2,
+          "outputTokens": 76,
+          "cacheReadInputTokens": 18534,
+          "cacheCreationInputTokens": 8747,
+          "webSearchRequests": 0,
+          "costUSD": 0.039458799999999995,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-sonnet-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "permission_denials": [],
+      "terminal_reason": "max_turns",
+      "fast_mode_state": "off",
+      "fast_mode_disabled_reason": "sdk_opt_in_required",
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": true,
+      "num_turns": 2,
+      "subtype": "error_max_turns",
+      "errors": [
+        "Reached maximum number of turns (1)"
+      ],
+      "type": "result",
+      "duration_ms": 2605,
+      "uuid": "2f7e1624-5c79-4cbd-b7d7-3c7dc5b12ce7",
+      "queued_turn_count": 0
+    }
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE1C5ARECORDED000000",
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "claude-code",
+          "model": null,
+          "freshInputTokens": 909,
+          "cacheWriteTokens": 8747,
+          "cacheReadTokens": 18534,
+          "outputTokens": 87,
+          "reasoningTokens": 0,
+          "totalInputTokens": 28190,
+          "totalTokens": 28277,
+          "provenance": "reported",
+          "provenanceNote": "basis=modelUsage (§2.1 precedence 1: present and non-empty); summed element-wise over 2 models (claude-haiku-4-5-20251001, claude-sonnet-5): freshInputTokens = 907+2 = 909; cacheWriteTokens = 0+8747 = 8747; cacheReadTokens = 0+18534 = 18534; outputTokens = 11+76 = 87 → totalInputTokens = 909+8747+18534 = 28190, totalTokens = 28190+87 = 28277. terminal_reason=\"max_turns\" → complete=true (R6): exit code 1, is_error=true and subtype=\"error_max_turns\" describe a failed *node outcome*, not an unmeasured *usage* record — modelUsage is fully populated and non-zero for this attempt. Both modelUsage entries carry thinkingTokens (0 and 0), so reasoningTokens = 0+0 = 0, broken out and zero, distinct from null (R3). result.usage alone (not the basis) sums to input 2+8747+18534=27283, total 27283+76=27359; it excludes the 918-token haiku helper-model call.",
+          "source": {
+            "runtimeVersion": "2.1.263",
+            "eventKind": "result"
+          },
+          "complete": true,
+          "usageBasis": "modelUsage",
+          "sessionRef": {
+            "kind": "claude-session",
+            "id": "7f0914c2-92b3-42e3-9797-6a48cee688cf"
+          },
+          "usageAtAttemptStart": null,
+          "listPriceEquivalentUsd": 0.04042079999999999,
+          "perModel": [
+            {
+              "model": "claude-haiku-4-5-20251001",
+              "freshInputTokens": 907,
+              "cacheWriteTokens": 0,
+              "cacheReadTokens": 0,
+              "outputTokens": 11,
+              "reasoningTokens": 0,
+              "totalInputTokens": 907,
+              "totalTokens": 918,
+              "listPriceEquivalentUsd": 0.0009620000000000001,
+              "costBasis": "list"
+            },
+            {
+              "model": "claude-sonnet-5",
+              "freshInputTokens": 2,
+              "cacheWriteTokens": 8747,
+              "cacheReadTokens": 18534,
+              "outputTokens": 76,
+              "reasoningTokens": 0,
+              "totalInputTokens": 27283,
+              "totalTokens": 27359,
+              "listPriceEquivalentUsd": 0.039458799999999995,
+              "costBasis": "list"
+            }
+          ]
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": 28190,
+      "totalTokens": 28277,
+      "provenance": "reported",
+      "measured": true
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 1,
+      "coverage": 1,
+      "unmeasured": []
+    },
+    "mustNotEqual": {
+      "totalTokensIfResultUsageWereUsed": 27359,
+      "provenanceIfTreatedAsCrash": "unavailable"
+    },
+    "display": {
+      "measuredTokens": "28,277",
+      "usageCoverage": "1/1 (100%)",
+      "model": "claude-haiku-4-5-20251001 + claude-sonnet-5",
+      "nodeOutcome": "FAILED(max_turns)"
+    }
+  },
+  "assertsInvariants": [
+    "I1",
+    "I2",
+    "I3",
+    "I6",
+    "I7",
+    "I8",
+    "I9"
+  ]
+}

@@ -1,0 +1,23 @@
+# expect: LM-VAL-028
+schemaVersion: "0.6.0"
+slug: lm-val-028
+name: Reserved github-actions backend
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+nodes:
+  step:
+    kind: agent
+    backend: github-actions
+    runtime: claude-code
+    auth: subscription-oauth
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success

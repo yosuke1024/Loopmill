@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "1.0.0",
+  "eventId": "06G7BWHT4089ZN8MD96260DEPE",
+  "eventType": "node-completed",
+  "occurredAt": "2026-09-06T09:41:12.740Z",
+  "producer": "backend:github-actions",
+  "loopId": "article-review",
+  "loopVersion": "sha256:49e8067c2d493d48f6c0e17f2ce1c27f579c945d25d80547506c3d8e79f93488",
+  "runId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "correlationId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "causationId": "06G7BWHJA04BZ0ZGMKCKH6JRW7",
+  "cycle": 1,
+  "nodeId": "implement",
+  "attempt": 1,
+  "result": {
+    "status": "succeeded",
+    "exitCode": 0,
+    "structured": {
+      "changed": true,
+      "filesChanged": 4,
+      "testsAdded": 2,
+      "notes": "Adds the retry-edge counter and its regression test."
+    },
+    "summary": "Implemented the retry-edge counter; 4 files changed, 2 tests added."
+  },
+  "artifactRefs": [
+    {
+      "kind": "branch",
+      "ref": "loopmill/run/06G7BWH2P07RDEMGG3JAG9HSRS"
+    },
+    {
+      "kind": "commit",
+      "ref": "3b91d0c6e5f4a2b8c7d6e5f4a3b2c1d0e9f8a7b6",
+      "digest": "sha256:d5466900c345767133d5072efc8e1f2ff336a62a437c8dff1f0fe09c384c2b7a"
+    },
+    {
+      "kind": "actions-artifact",
+      "ref": "loopmill-node-log-06G7BWH2P07RDEMGG3JAG9HSRS-1-implement-1",
+      "digest": "sha256:d52afa3d24c979d7f9e933190e113b52e3384bd3ad719274930f552f00e78315"
+    }
+  ],
+  "usage": {
+    "runtime": "claude-code",
+    "model": "claude-opus-5",
+    "freshInputTokens": 1820,
+    "cacheWriteTokens": 24110,
+    "cacheReadTokens": 402331,
+    "outputTokens": 5904,
+    "totalInputTokens": 428261,
+    "totalTokens": 434165,
+    "provenance": "reported",
+    "source": {
+      "runtimeVersion": "2.4.1",
+      "eventKind": "result.usage"
+    },
+    "complete": true
+  }
+}

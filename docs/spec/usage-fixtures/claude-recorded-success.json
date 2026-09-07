@@ -1,0 +1,236 @@
+{
+  "fixtureId": "claude-recorded-success",
+  "title": "claude-code recorded: trivial prompt, clean success (SPIKE-1 C2)",
+  "handWritten": false,
+  "recording": {
+    "harness": "spikes/spike-1-claude-subscription (check C2)",
+    "workflowRunId": "34024962852",
+    "date": "2026-09-06",
+    "runner": "GitHub-hosted ubuntu-24.04",
+    "runtimeVersion": "2.1.263",
+    "nodeVersion": "v22.23.2",
+    "authMode": "subscription-oauth",
+    "redaction": "token-shaped strings redacted by the harness; nothing else altered"
+  },
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "github-actions",
+    "runtime": "claude-code",
+    "authMode": "subscription-oauth",
+    "runId": "run_01SPIKE1C2RECORDED0000000",
+    "cycleIndex": 1,
+    "nodeId": "implement",
+    "attempt": 1,
+    "note": "Real recording, not hand-written: claude -p \"Reply with exactly: LOOPMILL-OK\" --output-format json --max-turns 1 --permission-mode plan --permission-prompts none, exit code 0. Informative node outcome: SUCCEEDED (result.subtype=\"success\", is_error=false, terminal_reason=\"completed\"). Confirms the modelUsage-basis rule (§2.1 R1/R2) against a real claude-code 2.1.263 result object, including the routine claude-haiku-4-5-20251001 helper-model entry that modelUsage carries even though this invocation spawned zero subagents (subagent_stats.spawned=0)."
+  },
+  "input": {
+    "invocation": "claude -p \"Reply with exactly: LOOPMILL-OK\" --output-format json --max-turns 1 --permission-mode plan --permission-prompts none",
+    "exitCode": 0,
+    "signal": null,
+    "note": "--output-format json (not stream-json) was used, so the CLI writes a single terminal JSON object to stdout and there is no stream of intermediate lines to record or ignore.",
+    "ignoredStreamLines": [],
+    "terminalEvent": {
+      "duration_api_ms": 2349,
+      "stop_reason": "end_turn",
+      "session_id": "9dea10a3-b2e7-4411-b957-60027241782c",
+      "total_cost_usd": 0.0488508,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 11012,
+        "cache_read_input_tokens": 18534,
+        "output_tokens": 12,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 11012,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 12,
+            "cache_read_input_tokens": 18534,
+            "cache_creation_input_tokens": 11012,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 11012
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 902,
+          "outputTokens": 14,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.000972,
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        },
+        "claude-sonnet-5": {
+          "inputTokens": 2,
+          "outputTokens": 12,
+          "cacheReadInputTokens": 18534,
+          "cacheCreationInputTokens": 11012,
+          "webSearchRequests": 0,
+          "costUSD": 0.0478788,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-sonnet-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "permission_denials": [],
+      "terminal_reason": "completed",
+      "fast_mode_state": "off",
+      "fast_mode_disabled_reason": "sdk_opt_in_required",
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": false,
+      "num_turns": 1,
+      "subtype": "success",
+      "api_error_status": null,
+      "result": "LOOPMILL-OK",
+      "ttft_ms": 1612,
+      "type": "result",
+      "duration_ms": 1643,
+      "uuid": "6d8fbd89-a269-43ac-aa0d-fcae64af3b78",
+      "ttft_stream_ms": 923,
+      "time_to_request_ms": 89,
+      "first_content_frame_ms": 923,
+      "queued_turn_count": 0
+    }
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE1C2RECORDED0000000",
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "claude-code",
+          "model": null,
+          "freshInputTokens": 904,
+          "cacheWriteTokens": 11012,
+          "cacheReadTokens": 18534,
+          "outputTokens": 26,
+          "reasoningTokens": 0,
+          "totalInputTokens": 30450,
+          "totalTokens": 30476,
+          "provenance": "reported",
+          "provenanceNote": "basis=modelUsage (§2.1 precedence 1: present and non-empty); summed element-wise over 2 models (claude-haiku-4-5-20251001, claude-sonnet-5): freshInputTokens = 902+2 = 904; cacheWriteTokens = 0+11012 = 11012; cacheReadTokens = 0+18534 = 18534; outputTokens = 14+12 = 26 → totalInputTokens = 904+11012+18534 = 30450, totalTokens = 30450+26 = 30476. terminal_reason=\"completed\" → complete=true (R6). Both modelUsage entries carry thinkingTokens (0 and 0), so reasoningTokens = 0+0 = 0 — broken out and zero, distinct from null (R3). result.usage alone (not the basis, since modelUsage is present) sums to input 2+11012+18534=29548, total 29548+12=29560; it excludes the 916-token haiku helper-model call, so using it instead would undercount by 916 tokens, and summing both bases would double count to 60036.",
+          "source": {
+            "runtimeVersion": "2.1.263",
+            "eventKind": "result"
+          },
+          "complete": true,
+          "usageBasis": "modelUsage",
+          "sessionRef": {
+            "kind": "claude-session",
+            "id": "9dea10a3-b2e7-4411-b957-60027241782c"
+          },
+          "usageAtAttemptStart": null,
+          "listPriceEquivalentUsd": 0.0488508,
+          "perModel": [
+            {
+              "model": "claude-haiku-4-5-20251001",
+              "freshInputTokens": 902,
+              "cacheWriteTokens": 0,
+              "cacheReadTokens": 0,
+              "outputTokens": 14,
+              "reasoningTokens": 0,
+              "totalInputTokens": 902,
+              "totalTokens": 916,
+              "listPriceEquivalentUsd": 0.000972,
+              "costBasis": "list"
+            },
+            {
+              "model": "claude-sonnet-5",
+              "freshInputTokens": 2,
+              "cacheWriteTokens": 11012,
+              "cacheReadTokens": 18534,
+              "outputTokens": 12,
+              "reasoningTokens": 0,
+              "totalInputTokens": 29548,
+              "totalTokens": 29560,
+              "listPriceEquivalentUsd": 0.0478788,
+              "costBasis": "list"
+            }
+          ]
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": 30450,
+      "totalTokens": 30476,
+      "provenance": "reported",
+      "measured": true
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 1,
+      "coverage": 1,
+      "unmeasured": []
+    },
+    "mustNotEqual": {
+      "totalTokensIfResultUsageWereUsed": 29560,
+      "totalTokensIfBothWereSummed": 60036
+    },
+    "display": {
+      "measuredTokens": "30,476",
+      "usageCoverage": "1/1 (100%)",
+      "model": "claude-haiku-4-5-20251001 + claude-sonnet-5"
+    }
+  },
+  "assertsInvariants": [
+    "I1",
+    "I2",
+    "I3",
+    "I6",
+    "I7",
+    "I8",
+    "I9"
+  ]
+}

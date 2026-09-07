@@ -1,0 +1,138 @@
+{
+  "fixtureId": "codex-recorded-success",
+  "title": "codex exec recorded: trivial prompt, clean success (SPIKE-4 D1)",
+  "handWritten": false,
+  "recording": {
+    "harness": "spikes/spike-4-codex-cli (check D1)",
+    "date": "2026-09-06",
+    "host": "operator macOS host",
+    "runtimeVersion": "codex-cli 0.153.4",
+    "nodeVersion": "v25.5.0",
+    "authMode": "subscription-login",
+    "redaction": "token-shaped strings, e-mail addresses and home-directory names redacted by the harness; nothing else altered"
+  },
+  "spec": "docs/spec/usage-normalization.md",
+  "scenario": {
+    "backend": "local",
+    "runtime": "codex",
+    "authMode": "subscription-login",
+    "runId": "run_01SPIKE4SUCCESSRECORDED000",
+    "cycleIndex": 1,
+    "nodeId": "implement",
+    "attempt": 1,
+    "sessionPolicy": "fresh",
+    "note": "codex exec --json against the prompt 'Reply with exactly: LOOPMILL-OK', a fresh thread. sessionPolicy fresh is the MVP default: usageAtAttemptStart is zero, so the last turn.completed cumulative IS the attempt delta."
+  },
+  "input": {
+    "invocation": "env -u OPENAI_API_KEY -u CODEX_API_KEY codex exec --json --color never -s read-only -C /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/work -o /Users/***/repo/Loopmill/spikes/spike-4-codex-cli/out/D1.last.txt Reply\\ with\\ exactly:\\ LOOPMILL-OK",
+    "exitCode": 0,
+    "signal": null,
+    "usageAtAttemptStart": {
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_output_tokens": 0
+    },
+    "events": [
+      {
+        "type": "thread.started",
+        "thread_id": "01a076dd-9058-7eb1-b4e5-d431a80b06c8"
+      },
+      {
+        "type": "turn.started"
+      },
+      {
+        "type": "item.completed",
+        "item": {
+          "id": "item_0",
+          "type": "agent_message",
+          "text": "LOOPMILL-OK"
+        }
+      },
+      {
+        "type": "turn.completed",
+        "usage": {
+          "input_tokens": 16807,
+          "cached_input_tokens": 12928,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0
+        }
+      }
+    ],
+    "ignoredStreamLines": []
+  },
+  "expected": {
+    "attempts": [
+      {
+        "key": {
+          "runId": "run_01SPIKE4SUCCESSRECORDED000",
+          "cycleIndex": 1,
+          "nodeId": "implement",
+          "attempt": 1
+        },
+        "usage": {
+          "runtime": "codex",
+          "model": null,
+          "freshInputTokens": 3879,
+          "cacheWriteTokens": 0,
+          "cacheReadTokens": 12928,
+          "outputTokens": 10,
+          "reasoningTokens": 0,
+          "totalInputTokens": 16807,
+          "totalTokens": 16817,
+          "provenance": "derived",
+          "provenanceNote": "turn.completed cumulative (input 16807, cached 12928, cache_write 0, output 10) minus usageAtAttemptStart, clamped at 0 field-by-field; fresh = max(0, 16807 - 12928 - 0) = 3879",
+          "source": {
+            "runtimeVersion": "codex-cli 0.153.4",
+            "eventKind": "turn.completed"
+          },
+          "complete": true,
+          "usageBasis": "turn.completed",
+          "sessionRef": {
+            "kind": "codex-thread",
+            "id": "01a076dd-9058-7eb1-b4e5-d431a80b06c8"
+          },
+          "usageAtAttemptStart": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0
+          },
+          "listPriceEquivalentUsd": null,
+          "perModel": null
+        }
+      }
+    ],
+    "nodeExecution": {
+      "totalInputTokens": 16807,
+      "totalTokens": 16817,
+      "provenance": "derived",
+      "measured": true
+    },
+    "coverage": {
+      "agentExecutions": 1,
+      "measuredExecutions": 1,
+      "coverage": 1,
+      "unmeasured": []
+    },
+    "mustNotEqual": {
+      "totalIfCachedWereAddedToInput": 29745,
+      "totalIfReasoningWereAddedToOutput": 16817
+    },
+    "display": {
+      "measuredTokens": "16,817",
+      "usageCoverage": "1/1 (100%)"
+    }
+  },
+  "assertsInvariants": [
+    "I1",
+    "I2",
+    "I3",
+    "I5",
+    "I8",
+    "I9"
+  ]
+}

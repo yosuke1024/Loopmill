@@ -1,0 +1,45 @@
+# A minimal one-agent-node loop for test/driver/local-e2e.test.ts (A20): worktree isolation and
+# the one-commit-per-cycle rule, against the `local` backend and the stub `claude` CLI under
+# test/fixtures/backends/bin/. Not a dogfooding artefact — never loaded outside that test.
+
+schemaVersion: "0.6.0"
+slug: local-mini
+name: Local Mini
+trigger: { kind: manual }
+
+repos:
+  - id: site
+    path: "."
+    defaultBase: main
+
+defaults:
+  backend: local
+  runtime: claude-code
+  authMode: subscription-oauth
+  permissionProfile: workspace
+  isolation: worktree
+
+env:
+  inject:
+    STUB_MODE: structured
+
+entry: implement
+
+nodes:
+  implement:
+    kind: agent
+    model: sonnet
+    prompt: "Make a small change."
+    structuredOutput:
+      type: object
+      properties:
+        changed: { type: boolean }
+        summary: { type: string }
+      required: [changed, summary]
+      additionalProperties: false
+    timeout: PT5M
+    next: end-shipped
+
+  end-shipped:
+    kind: end
+    outcome: success

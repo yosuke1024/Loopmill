@@ -1,0 +1,30 @@
+# expect: LM-VAL-024
+#
+# Also enforced by the schema (`approval`'s `if policy == auto then required: [reason]`), so this
+# file reports LM-VAL-001 alongside LM-VAL-024.
+schemaVersion: "0.6.0"
+slug: lm-val-024
+name: approval.policy auto with no reason
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+approval:
+  policy: auto
+
+nodes:
+  step:
+    kind: agent
+    prompt: Do the thing.
+    next: done
+  done:
+    kind: end
+    outcome: success

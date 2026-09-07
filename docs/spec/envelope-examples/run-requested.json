@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0.0",
+  "eventId": "06G7BWHAG0BA4Y3D336ASKYHE2",
+  "eventType": "run-requested",
+  "occurredAt": "2026-09-06T09:00:00.000Z",
+  "producer": "trigger",
+  "loopId": "article-review",
+  "loopVersion": "sha256:49e8067c2d493d48f6c0e17f2ce1c27f579c945d25d80547506c3d8e79f93488",
+  "runId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "correlationId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "trigger": {
+    "kind": "schedule",
+    "source": "github:schedule",
+    "actor": "loopmill-schedule",
+    "ref": "refs/heads/main",
+    "dedupeKey": "article-review:2026-09-06",
+    "scheduledFor": "2026-09-06T09:00:00.000Z"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0.0",
+  "eventId": "06G7BWJNF0GSVY0YFQWK17GHJ6",
+  "eventType": "retry-edge-taken",
+  "occurredAt": "2026-09-06T09:52:21.006Z",
+  "producer": "control-plane",
+  "loopId": "article-review",
+  "loopVersion": "sha256:49e8067c2d493d48f6c0e17f2ce1c27f579c945d25d80547506c3d8e79f93488",
+  "runId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "correlationId": "run_06G7BWH2P07RDEMGG3JAG9HSRS",
+  "causationId": "06G7BWJ5V056N94SSK77T05TRH",
+  "cycle": 2,
+  "retryEdge": {
+    "edgeId": "retry-implement",
+    "fromNodeId": "review-passed",
+    "toNodeId": "implement",
+    "fromCycle": 1,
+    "toCycle": 2,
+    "maxIterations": 3,
+    "traversals": 1,
+    "budgetConsumed": true
+  }
+}

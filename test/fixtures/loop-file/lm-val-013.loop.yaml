@@ -1,0 +1,26 @@
+# expect: LM-VAL-013
+schemaVersion: "0.6.0"
+slug: lm-val-013
+name: Input reference names an unknown node
+
+trigger: { kind: manual }
+
+repos:
+  - id: app
+    path: "."
+    defaultBase: main
+
+defaults:
+  runtime: claude-code
+  authMode: subscription-oauth
+
+nodes:
+  step:
+    kind: agent
+    inputs:
+      x: nodes.missing.stdout
+    prompt: Use ${x}.
+    next: done
+  done:
+    kind: end
+    outcome: success
