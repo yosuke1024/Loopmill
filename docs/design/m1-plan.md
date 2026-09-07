@@ -70,7 +70,8 @@ merges. The reference loop under `examples/` was not used: it is content-site or
 **Result.** `SUCCEEDED`, exit 0, one cycle, 649,485 measured tokens, usage coverage 3/3 (100%),
 159 s active plus 59 s waiting on the human.
 [PR #2](https://github.com/yosuke1024/Loopmill/pull/2) from
-`loopmill/readme-freshness/run_01M1YFH5GTHRT9N1WZCC1SMD72`. The Codex reviewer approved the diff on
+`loopmill/readme-freshness/run_01M1YFH5GTHRT9N1WZCC1SMD72`, merged by the maintainer into
+`claude/loopmill-mvp-design-feul8d` on 2026-09-08 as `4a2fbea`. The Codex reviewer approved the diff on
 its own evidence, and the operator checked both corrected statements against the repository before
 approving the gate.
 
@@ -115,6 +116,10 @@ deliberately left that way.
 - `loopmill rebuild-snapshot` reports a mismatch for both runs recorded on 2026-09-07: their stored
   snapshots were written by the engine as it stood before defects 3 and 5 were fixed. That is the
   tool working, not failing.
-- The failed run left a worktree and a local branch behind (`run_01M1YF4RKPTT6HGYW9J2X4SSH2`).
-  Nothing collects them yet; `gc` is m3.
+- **Both** runs left a worktree and a local branch behind, not only the failed one:
+  `.loopmill/worktrees/run_01M1YF4RKPTT6HGYW9J2X4SSH2` (3.2 MB) and
+  `.loopmill/worktrees/run_01M1YFH5GTHRT9N1WZCC1SMD72` (40 MB, most of it the `node_modules/` the
+  `install` node created), plus their two `loopmill/readme-freshness/<runId>` branches. On the
+  remote there is nothing left: the successful run's branch went with the pull request merge, and
+  the failed run never pushed one. Nothing collects any of this locally yet; `gc` is m3.
 
