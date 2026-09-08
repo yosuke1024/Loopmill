@@ -571,13 +571,24 @@ normative table is `docs/spec/state-machine.md` §12.2 (decision D-17), reproduc
 | `0` | `SUCCEEDED` | `15` | `SKIPPED` (dedupe, rate limit, or an overlapping Run) |
 | `10` | `FAILED` | `20` | exited in `WAITING_HUMAN` |
 | `11` | `MAX_ITERATIONS_EXCEEDED` | `21` | exited in `WAITING_FOR_QUOTA` |
-| `12` | `BUDGET_EXCEEDED` | `23` | exited in `INTERRUPTED` (only via `status` after a crash) |
+| `12` | `BUDGET_EXCEEDED` | `23` | exited in `INTERRUPTED` (`resume <runId>` with no `--decision`) |
 | `13` | `EXPIRED` (max runtime) | `1`-`4` | the engine codes below, unchanged |
 | `14` | `CANCELLED` | | |
 
 Reading rule: `1`-`4` means the engine misbehaved, `>= 10` means the engine worked and the Run has a
 result, `20`-`23` means the Run is unfinished and resumable. `22` (`WAITING_OBSERVED`) is reserved and
 unreachable in the MVP.
+
+**Correction, m2, 2026-09-08.** `23`'s parenthetical read "only via `status` after a crash" and named a
+producer that did not exist: m1 shipped the branch in `driver/run.ts` with nothing able to reach it, and
+`cmdStatus` returns `0` unconditionally. The normative table (`state-machine.md` §12.2) carries no such
+parenthetical — only "Process exited with the Run in `INTERRUPTED`" — and m2's `resume` gives it a real
+producer: `loopmill resume <runId>` on an `INTERRUPTED` Run with no `--decision` reports what the Run is
+waiting on and exits `23`, writing nothing and taking no lock. `--decision` deliberately has no default,
+because `state-machine.md` §10.3 defines `INTERRUPTED` as exactly the state where the node "could **not**
+be safely re-dispatched without a human deciding": a Run only reaches it on an `effects: external` node,
+which may already have run before the lease that made it look lost expired, so guessing `retry` would
+risk the double side effect the state exists to prevent.
 
 `loopmill step` reports *handling* (`docs/spec/state-machine.md` §12.1): `0` handled (applied, `duplicate`
 or `ignored-stale`; details in the stdout JSON), `1` unexpected error, `2` invalid envelope or loop file,
@@ -597,8 +608,10 @@ code — otherwise a failing test would look like a broken runner.
 | `causationId` | Audit: which event caused this one |
 
 **Duplicate dispatch prevention.** `node-dispatched` is committed *before* the subprocess is spawned. If
-the process dies between the two, the attempt's lease expires, the sweep marks the Run `INTERRUPTED`, and
-`resume --due` re-dispatches attempt `n+1` up to `maxAttempts`. The executor tolerates a duplicate by
+the process dies between the two, the attempt's lease expires and the sweep's own
+`lease-expired` re-dispatches attempt `n+1` up to `maxAttempts` when the node is `effects: none` (R-31),
+or parks the Run `INTERRUPTED` when it is `effects: external` (R-32), where
+`resume <runId> --decision retry` re-dispatches instead (R-48). The executor tolerates a duplicate by
 construction: a worktree is reset to the cycle's last commit before every attempt.
 
 ### 7.5 Concurrency, scheduling and recovery on one host
@@ -611,10 +624,15 @@ second `run` of the same loop while the row is live finishes `SKIPPED(skipReason
 (default 120 s, state-machine §10.1).
 
 **The sweep runs first, everywhere.** Every entrypoint — `run`, `resume`, `status`, `runs`, `doctor` —
-begins by scanning `locks` for rows whose `leaseUntil` has passed; each such Run receives a
-`lease-expired` event and becomes `INTERRUPTED`, and the row is released. A machine that lost power at
-02:14 reports it on the first command after 07:00, and `resume --due` re-dispatches within `maxAttempts`.
-The sweep is idempotent and safe to run concurrently with itself: it is a transaction.
+begins by scanning for leases whose `expiresAt` has passed; each such Run
+receives a `lease-expired` event. What that event does then depends on the node (D-11): an
+`effects: none` node is re-dispatched as attempt `n+1` (R-31) and its `locks` row is **kept**, since it
+now carries the new attempt's lease; an `effects: external` node cannot be re-dispatched without a human,
+so the Run becomes `INTERRUPTED` (R-32) and the row is released. A machine that lost power at 02:14
+reports it on the first command after 07:00, and `loopmill resume <runId> --decision retry|skip|fail`
+decides what becomes of the external-effect node it died on. The sweep is safe to run concurrently with
+itself: it is a transaction, and a row reported twice folds into a `duplicate` (P-4) rather than a second
+applied event.
 
 **Scheduling is the operating system's.** A loop whose `trigger.kind` is `schedule` is started by the OS
 scheduler invoking `loopmill run <slug>`; `cron` and `tz` in the loop file are what the operator (later,
@@ -818,7 +836,9 @@ Attempt may be dispatched up to `maxAttempts`, default 2).
   `quotaResetsAt` is recorded. Ambiguity is `FAILED`, never a wait. Transient look-alikes ("Server is
   temporarily limiting requests", "Request rejected (429)") are explicitly not usage limits `[V]`.
 * `INTERRUPTED` is set by the sweep — which runs at the start of every entrypoint — when a lease that
-  the running process stopped heart-beating expires, and is recoverable by `resume --due`.
+  the running process stopped heart-beating expires on an `effects: external` node, and is recoverable by
+  `loopmill resume <runId> --decision retry|skip|fail`. (`resume --due` drains the *quota*-parked Runs,
+  §10.2's own `resumed{kind: due}` bullet; it never decides for a human, per §10.3.)
 * `WAITING_OBSERVED` (Run) and `OBSERVING` (Node Execution) stay in the catalogue as reserved for
   artifact-matcher backends; they are unreachable in the MVP.
 * `MAX_ITERATIONS` is checked **before** dispatching the Retry Edge target, so the budget is never
@@ -1347,6 +1367,17 @@ the reviewer refused because `review` does not dominate `implement` (`m1-plan.md
 after this run"). Building A25's schema without also wiring that hand-off would ship a shape nothing
 consumes; m2 is where both land together.
 
+**Decision (not in sheet), m2, 2026-09-08: what the seven nights run.** The cut-line above says "the
+reference loop", which cannot serve as written — the loop under `examples/` is content-site oriented
+and its `mode: label` gate needs the GitHub ingestion m2 is only now building. The maintainer decided
+the seven nights run a Loopmill-owned nightly loop against this repository, scoped to documentation and
+gated by `mode: pull-request-review`: the night opens a pull request and parks with no process; the
+maintainer reviews it on GitHub in the morning; the next `resume --due` ingests the approving review.
+The reason is that this is the approval flow most users will actually want, so the cut-line proves the
+product rather than a stand-in. The consequence is that turning `gh pr create`'s output into a `pr`
+artifactRef stops being an open item from m1 and becomes a prerequisite: a `pull-request-review` gate
+cannot poll a pull request it cannot name. `m2-plan.md` §1 records the rejected alternatives.
+
 ### 20.3 Acceptance criteria
 
 Each criterion is a test, not an aspiration; every one names the milestone that must satisfy it. The
@@ -1372,8 +1403,8 @@ numbering is stable across v0.5 and v0.6; criteria whose mechanism changed are r
 10. Two concurrent `run` invocations of one loop: exactly one takes the lock and executes; the other
     finishes `SKIPPED(overlapping_run)` with exit `15` and writes nothing else.
 11. A process killed after `node-dispatched` was committed and before the completion leaves a complete
-    journal; the next entrypoint reports `INTERRUPTED` after the lease expires, and `resume --due`
-    re-dispatches attempt `n+1` from the cycle's last commit.
+    journal; the next entrypoint reports `INTERRUPTED` after the lease expires, and
+    `resume <runId> --decision retry` re-dispatches attempt `n+1` from the cycle's last commit.
 12. `run`'s exit codes match section 7.3 one-for-one, and `step`'s match §12.1 of the state machine.
 13. `maxStepsPerRun` terminates a runaway chain as `BUDGET_EXCEEDED(maxStepsPerRun)`.
 
@@ -1436,7 +1467,8 @@ numbering is stable across v0.5 and v0.6; criteria whose mechanism changed are r
 **F. Recovery and operations (m2-m3)**
 
 35. A `run` process killed with `kill -9` mid-node leaves the Run recoverable: the next command reports
-    `INTERRUPTED` once the lease expires, `resume --due` re-dispatches, and no state is lost or duplicated.
+    `INTERRUPTED` once the lease expires, `resume <runId> --decision retry` re-dispatches, and no state is
+    lost or duplicated.
 36. A scheduler fire that produced no `run-requested` transaction is reported by `doctor --scheduler`,
     with the scheduler's own last-fire time.
 37. `resume --due` drains approved-but-unresumed runs and quota-parked runs whose `quotaResetsAt` has

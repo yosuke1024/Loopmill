@@ -24,7 +24,7 @@ import type { EnginePolicyFull } from "../engine/index.ts";
 import { makeEnvelope } from "../envelope/index.ts";
 import type { AppendInput } from "../types/interfaces.ts";
 import type { ResolvedLoop } from "../types/loop.ts";
-import type { Action } from "../types/state.ts";
+import type { Action, RunSnapshot } from "../types/state.ts";
 import type { SqliteStore } from "../store/index.ts";
 import type { Clock } from "./context.ts";
 import { newlyTerminalAttempts } from "./attempts.ts";
@@ -35,8 +35,8 @@ export interface RunSweepOptions {
   /** Resolves the `ResolvedLoop` an expired lease's `loopId` belongs to, or `null` when this
    * process does not have that loop loaded (e.g. `status`/`runs` sweeping every loop in the
    * store, not just the one the current command targets) — such a row is reported but not acted
-   * on: the `locks` row is already gone (`store.sweep` deletes it unconditionally), only the
-   * `lease-expired` *event* is skipped. */
+   * on at all: neither the `lease-expired` event nor the lock's release, so the row survives for
+   * a process that does have the loop loaded to handle. */
   loops: (loopId: string) => ResolvedLoop | null;
   policy: EnginePolicyFull;
 }
@@ -45,9 +45,14 @@ export interface SweepOutcome {
   runId: string;
   loopId: string;
   /** `false` when the loop could not be resolved, the run had no snapshot to fold against, or
-   * the resulting transition was `invalid` — in every case the `locks` row is still gone
-   * (`store.sweep()` already deleted it), only the journal write did not happen. */
+   * the resulting transition was `invalid` — only the journal write did not happen. What became
+   * of the `locks` row is `lockReleased`, decided per outcome by `releaseIfIdle` below. */
   applied: boolean;
+  /** True iff this sweep deleted the run's `locks` row. The row is released exactly when nothing
+   * holds it any more — the resulting snapshot has no lease (parked, terminal, or attempts
+   * exhausted), or the row outlived its Run's own bookkeeping (§10.1) — and kept in every other
+   * case, so that a re-dispatching transition's fresh lease stays visible to the next sweep. */
+  lockReleased: boolean;
   /** What the resulting `transition()` call described `run`/`resume` should do next — recorded,
    * never performed here (`docs/design/m1-plan.md`: "record the resulting action in the returned
    * list without performing it"). May be empty when the lease-expired event could not be applied,
@@ -69,23 +74,43 @@ export function runSweep(opts: RunSweepOptions): SweepOutcome[] {
   const expired = opts.store.sweep(now);
   const outcomes: SweepOutcome[] = [];
 
+  /** `store.sweep()` is read-only (see its own doc comment): releasing the row is this module's
+   * decision, and it turns on one question only — does anything still hold this lease? A `null`
+   * lease on the resulting snapshot means nothing does (R-32 parked the Run `INTERRUPTED`, or the
+   * attempts were exhausted into a terminal state), so the row is deleted and the loop is free. A
+   * non-`null` lease means the transition installed a fresh attempt (R-31's auto-retry of an
+   * `effects: none` node), and the row must survive to carry it: `append` has just refreshed the
+   * same row's `lease_until`, and that row is what the next sweep will find when this attempt in
+   * turn goes unanswered — deleting it here is exactly the orphaning defect this module was fixed
+   * for on 2026-09-08. `releaseLock` only deletes a row still owned by `runId`, so a lease another
+   * process has since taken over is never disturbed. */
+  const releaseIfIdle = (loopId: string, runId: string, lease: RunSnapshot["lease"]): boolean => {
+    if (lease !== null) return false;
+    opts.store.releaseLock(loopId, runId);
+    return true;
+  };
+
   for (const item of expired) {
     if (item.nodeId === null || item.cycleIndex === null || item.attempt === null) {
       // state-machine.md §10.1: "a lock outliving its Run's own bookkeeping" — the snapshot had
-      // no attempt in flight at all. Nothing to build a node-level lease-expired event from.
-      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [], skipReason: "no_snapshot" });
+      // no attempt in flight at all. Nothing to build a node-level lease-expired event from, and
+      // nothing holds the lease either, so the row is garbage and goes.
+      opts.store.releaseLock(item.loopId, item.runId);
+      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [], lockReleased: true, skipReason: "no_snapshot" });
       continue;
     }
 
     const loop = opts.loops(item.loopId);
     if (!loop) {
-      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [], skipReason: "loop_unresolved" });
+      // Not this process's loop to act on: leave the row for one that has it loaded.
+      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [], lockReleased: false, skipReason: "loop_unresolved" });
       continue;
     }
 
     const snapshot = opts.store.read(item.runId);
     if (!snapshot) {
-      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [], skipReason: "no_snapshot" });
+      opts.store.releaseLock(item.loopId, item.runId);
+      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [], lockReleased: true, skipReason: "no_snapshot" });
       continue;
     }
 
@@ -108,12 +133,18 @@ export function runSweep(opts: RunSweepOptions): SweepOutcome[] {
     const result = transition(snapshot, envelope, ctx);
 
     if (result.kind === "invalid") {
-      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [], skipReason: "invalid" });
+      // Nothing was applied, so nothing about the lease changed: keep the row rather than drop a
+      // Run this sweep could not act on. It will be reported again, which is the point —
+      // mvp-design.md §17.4's rule is that a broken Run is loud, never silent.
+      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [], lockReleased: false, skipReason: "invalid" });
       continue;
     }
     if (result.kind === "duplicate") {
-      // P-4: nothing to persist; the run already recorded this exact lease-expired delivery.
-      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [] });
+      // P-4: nothing to persist; the run already recorded this exact lease-expired delivery. The
+      // row can still be stale relative to that earlier application — release it iff the snapshot
+      // that application produced holds no lease.
+      const released = releaseIfIdle(item.loopId, item.runId, snapshot.lease);
+      outcomes.push({ runId: item.runId, loopId: item.loopId, applied: false, actions: [], lockReleased: released });
       continue;
     }
 
@@ -128,11 +159,14 @@ export function runSweep(opts: RunSweepOptions): SweepOutcome[] {
     };
     opts.store.append(item.runId, appendInput);
 
+    const released = releaseIfIdle(item.loopId, item.runId, result.snapshot.lease);
+
     outcomes.push({
       runId: item.runId,
       loopId: item.loopId,
       applied: result.kind === "applied",
       actions: result.kind === "applied" ? result.actions : [],
+      lockReleased: released,
     });
   }
 

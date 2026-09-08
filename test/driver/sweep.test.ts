@@ -78,7 +78,7 @@ function crashOnDispatch(inner: Dispatcher, crashNodeId: string): Dispatcher {
  * whose lease reflects that dispatch's own deadline (`applyStep`'s own `append({lease: ...})`
  * heartbeat-refresh) — never released, exactly as a real `kill -9` would leave it.
  */
-async function crashMidDispatch(ctx: RunContext, clock: Clock): Promise<string> {
+async function crashMidDispatch(ctx: RunContext, clock: Clock, crashNodeId = "create-issue"): Promise<string> {
   const now = clock.now();
   const nowMs = Date.parse(now);
   const runId = newRunId(nowMs);
@@ -107,7 +107,7 @@ async function crashMidDispatch(ctx: RunContext, clock: Clock): Promise<string> 
       },
     },
   });
-  const dispatchers = { fake: crashOnDispatch(fake, "create-issue") };
+  const dispatchers = { fake: crashOnDispatch(fake, crashNodeId) };
 
   await assert.rejects(
     () =>
@@ -223,7 +223,7 @@ test("A11: the next entrypoint (status) reports INTERRUPTED once the lease has e
     assert.ok(view, "status must find the run");
     assert.equal(view!.state, "INTERRUPTED");
     assert.equal(view!.currentNode, "create-issue");
-    assert.equal(view!.next, "resumed{kind:interrupted} (resume is m2)");
+    assert.equal(view!.next, `resumed{kind:interrupted} — loopmill resume ${runId} --decision retry|skip|fail`);
 
     // Confirmed via the store directly too, not only the status view's own rendering.
     const snapshot = ctx.store.read(runId)!;
@@ -231,5 +231,59 @@ test("A11: the next entrypoint (status) reports INTERRUPTED once the lease has e
 
     // And the swept lock is gone, same as the direct-runSweep() test above.
     assert.equal(ctx.store.readLock(ctx.loop.slug), null);
+  });
+});
+
+// The orphaning defect, fixed 2026-09-08 (`docs/design/m2-plan.md` §2.2). Everything above uses
+// `create-issue`, which is `effects: external`: R-32 parks the Run `INTERRUPTED` with no lease, so
+// releasing the `locks` row is right and the bug never showed. `review-content` is `effects: none`
+// — the default, and what every agent node in every loop here is — so R-31 auto-retries instead,
+// and the sweep's own bookkeeping is what decides whether that retry is ever seen again.
+//
+// Before the fix, `SqliteStore.sweep()` deleted the row as part of the scan. The re-dispatch's
+// fresh lease was then written by `append` as an `UPDATE ... WHERE loop_id = ? AND run_id = ?`
+// against a row that no longer existed — zero rows, silently — and since the scan's only index was
+// that same row, no later sweep could ever see the Run again. It stayed `RUNNING` for ever with a
+// live `snapshot.lease` nobody was serving: the silent Run `mvp-design.md` §17.4 forbids, reached
+// by an ordinary crash on an ordinary node.
+test("the sweep never orphans a Run: an effects:none lease-expiry keeps its lock row, stays visible, and ends FAILED rather than silent", async () => {
+  await withContext(async (ctx, clock) => {
+    const runId = await crashMidDispatch(ctx, clock, "review-content");
+    assert.equal(ctx.store.read(runId)!.current?.nodeId, "review-content", "test setup: the crashed node must be the effects:none one");
+
+    const sweepOnce = () =>
+      runSweep({ store: ctx.store, clock, loops: (loopId) => (loopId === ctx.loop.slug ? ctx.loop : null), policy: DEFAULT_POLICY_FULL });
+
+    clock.advanceMs(60 * 60 * 1000);
+    const first = sweepOnce();
+    assert.equal(first.length, 1);
+    const firstOutcome = first[0]!;
+    assert.equal(firstOutcome.applied, true);
+    // state-machine.md R-31: an effects:none node is safely re-dispatchable, so the recorded
+    // action is a fresh dispatch — which `runSweep` deliberately does not perform.
+    assert.equal(firstOutcome.actions[0]?.type, "dispatch");
+    assert.equal(firstOutcome.lockReleased, false, "the row must survive to carry the fresh attempt's lease");
+
+    const afterFirst = ctx.store.read(runId)!;
+    assert.equal(afterFirst.status, "RUNNING");
+    assert.equal(afterFirst.current?.attempt, 2, "R-31 installed attempt n+1");
+    assert.ok(afterFirst.lease, "which carries its own lease");
+    const lockAfterFirst = ctx.store.readLock(ctx.loop.slug);
+    assert.ok(lockAfterFirst, "and the locks row still exists to hold it — the regression this test exists for");
+    assert.equal(lockAfterFirst!.leaseUntil, afterFirst.lease!.expiresAt, "row and snapshot agree on the new lease");
+
+    // Nobody ever dispatched attempt 2. The Run must therefore still be reachable by the next
+    // sweep; before the fix it was not, because the row indexing it had just been deleted.
+    clock.advanceMs(60 * 60 * 1000);
+    const second = sweepOnce();
+    assert.equal(second.length, 1, "the Run is still visible to a later entrypoint's sweep");
+
+    // And it terminates: attempts exhaust into a reported terminal state instead of a RUNNING
+    // snapshot nothing will ever answer.
+    const afterSecond = ctx.store.read(runId)!;
+    assert.equal(afterSecond.status, "FAILED");
+    assert.equal(afterSecond.lease, null);
+    assert.equal(second[0]!.lockReleased, true, "nothing holds the loop any more");
+    assert.equal(ctx.store.readLock(ctx.loop.slug), null, "so a fresh run of this loop is free to start");
   });
 });

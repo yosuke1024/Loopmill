@@ -18,6 +18,8 @@ import {
   printDryRun,
   resolveDryRunContext,
   resolveLoopPath,
+  resumeDue,
+  resumeRun,
   runDoctor,
   runLoop,
   statusOf,
@@ -49,7 +51,7 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
-const BOOL_FLAGS = new Set(["dry-run", "json", "last", "scheduler"]);
+const BOOL_FLAGS = new Set(["dry-run", "json", "last", "scheduler", "due"]);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -207,6 +209,9 @@ function printHelp(): void {
       "  step [--event-file <path>] [--json]        (stdin otherwise)",
       "  approve <runId> [--reason <text>] [--actor <name>] [--fake-script <file>] [--repo <dir>]",
       "  reject <runId> [--reason <text>] [--actor <name>] [--fake-script <file>] [--repo <dir>]",
+      "  cancel <runId> [--reason <text>] [--actor <name>] [--fake-script <file>] [--repo <dir>]",
+      "  resume <runId> [--decision retry|skip|fail] [--actor <name>] [--json] [--fake-script <file>] [--repo <dir>]",
+      "  resume --due [--json] [--repo <dir>]",
       "  status [<runId>|--last] [--json]",
       "  runs [--loop <slug>] [--since <rfc3339>] [--json]",
       "  logs <runId> [--node <id>] [--cycle <n>] [--json]",
@@ -346,7 +351,13 @@ async function cmdStep(flags: Record<string, string | boolean>): Promise<number>
   }
 }
 
-async function cmdGate(decision: "approve" | "reject", positional: string[], flags: Record<string, string | boolean>): Promise<number> {
+/** Shared by `approve`/`reject` (mvp-design.md §12, §15.2) and `cancel` (state-machine.md event
+ * row 10: `human.decision` is `'approve' | 'reject' | 'cancel'`, and `decideGate`'s own
+ * `DecideGateInput.decision` already accepts all three — `cancel` was simply never wired to a CLI
+ * command). One function rather than a fourth `cmdCancel`, per this task's own preference: the
+ * three decisions are identical in every way that matters here (same lock, same envelope shape,
+ * same exit-code table), so a fourth near-duplicate function would only invite the three to drift. */
+async function cmdGate(decision: "approve" | "reject" | "cancel", positional: string[], flags: Record<string, string | boolean>): Promise<number> {
   const runId = positional[0];
   if (!runId) {
     process.stderr.write(`loopmill: cli_usage: ${decision} needs a <runId>\n`);
@@ -370,6 +381,96 @@ async function cmdGate(decision: "approve" | "reject", positional: string[], fla
       clock: ctx.clock,
       dispatchers,
       ...(reason !== undefined ? { note: reason } : {}),
+      json: flagBool(flags, "json"),
+    });
+    return result.exitCode;
+  } finally {
+    ctx.close();
+  }
+}
+
+const RESUME_DECISIONS = new Set(["retry", "skip", "fail"]);
+
+function isResumeDecision(value: string): value is "retry" | "skip" | "fail" {
+  return RESUME_DECISIONS.has(value);
+}
+
+/** `loopmill resume [<runId> | --due] [--json]` (mvp-design.md §15.2, §534). The two forms are
+ * mutually exclusive — `--due` drains every `WAITING_FOR_QUOTA` Run whose `resumeDueAt` has
+ * passed (`resumeDue`), a bare `<runId>` resumes exactly that one Run (`resumeRun`) — so this
+ * function validates the flag combination itself rather than letting `resumeRun`/`resumeDue`
+ * each guess what an absent argument on the other command's behalf would mean. */
+async function cmdResume(positional: string[], flags: Record<string, string | boolean>): Promise<number> {
+  const runId = positional[0];
+  const due = flagBool(flags, "due");
+
+  if (due && runId) {
+    process.stderr.write("loopmill: cli_usage: resume takes either <runId> or --due, not both\n");
+    return 2;
+  }
+  if (!due && !runId) {
+    process.stderr.write("loopmill: cli_usage: resume needs a <runId> or --due\n");
+    return 2;
+  }
+
+  const repoRoot = resolveRepoRootArg(flagString(flags, "repo"));
+
+  if (due) {
+    // Item 4's own rule, mirrored from `cmdStatus`: a repository with no `state.sqlite` yet has
+    // no Runs to drain — report that on stdout and exit 0 without conjuring `.loopmill/` into
+    // existence, the same way `status --last`/`runs` do for the identical fact.
+    const home = resolveLoopmillHome({ repoRoot, env: process.env });
+    const layout = layoutFor(home.home);
+    if (!existsSync(layout.stateDb)) {
+      process.stdout.write("no runs recorded for this repository\n");
+      return 0;
+    }
+    const store = openStore(layout.stateDb);
+    try {
+      const result = await resumeDue({
+        store,
+        // Decision (not in sheet), m2: a loop file that fails to load (deleted, or now invalid)
+        // must not abort the whole drain — every other loop this scan can still resolve keeps
+        // draining. `resumeDue`'s own contract already treats a `null` here as `loop_unresolved`
+        // (`docs/design/m2-plan.md`'s W0b framing: a loop this process cannot resolve is left for
+        // one that can), so any failure to open a context collapses to the same `null`.
+        resolveContext: async (loopId) => {
+          try {
+            return await openRunContext({ repoRoot, env: process.env, clock: realClock, slug: loopId });
+          } catch {
+            return null;
+          }
+        },
+        clock: realClock,
+        json: flagBool(flags, "json"),
+      });
+      return result.exitCode;
+    } finally {
+      store.close();
+    }
+  }
+
+  let ctx: RunContext;
+  try {
+    ctx = await openContextForRun(repoRoot, process.env, realClock, runId!);
+  } catch (err) {
+    return printError(err);
+  }
+  try {
+    const decisionRaw = flagString(flags, "decision");
+    if (decisionRaw !== undefined && !isResumeDecision(decisionRaw)) {
+      process.stderr.write(`loopmill: cli_usage: --decision must be "retry", "skip" or "fail", got ${JSON.stringify(decisionRaw)}\n`);
+      return 2;
+    }
+    const actor = flagString(flags, "actor");
+    const dispatchers = resolveDispatchersFromFlags(ctx, flags);
+    const result = await resumeRun({
+      ctx,
+      runId: runId!,
+      ...(decisionRaw !== undefined ? { decision: decisionRaw } : {}),
+      ...(actor !== undefined ? { actor } : {}),
+      clock: ctx.clock,
+      dispatchers,
       json: flagBool(flags, "json"),
     });
     return result.exitCode;
@@ -702,6 +803,10 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdGate("approve", positional, flags);
       case "reject":
         return await cmdGate("reject", positional, flags);
+      case "cancel":
+        return await cmdGate("cancel", positional, flags);
+      case "resume":
+        return await cmdResume(positional, flags);
       case "status":
         return await cmdStatus(positional, flags);
       case "runs":
